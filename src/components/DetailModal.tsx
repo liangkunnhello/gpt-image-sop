@@ -41,8 +41,8 @@ export default function DetailModal() {
   const [imageSizes, setImageSizes] = useState<Record<string, string>>({})
   const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
   const [sopEditing, setSopEditing] = useState(false)
-  const [galleryWidth, setGalleryWidth] = useState(0)
-  const galleryRef = useRef<HTMLDivElement>(null)
+  /** 缩略图缩放倍率：1 = 按目标列宽自适应，拖滑块可无级放大缩小 */
+  const [galleryZoom, setGalleryZoom] = useState(1)
   const sopDirections = useSopStore((s) => s.directions)
   const [now, setNow] = useState(Date.now())
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
@@ -202,20 +202,8 @@ export default function DetailModal() {
       return slot
     })
   }, [task])
-  // 监听图片区实际宽度，窗口或弹窗尺寸变化时重新计算列数
-  useEffect(() => {
-    const el = galleryRef.current
-    if (!el) return
-    setGalleryWidth(el.clientWidth)
-    const observer = new ResizeObserver((entries) => {
-      setGalleryWidth(entries[0].contentRect.width)
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [detailTaskId, task?.status])
-
-  // 瀑布流列数：按「每张缩略图的目标宽度」反推列数，窗口越宽图越大，最多 6 列
-  const galleryColumns = useMemo(() => {
+  // 瀑布流：只给「目标列宽」，列数与每列实际宽度交给浏览器按可用空间连续计算
+  const galleryTile = useMemo(() => {
     const sizes = (task?.outputImages ?? []).map((id) => imageSizes[id]).filter(Boolean)
     const ratios = sizes
       .map((size) => {
@@ -224,11 +212,11 @@ export default function DetailModal() {
       })
       .filter((ratio) => ratio > 0)
     const average = ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : 1
-    // 竖图偏窄、横图偏宽，保证缩略图看起来大小均衡
-    const tile = average > 1.4 ? 200 : average > 1.05 ? 158 : 132
-    if (!galleryWidth) return 4
-    return Math.max(2, Math.min(6, Math.floor(galleryWidth / tile)))
-  }, [task, imageSizes, galleryWidth])
+    // 竖图给窄的目标宽度（列更多），横图给宽的目标宽度，保证视觉大小均衡
+    return average > 1.4 ? 200 : average > 1.05 ? 158 : 132
+  }, [task, imageSizes])
+  /** 实际目标列宽 = 自适应基准 × 缩放倍率 */
+  const galleryTileSize = Math.max(48, Math.round(galleryTile * galleryZoom))
 
   const currentOutputSlot = outputSlots[imageIndex]
   const currentOutputImageId = currentOutputSlot?.imageId || ''
@@ -565,8 +553,8 @@ export default function DetailModal() {
           )}
           {task.status === 'done' && outputLen > 0 && (currentOutputImageId || task.outputImages.length > 0) && (
             <>
-              <div ref={galleryRef} className="absolute inset-0 overflow-y-auto px-3 pb-3 pt-12">
-                <div style={{ columnCount: galleryColumns, columnGap: '8px' }}>
+              <div className="absolute inset-0 overflow-y-auto px-3 pb-12 pt-12">
+                <div style={{ columnWidth: `${galleryTileSize}px`, columnCount: 8, columnGap: '8px' }}>
                   {outputSlots.map((slot, index) => {
                     if (slot.error) {
                       return (
@@ -617,6 +605,49 @@ export default function DetailModal() {
                       </button>
                     )
                   })}
+                </div>
+              </div>
+              {/* 无级缩放：拖动滑块连续调整缩略图大小 */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-2.5 z-20 flex justify-center">
+                <div className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-white shadow-sm backdrop-blur-sm">
+                  <button
+                    type="button"
+                    aria-label="缩小"
+                    onClick={() => setGalleryZoom((value) => Math.max(0.5, Number((value - 0.1).toFixed(2))))}
+                    className="flex h-4 w-4 items-center justify-center rounded-full transition hover:bg-white/20"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" d="M5 12h14" />
+                    </svg>
+                  </button>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={3}
+                    step={0.02}
+                    value={galleryZoom}
+                    onChange={(e) => setGalleryZoom(Number(e.target.value))}
+                    aria-label="缩略图缩放"
+                    className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-white/30 accent-white"
+                  />
+                  <button
+                    type="button"
+                    aria-label="放大"
+                    onClick={() => setGalleryZoom((value) => Math.min(3, Number((value + 0.1).toFixed(2))))}
+                    className="flex h-4 w-4 items-center justify-center rounded-full transition hover:bg-white/20"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" d="M12 5v14M5 12h14" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGalleryZoom(1)}
+                    title="恢复自适应"
+                    className="min-w-[32px] text-[10px] tabular-nums text-white/90 transition hover:text-white"
+                  >
+                    {Math.round(galleryZoom * 100)}%
+                  </button>
                 </div>
               </div>
               <div data-selectable-text className="absolute left-4 top-[15px] flex items-center gap-1.5">
