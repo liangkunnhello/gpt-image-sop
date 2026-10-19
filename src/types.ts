@@ -325,6 +325,48 @@ export interface TaskRecord {
   agentBatchItemId?: string
   /** Agent 图像工具实际动作 */
   agentToolAction?: 'generate' | 'edit' | 'auto' | string
+  /** SOP 模式：所属任务卡标识，同一份 SOP 生成的多个任务共享它 */
+  sopJobId?: string
+  /** SOP 模式：任务卡名称，取自生成的 SOP 标题 */
+  sopName?: string
+  /** SOP 模式：该条提示词在 SOP 中的序号（从 1 开始） */
+  sopPromptIndex?: number
+  /** SOP 模式：使用的系统提示词名称，详情页展示用 */
+  sopSystemPrompt?: string
+  /** SOP 模式：这次生成依据的 SOP 全文（Markdown），同一 sopJobId 的各任务内容相同 */
+  sopText?: string
+  /** 归属的「产品-方向」节点 id，用于左侧栏筛选；空表示未归属 */
+  sopDirectionId?: string
+}
+
+// ===== SOP 模式 =====
+
+/** 产品-方向树节点：category 大类 / product 产品 / direction 方向 */
+export interface SopDirectionNode {
+  id: string
+  parentId: string | null
+  name: string
+  kind: 'category' | 'product' | 'direction'
+}
+
+/** 挂在「方向」节点下的系统提示词，同一方向可有多条 */
+export interface SopSystemPrompt {
+  id: string
+  directionId: string
+  name: string
+  content: string
+  updatedAt: number
+}
+
+/** 一张任务卡的元数据，运行时按 sopJobId 从任务聚合，不单独持久化 */
+export interface SopJobMeta {
+  id: string
+  name: string
+  directionId: string
+  systemPromptName: string
+  sopText: string
+  promptCount: number
+  createdAt: number
 }
 
 export interface FavoriteCollection {

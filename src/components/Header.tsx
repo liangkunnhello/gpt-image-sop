@@ -11,6 +11,7 @@ import HelpModal from './HelpModal'
 import HistoryModal from './HistoryModal'
 import { useFavoriteCollectionTitle } from './FavoriteCollections'
 import { DesktopDownloadIcon, EditIcon, HelpCircleIcon, HistoryIcon, InstallIcon, SettingsIcon } from './icons'
+import BatchCheckModal from './BatchCheckModal'
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
@@ -47,6 +48,7 @@ export default function Header() {
   const [hintVisible, setHintVisible] = useState(false)
   const [scrollDirection, setScrollDirection] = useState<'up' | 'down'>('up')
   const [showHistoryModal, setShowHistoryModal] = useState(false)
+  const [showBatchCheck, setShowBatchCheck] = useState(false)
   const historyButtonRef = useRef<HTMLButtonElement>(null)
   const createConversation = useStore((s) => s.createAgentConversation)
 
@@ -320,6 +322,20 @@ export default function Header() {
                 操作指南
               </ViewportTooltip>
             </div>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowBatchCheck(true)}
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+                aria-label="批次验收"
+                title="批次验收"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-gray-600 dark:text-gray-400">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M8.5 12.2l2.3 2.3 4.7-4.9" />
+                </svg>
+              </button>
+            </div>
             <div
               className="relative"
               {...settingsTooltip.handlers}
@@ -372,6 +388,7 @@ export default function Header() {
           </div>
         </div>
       </div>
+      {showBatchCheck && <BatchCheckModal onClose={() => setShowBatchCheck(false)} />}
       {showHelp && <HelpModal appMode={appMode} isFavoriteCollectionOverview={appMode === 'gallery' && filterFavorite && !activeFavoriteCollectionId} onClose={() => setShowHelp(false)} />}
     </>
   )

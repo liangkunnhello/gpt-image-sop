@@ -26,6 +26,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, resolveApiProfileModel, splitModelList, validateApiProfile } from './lib/apiProfiles'
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
+import { useSopStore } from './lib/sopStore'
 import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
 import {
   getAllTasks,
@@ -1831,6 +1832,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       createdAt: Date.now(),
       finishedAt: null,
       elapsed: null,
+      sopDirectionId: useSopStore.getState().activeFilterId || undefined,
     }
 
     useStore.getState().setTasks([task, ...useStore.getState().tasks])
@@ -4854,4 +4856,76 @@ export async function addImageFromUrl(src: string): Promise<void> {
   const id = await storeImage(dataUrl, 'upload')
   cacheImage(id, dataUrl)
   useStore.getState().addInputImage({ id, dataUrl })
+}
+
+/** SOP 模式：把生成好的提示词批量提交，同一 sopJobId 在画廊里聚合成一张任务卡 */
+export async function submitSopTasks(input: {
+  sopJobId: string
+  sopName: string
+  systemPromptName: string
+  sopText?: string
+  directionId?: string
+  prompts: string[]
+}): Promise<string[]> {
+  const state = useStore.getState()
+  const settings = state.settings
+  const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
+  if (!profile) {
+    state.showToast('还没有可用的接口配置', 'error')
+    return []
+  }
+
+  const tasks: TaskRecord[] = input.prompts.map((prompt, index) => ({
+    id: genId(),
+    prompt,
+    params: { ...state.params, n: 1 },
+    apiProvider: profile.provider,
+    apiProfileId: profile.id,
+    apiProfileName: profile.name,
+    apiMode: profile.apiMode,
+    apiModel: profile.model,
+    inputImageIds: [],
+    outputImages: [],
+    status: 'running',
+    error: null,
+    createdAt: Date.now(),
+    finishedAt: null,
+    elapsed: null,
+    sopJobId: input.sopJobId,
+    sopName: input.sopName,
+    sopPromptIndex: index + 1,
+    sopSystemPrompt: input.systemPromptName,
+    sopText: input.sopText,
+    sopDirectionId: input.directionId,
+  }))
+
+  useStore.getState().setTasks([...tasks, ...useStore.getState().tasks])
+  for (const task of tasks) void putTask(task)
+
+  // 出图也限并发，避免几十条同时打满接口；界面不受影响
+  const limit = Math.min(10, tasks.length)
+  let cursor = 0
+  const workers = Array.from({ length: limit }, async () => {
+    while (cursor < tasks.length) {
+      const task = tasks[cursor]
+      cursor += 1
+      executeTask(task.id)
+      await waitForTaskSettled(task.id, () => false)
+    }
+  })
+  await Promise.all(workers)
+
+  useStore.getState().showToast(`SOP 已提交 ${tasks.length} 条提示词`, 'success')
+  return tasks.map((task) => task.id)
+}
+
+/** SOP 模式：改写某张卡片依据的 SOP 全文，同组任务一起更新 */
+export function updateSopText(sopJobId: string, sopName: string, sopText: string) {
+  const state = useStore.getState()
+  const targets = state.tasks.filter((task) => task.sopJobId === sopJobId)
+  if (!targets.length) return
+  state.setTasks(state.tasks.map((task) => (
+    task.sopJobId === sopJobId ? { ...task, sopName, sopText } : task
+  )))
+  for (const task of targets) void putTask({ ...task, sopName, sopText })
 }

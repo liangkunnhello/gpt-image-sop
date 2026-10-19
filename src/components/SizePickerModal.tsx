@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { calculateImageSize, normalizeCodexCliImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
+import { DEFAULT_CAPABILITY, isSizeSupported, maxSizeForRatio } from '../lib/sizeCapability'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -83,6 +84,18 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   // Ratio mode state
   const [tier, setTier] = useState<SizeTier>(currentPreset?.tier ?? '1K')
   const [ratio, setRatio] = useState(currentPreset?.ratio ?? (allowAuto ? '1:1' : '4:3'))
+
+  // 切换档位后当前比例可能变得不受支持，自动退到该档第一个可用比例
+  useEffect(() => {
+    if (mode !== 'ratio' || ratio === 'custom') return
+    const size = calculateImageSize(tier, ratio)
+    if (size && isSizeSupported(size)) return
+    const fallback = RATIOS.find((item) => {
+      const candidate = calculateImageSize(tier, item.value)
+      return Boolean(candidate) && isSizeSupported(candidate as string)
+    })
+    if (fallback) setRatio(fallback.value)
+  }, [tier, mode, ratio])
   const [customRatio, setCustomRatio] = useState('16:9')
 
   // Resolution mode state
@@ -300,17 +313,27 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 </section>
 
                 <section>
-                  <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">图像比例</div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-gray-400 dark:text-gray-500">图像比例</span>
+                    <span className="truncate text-[10px] text-gray-400 dark:text-gray-500">当前渠道：{DEFAULT_CAPABILITY.note}</span>
+                  </div>
                   <div className="grid grid-cols-4 gap-2">
                     {RATIOS.map((item) => {
                       const [w, h] = item.value.split(':').map(Number)
                       const isHorizontal = w > h
                       const isSquare = w === h
+                      const size = calculateImageSize(tier, item.value) ?? ''
+                      const supported = Boolean(size) && isSizeSupported(size)
+                      const maxSize = maxSizeForRatio(item.value)
                       return (
                         <button
                           key={item.value}
-                          className={`${buttonClass(ratio === item.value)} flex flex-col items-center justify-center gap-1.5 !py-2.5`}
-                          onClick={() => setRatio(item.value)}
+                          disabled={!supported}
+                          title={supported ? `当前 ${size} · 最大 ${maxSize?.size ?? size}` : `该渠道不支持 ${size}`}
+                          className={`${buttonClass(ratio === item.value)} flex flex-col items-center justify-center gap-1 !py-2 ${supported ? '' : 'cursor-not-allowed opacity-35'}`}
+                          onClick={() => {
+                            if (supported) setRatio(item.value)
+                          }}
                         >
                           <div className="flex h-5 w-5 items-center justify-center">
                             <div
@@ -322,6 +345,9 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                             />
                           </div>
                           <span className="text-xs">{item.label}</span>
+                          <span className={`text-[10px] leading-none ${supported ? 'text-gray-400 dark:text-gray-500' : 'text-red-400'}`}>
+                            {supported ? size.replace('x', '×') : '不支持'}
+                          </span>
                         </button>
                       )
                     })}
@@ -329,6 +355,15 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                       自定义比例
                     </button>
                   </div>
+                  {ratio !== 'custom' && (
+                    <div className="mt-2 text-[11px] text-gray-400 dark:text-gray-500">
+                      {(() => {
+                        const largest = maxSizeForRatio(ratio)
+                        if (!largest) return '该比例在渠道允许范围内没有可用尺寸'
+                        return `该比例最大可用：${largest.size.replace('x', '×')}（${largest.tier}）`
+                      })()}
+                    </div>
+                  )}
                 </section>
 
                 {ratio === 'custom' && (

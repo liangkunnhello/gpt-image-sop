@@ -15,6 +15,7 @@ import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
 import AgentWorkspace from './components/AgentWorkspace'
 import InputBar from './components/InputBar'
+import SopDirectionTree from './components/SopDirectionTree'
 import DetailModal from './components/DetailModal'
 import Lightbox from './components/Lightbox'
 import SettingsModal from './components/SettingsModal'
@@ -201,9 +202,14 @@ export default function App() {
         <AgentWorkspace />
       ) : (
         <main data-home-main data-drag-select-surface className="pb-48">
-          <div className="safe-area-x max-w-7xl mx-auto">
-            <SearchBar />
-            {filterFavorite && !activeFavoriteCollectionId ? <FavoriteCollectionsView /> : <TaskGrid />}
+          <div className="safe-area-x max-w-[1600px] mx-auto">
+            <div className="lg:flex lg:gap-4">
+              <SopDirectionTree />
+              <div className="min-w-0 flex-1">
+                <SearchBar />
+                {filterFavorite && !activeFavoriteCollectionId ? <FavoriteCollectionsView /> : <TaskGrid />}
+              </div>
+            </div>
           </div>
         </main>
       )}

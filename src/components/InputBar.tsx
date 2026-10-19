@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
 import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
@@ -21,6 +21,10 @@ import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getD
 import { pickSaveDir } from '../lib/saveFile'
 import { isTauri } from '../lib/platform'
 import SizePickerModal from './SizePickerModal'
+import SopSplitModal, { type SopRunOptions } from './SopSplitModal'
+import SopPresetPicker, { resolvePickedPreset } from './SopPresetPicker'
+import { useSopStore } from '../lib/sopStore'
+import { enqueueSopJobs, splitEven } from '../lib/sopPipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import { CommentBadge } from './CommentMarks'
 import ButtonTooltip from './input/buttonTooltip'
@@ -488,13 +492,61 @@ export default function InputBar() {
   const promptPlaceholder = batchEnabled
     ? '每条提示词之间空两行分隔，可输入 @ 来指定参考图...'
     : '描述你想生成的图片，可输入 @ 来指定参考图...'
+  const sopMode = useSopStore((s) => s.sopMode)
+  const setSopMode = useSopStore((s) => s.setSopMode)
+  const sopProgress = useSopStore((s) => s.progress)
+  const sopDirections = useSopStore((s) => s.directions)
+  const activeDirectionId = useSopStore((s) => s.activeDirectionId)
+  const sopPresets = useSopStore((s) => s.presets)
+  const sopLastPick = useSopStore((s) => s.lastPick)
+  const sopDefaultPick = useSopStore((s) => s.defaultPick)
+  const [sopSplitOpen, setSopSplitOpen] = useState(false)
+
+  const currentDirection = sopDirections.find((node) => node.id === activeDirectionId)
+  const currentProduct = currentDirection?.kind === 'direction'
+    ? sopDirections.find((node) => node.id === currentDirection.parentId)
+    : currentDirection
+  const pickedPoint = currentDirection && currentProduct
+    ? resolvePickedPreset(sopPresets, currentDirection.id, currentProduct.id, 'point', sopLastPick, sopDefaultPick)
+    : undefined
+  const pickedStyle = currentDirection && currentProduct
+    ? resolvePickedPreset(sopPresets, currentDirection.id, currentProduct.id, 'style', sopLastPick, sopDefaultPick)
+    : undefined
+
+  /** 只负责把任务卡推进后台队列，立即返回，不阻塞输入和其他操作 */
+  const runSop = useCallback((options: SopRunOptions) => {
+    setSopSplitOpen(false)
+    if (!inputImages.length) return
+    const extras = [
+      pickedPoint?.content ? `【卖点】\n${pickedPoint.content}` : '',
+      pickedStyle?.content ? `【风格】\n${pickedStyle.content}` : '',
+    ].filter(Boolean).join('\n\n')
+    const systemPromptText = [options.systemPromptText, extras].filter(Boolean).join('\n\n')
+    const groups = splitEven(inputImages, options.groupCount)
+    enqueueSopJobs(groups.map((group, index) => ({
+      label: `第 ${index + 1}/${groups.length} 张卡`,
+      imageDataUrls: group.map((img) => img.dataUrl),
+      systemPromptText,
+      promptsPerGroup: options.promptsPerGroup,
+      directionId: options.directionId,
+    })))
+  }, [inputImages, pickedPoint, pickedStyle])
+
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {
       void submitAgentMessage()
-    } else {
-      void submitTask()
+      return
     }
-  }, [appMode])
+    if (sopMode) {
+      if (!inputImages.length) {
+        useStore.getState().showToast('SOP 模式需要先拖入参考图', 'error')
+        return
+      }
+      setSopSplitOpen(true)
+      return
+    }
+    void submitTask()
+  }, [appMode, sopMode, inputImages.length])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -1800,6 +1852,13 @@ export default function InputBar() {
             )
           )}
 
+          {sopMode && currentDirection && currentProduct && (
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} productId={currentProduct.id} />
+              <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} productId={currentProduct.id} />
+            </div>
+          )}
+
           {/* 输入框 */}
           <div className={`relative grid sm:[contain:inline-size]${promptExpanded ? ' min-h-0 flex-1' : ''}`}>
             {showAtImageMenu && (
@@ -1937,11 +1996,31 @@ export default function InputBar() {
 
           {/* 参数 + 按钮 */}
           <div className="mt-3">
+            {sopSplitOpen && createPortal(
+              <SopSplitModal
+                imageCount={inputImages.length}
+                onClose={() => setSopSplitOpen(false)}
+                onConfirm={(options) => void runSop(options)}
+              />,
+              document.body,
+            )}
             {/* 桌面端布局 */}
             <div className="hidden sm:flex items-center justify-between gap-3">
               {renderParams()}
 
               <div className="flex gap-2 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSopMode(!sopMode)}
+                  title="SOP 生图模式：拖入参考图 → 反推 SOP → 批量写提示词出图"
+                  className={`h-10 px-3 rounded-xl text-xs font-medium transition-all shadow-sm ${
+                    sopMode
+                      ? 'bg-blue-500 text-white hover:bg-blue-600'
+                      : 'bg-gray-200 dark:bg-white/[0.06] text-gray-500 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-white/[0.1]'
+                  }`}
+                >
+                  {sopProgress ? `${sopProgress.done}/${sopProgress.total}` : 'SOP'}
+                </button>
                 {renderAddImageButton(false)}
                 <div
                   className="relative"
@@ -1985,6 +2064,17 @@ export default function InputBar() {
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSopMode(!sopMode)}
+                  className={`h-10 px-3 rounded-xl text-xs font-medium transition-all ${
+                    sopMode
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-200 dark:bg-white/[0.06] text-gray-500 dark:text-gray-300'
+                  }`}
+                >
+                  {sopProgress ? `${sopProgress.done}/${sopProgress.total}` : 'SOP'}
+                </button>
                 {renderAddImageButton(true)}
                 <div
                   className="relative flex-1"

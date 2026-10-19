@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask, updateSopText } from '../store'
+import SopEditorModal from './SopEditorModal'
+import { directionPath, useSopStore } from '../lib/sopStore'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
@@ -37,6 +39,10 @@ export default function DetailModal() {
   const [imageRatios, setImageRatios] = useState<Record<string, string>>({})
   const [imageSizes, setImageSizes] = useState<Record<string, string>>({})
   const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
+  const [sopEditing, setSopEditing] = useState(false)
+  const [galleryWidth, setGalleryWidth] = useState(0)
+  const galleryRef = useRef<HTMLDivElement>(null)
+  const sopDirections = useSopStore((s) => s.directions)
   const [now, setNow] = useState(Date.now())
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
@@ -176,12 +182,36 @@ export default function DetailModal() {
       return slot
     })
   }, [task])
+  // 瀑布流列数：按容器宽度和这组图的平均横竖比决定，最多 5 列
+  useEffect(() => {
+    const el = galleryRef.current
+    if (!el) return
+    const observer = new ResizeObserver((entries) => {
+      setGalleryWidth(entries[0].contentRect.width)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [detailTaskId, task?.status])
+
+  const galleryColumns = useMemo(() => {
+    const sizes = (task?.outputImages ?? []).map((id) => imageSizes[id]).filter(Boolean)
+    const ratios = sizes
+      .map((size) => {
+        const [w, h] = size.split('×').map(Number)
+        return w > 0 && h > 0 ? w / h : 0
+      })
+      .filter((ratio) => ratio > 0)
+    const average = ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : 1
+    const tile = average > 1.4 ? 122 : average > 1.05 ? 92 : 72
+    if (!galleryWidth) return 5
+    return Math.max(2, Math.min(5, Math.floor(galleryWidth / tile)))
+  }, [task, imageSizes, galleryWidth])
+
   const currentOutputSlot = outputSlots[imageIndex]
   const currentOutputImageId = currentOutputSlot?.imageId || ''
   const currentOutputImageIndex = currentOutputSlot?.outputImageIndex ?? -1
   const currentOutputError = currentOutputSlot?.error || ''
   const currentOriginalOutputImageId = currentOutputImageIndex >= 0 ? task?.transparentOriginalImages?.[currentOutputImageIndex] || '' : ''
-  const currentOutputPreviewSrc = currentOutputImageId ? outputPreviewSrcs[currentOutputImageId] || '' : ''
 
   useEffect(() => {
     const outputImageIds = task?.outputImages ?? []
@@ -510,30 +540,62 @@ export default function DetailModal() {
               )}
             </div>
           )}
-          {task.status === 'done' && outputLen > 0 && currentOutputPreviewSrc && (
+          {task.status === 'done' && outputLen > 0 && (currentOutputImageId || task.outputImages.length > 0) && (
             <>
-              <img
-                src={currentOutputPreviewSrc}
-                data-image-id={currentOutputImageId}
-                className="saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
-                onLoad={(e) => {
-                  const image = e.currentTarget
-                  if (currentOutputImageId && image.naturalWidth > 0 && image.naturalHeight > 0) {
-                    setImageRatios((prev) => ({
-                      ...prev,
-                      [currentOutputImageId]: formatImageRatio(image.naturalWidth, image.naturalHeight),
-                    }))
-                    setImageSizes((prev) => ({
-                      ...prev,
-                      [currentOutputImageId]: `${image.naturalWidth}×${image.naturalHeight}`,
-                    }))
-                  }
-                }}
-                onClick={() =>
-                  setLightboxImageId(currentOutputImageId, task.outputImages)
-                }
-                alt=""
-              />
+              <div ref={galleryRef} className="absolute inset-0 overflow-y-auto px-2.5 pb-2.5 pt-12">
+                <div style={{ columnCount: galleryColumns, columnGap: '6px' }}>
+                  {outputSlots.map((slot, index) => {
+                    if (slot.error) {
+                      return (
+                        <div
+                          key={`slot-error-${slot.requestIndex}`}
+                          style={{ breakInside: 'avoid', marginBottom: '6px' }}
+                          className="flex h-20 items-center justify-center rounded-lg bg-black/5 text-xs text-red-500 dark:bg-white/[0.04]"
+                        >
+                          第 {index + 1} 张失败
+                        </div>
+                      )
+                    }
+                    const src = slot.imageId ? outputPreviewSrcs[slot.imageId] || '' : ''
+                    if (!src) return null
+                    return (
+                      <button
+                        key={slot.imageId}
+                        type="button"
+                        onClick={() => {
+                          setImageIndex(index)
+                          setLightboxImageId(slot.imageId, task.outputImages)
+                        }}
+                        style={{ breakInside: 'avoid', marginBottom: '6px' }}
+                        className={`group relative block w-full overflow-hidden rounded-lg transition-shadow ${index === imageIndex ? 'ring-2 ring-blue-500' : ''}`}
+                      >
+                        <img
+                          src={src}
+                          data-image-id={slot.imageId}
+                          className="saveable-image w-full h-auto object-contain"
+                          onLoad={(e) => {
+                            const image = e.currentTarget
+                            if (slot.imageId && image.naturalWidth > 0 && image.naturalHeight > 0) {
+                              setImageRatios((prev) => ({
+                                ...prev,
+                                [slot.imageId]: formatImageRatio(image.naturalWidth, image.naturalHeight),
+                              }))
+                              setImageSizes((prev) => ({
+                                ...prev,
+                                [slot.imageId]: `${image.naturalWidth}×${image.naturalHeight}`,
+                              }))
+                            }
+                          }}
+                          alt=""
+                        />
+                        <span className="absolute bottom-1 right-1 rounded bg-black/55 px-1 py-0.5 font-mono text-[9px] leading-none text-white">
+                          {index + 1}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
               <div data-selectable-text className="absolute left-4 top-[15px] flex items-center gap-1.5">
                 {currentImageRatio && currentImageSize ? (
                   <>
@@ -556,33 +618,9 @@ export default function DetailModal() {
                 )}
               </div>
               {outputLen > 1 && (
-                <>
-                  <button
-                    onClick={() =>
-                      setImageIndex(
-                        (imageIndex - 1 + outputLen) % outputLen,
-                      )
-                    }
-                    className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() =>
-                      setImageIndex((imageIndex + 1) % outputLen)
-                    }
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                  <span className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
-                    {imageIndex + 1} / {outputLen}
-                  </span>
-                </>
+                <span className="pointer-events-none absolute bottom-2 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/50 px-2 py-0.5 text-xs text-white">
+                  共 {outputLen} 张
+                </span>
               )}
               {currentOriginalOutputImageId && (
                 <div className="absolute bottom-4 right-4 z-20 flex">
@@ -892,6 +930,43 @@ export default function DetailModal() {
               <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap mb-4">
                 {getTaskPromptText(task.prompt, task.inputImageIds.length) || '(无提示词)'}
               </p>
+            )}
+            {task.sopText && (
+              <div className="mb-4 overflow-hidden rounded-lg border border-gray-200 dark:border-white/[0.08]">
+                <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 dark:bg-white/[0.04]">
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">生图 SOP</span>
+                  <span className="min-w-0 flex-1 truncate text-xs text-gray-700 dark:text-gray-300">{task.sopName || ''}</span>
+                  <button
+                    type="button"
+                    onClick={() => setSopEditing(true)}
+                    className="text-xs text-blue-600 hover:underline dark:text-blue-400"
+                  >
+                    编辑
+                  </button>
+                </div>
+                <div
+                  onDoubleClick={() => setSopEditing(true)}
+                  title="双击编辑"
+                  className="max-h-40 cursor-text overflow-auto whitespace-pre-wrap px-3 py-2 text-xs leading-relaxed text-gray-600 dark:text-gray-400"
+                >
+                  {task.sopText}
+                </div>
+                <div className="border-t border-gray-100 px-3 py-1.5 text-[11px] text-gray-400 dark:border-white/[0.06]">
+                  系统提示词：{task.sopSystemPrompt || '(未记录)'} · 第 {task.sopPromptIndex ?? 1} 条提示词
+                  {task.sopDirectionId && ` · 归属：${directionPath(sopDirections, task.sopDirectionId) || '未归属'}`}
+                </div>
+              </div>
+            )}
+            {sopEditing && task.sopJobId && (
+              <SopEditorModal
+                title={task.sopName || '生图 SOP'}
+                value={task.sopText || ''}
+                onClose={() => setSopEditing(false)}
+                onSave={(next) => {
+                  updateSopText(task.sopJobId as string, task.sopName || '生图 SOP', next)
+                  setSopEditing(false)
+                }}
+              />
             )}
             {showRevisedPrompt && currentRevisedPrompt && (
               <div className="mb-4">

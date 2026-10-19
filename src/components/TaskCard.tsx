@@ -70,6 +70,7 @@ export default function TaskCard({
   disableSwipe,
 }: Props) {
   const [thumbSrc, setThumbSrc] = useState<string>('')
+  const [gridThumbs, setGridThumbs] = useState<string[]>([])
   const [coverRatio, setCoverRatio] = useState<string>('')
   const [coverSize, setCoverSize] = useState<string>('')
   const [now, setNow] = useState(Date.now())
@@ -286,6 +287,24 @@ export default function TaskCard({
     }
   }, [nearViewport, task.outputImages])
 
+  // 一卡多图（SOP 聚合卡）：加载前四张缩略图拼成网格
+  useEffect(() => {
+    const ids = task.outputImages.length > 1 ? task.outputImages.slice(0, 4) : []
+    if (!nearViewport || !ids.length) {
+      setGridThumbs([])
+      return
+    }
+    let cancelled = false
+    void Promise.all(ids.map((id) => ensureImageThumbnailCached(id).catch(() => null)))
+      .then((list) => {
+        if (cancelled) return
+        setGridThumbs(list.map((item) => item?.src || '').filter(Boolean))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [nearViewport, task.outputImages])
+
   const duration = (() => {
     let seconds: number
     if (task.status === 'running' || task.falRecoverable || task.customRecoverable) {
@@ -489,15 +508,29 @@ export default function TaskCard({
           )}
           {task.status === 'done' && thumbSrc && (
             <>
-              <img
-                src={thumbSrc}
-                data-image-id={task.outputImages[0]}
-                data-output-image-ids={task.outputImages.join(',')}
-                className="saveable-image w-full h-full object-cover"
-                loading="lazy"
-                alt=""
-              />
-              {(hasPartialOutputFailure || task.outputImages.length > 1) && (
+              {gridThumbs.length > 1 ? (
+                <div className="grid h-full w-full grid-cols-2 gap-[1px] bg-gray-100 dark:bg-gray-800">
+                  {gridThumbs.slice(0, 4).map((src, index) => (
+                    <img
+                      key={`${src}-${index}`}
+                      src={src}
+                      data-output-image-ids={task.outputImages.join(',')}
+                      className="saveable-image h-full w-full object-cover"
+                      loading="lazy"
+                      alt=""
+                    />
+                  ))}
+                </div>
+              ) : (
+                <img
+                  src={thumbSrc}
+                  data-image-id={task.outputImages[0]}
+                  data-output-image-ids={task.outputImages.join(',')}
+                  className="saveable-image w-full h-full object-cover"
+                  loading="lazy"
+                  alt=""
+                />
+              )}              {(hasPartialOutputFailure || task.outputImages.length > 1) && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
                   {hasPartialOutputFailure ? <>{requestedOutputCount} | <span className="font-semibold text-yellow-300">{outputSuccessCount}</span></> : task.outputImages.length}
                 </span>

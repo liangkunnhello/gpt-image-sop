@@ -3,6 +3,8 @@ import { useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { isTauri } from '../lib/platform'
 import { getIndexesInRect } from '../lib/virtualGrid'
+import { groupSopTasks } from '../lib/sopGroup'
+import { collectSubtreeIds, UNASSIGNED_FILTER, useSopStore } from '../lib/sopStore'
 import { useVirtualGrid } from '../hooks/useVirtualGrid'
 import TaskCard from './TaskCard'
 
@@ -35,11 +37,23 @@ export default function TaskGrid() {
   const initialSelection = useRef<string[]>([])
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
+  const activeFilterId = useSopStore((s) => s.activeFilterId)
+  const sopDirections = useSopStore((s) => s.directions)
+  const directionFilter = useMemo(
+    () => (activeFilterId && activeFilterId !== UNASSIGNED_FILTER ? collectSubtreeIds(sopDirections, activeFilterId) : null),
+    [activeFilterId, sopDirections],
+  )
+
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
     const q = searchQuery.trim().toLowerCase()
     
     return sorted.filter((t) => {
+      if (activeFilterId === UNASSIGNED_FILTER) {
+        if (t.sopDirectionId) return false
+      } else if (directionFilter) {
+        if (!t.sopDirectionId || !directionFilter.has(t.sopDirectionId)) return false
+      }
       if (filterFavorite) {
         if (!t.isFavorite) return false
         if (activeFavoriteCollectionId && activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(t, defaultFavoriteCollectionId).includes(activeFavoriteCollectionId)) return false
@@ -47,11 +61,13 @@ export default function TaskGrid() {
       if (!taskMatchesFilterStatus(t, filterStatus)) return false
       return taskMatchesSearchQuery(t, q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId, defaultFavoriteCollectionId])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId, defaultFavoriteCollectionId, directionFilter, activeFilterId])
+  // 同一份 SOP 生成的多个任务合并成一张卡，其余任务原样展示
+  const displayTasks = useMemo(() => groupSopTasks(filteredTasks), [filteredTasks])
   // 框选的事件处理只在挂载时注册，通过 ref 读取最新列表
-  const filteredTasksRef = useRef(filteredTasks)
-  filteredTasksRef.current = filteredTasks
-  const { startIndex, endIndex, paddingTop, paddingBottom, metricsRef } = useVirtualGrid(gridRef, filteredTasks.length)
+  const filteredTasksRef = useRef(displayTasks)
+  filteredTasksRef.current = displayTasks
+  const { startIndex, endIndex, paddingTop, paddingBottom, metricsRef } = useVirtualGrid(gridRef, displayTasks.length)
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -261,7 +277,7 @@ export default function TaskGrid() {
     }
   }, [clearSelection, isMac])
 
-  if (!filteredTasks.length) {
+  if (!displayTasks.length) {
     return (
       <div className="text-center py-20 text-gray-400 dark:text-gray-500">
         {searchQuery || filterFavorite ? (
@@ -307,7 +323,7 @@ export default function TaskGrid() {
       className="relative min-h-[50vh] pb-10"
     >
       <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" style={{ paddingTop, paddingBottom }}>
-        {filteredTasks.slice(startIndex, endIndex).map((task) => (
+        {displayTasks.slice(startIndex, endIndex).map((task) => (
           <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
             <TaskCard
               task={task}
