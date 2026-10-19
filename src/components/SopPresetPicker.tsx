@@ -39,6 +39,7 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
   const showToast = useStore((s) => s.showToast)
 
   const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
   const [editingId, setEditingId] = useState('')
   const [draftName, setDraftName] = useState('')
   const [draftContent, setDraftContent] = useState('')
@@ -99,7 +100,14 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
     <div className="relative" ref={rootRef}>
       <button
         type="button"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (!open) {
+            // 输入框在页面底部，下方空间不足时改为向上展开
+            const rect = rootRef.current?.getBoundingClientRect()
+            if (rect) setDropUp(window.innerHeight - rect.bottom < 340)
+          }
+          setOpen((value) => !value)
+        }}
         title={`${label}：${current?.content || '未设置'}`}
         className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white/70 px-2.5 py-1 text-xs text-gray-600 transition-colors hover:bg-white dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-300 dark:hover:bg-white/[0.08]"
       >
@@ -113,7 +121,7 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-40 mt-1 w-72 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-white/10 dark:bg-gray-800">
+        <div className={`absolute left-0 z-40 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-white/10 dark:bg-gray-800 ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
           <div className="max-h-64 overflow-auto p-1">
             <button
               type="button"
