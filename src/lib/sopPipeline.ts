@@ -82,7 +82,7 @@ export function splitEven<T>(items: T[], groups: number): T[][] {
   return out
 }
 
-function sopSystem(ignoreCompliance: boolean) {
+function sopSystem(ignoreCompliance: boolean, useImageSellingPoints: boolean) {
   return [
     '你是广告设计团队的资深生图指导。用户会给你若干张参考图，你要从这些图里反推出一套可复用的「生图 SOP」。',
     'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
@@ -90,6 +90,9 @@ function sopSystem(ignoreCompliance: boolean) {
     ignoreCompliance
       ? '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要写进 SOP，也不要要求在生成的图上出现。'
       : '',
+    useImageSellingPoints
+      ? ''
+      : '不要从参考图上提取或复用卖点文案。SOP 的文字规范只描述文字的层级、字号与排布方式，具体文案以用户提供的卖点为准。',
     '输出 Markdown，包含以下小节：## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌。',
     '不要输出任何解释性开场白。',
   ].filter(Boolean).join('\n')
@@ -101,6 +104,7 @@ export async function generateSop(
   systemPrompt: string,
   imageDataUrls: string[],
   ignoreCompliance = true,
+  useImageSellingPoints = false,
 ): Promise<string> {
   const maxSide = imageDataUrls.length > MANY_IMAGE_THRESHOLD ? 768 : MODEL_MAX_SIDE
   const images = await Promise.all(imageDataUrls.map((url) => shrinkToDataUrl(url, maxSide)))
@@ -117,7 +121,7 @@ export async function generateSop(
   for (const url of images) content.push({ type: 'image_url', image_url: { url } })
 
   return chat(profile, [
-    { role: 'system', content: sopSystem(ignoreCompliance) },
+    { role: 'system', content: sopSystem(ignoreCompliance, useImageSellingPoints) },
     { role: 'user', content },
   ])
 }
@@ -182,6 +186,7 @@ export interface SopJobRequest {
   promptsPerGroup: number
   directionId?: string
   ignoreCompliance?: boolean
+  useImageSellingPoints?: boolean
 }
 
 /** 同时在跑的任务卡数量 */
@@ -213,7 +218,13 @@ async function runJob(job: SopJobRequest) {
   const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId)
 
   try {
-    const sop = await generateSop(profile, job.systemPromptText, job.imageDataUrls, job.ignoreCompliance !== false)
+    const sop = await generateSop(
+      profile,
+      job.systemPromptText,
+      job.imageDataUrls,
+      job.ignoreCompliance !== false,
+      job.useImageSellingPoints === true,
+    )
     const prompts = await generatePrompts(profile, sop, job.promptsPerGroup, job.ignoreCompliance !== false)
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
 

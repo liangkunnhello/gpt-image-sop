@@ -8,6 +8,7 @@ export interface SopRunOptions {
   groupCount: number
   promptsPerGroup: number
   ignoreCompliance: boolean
+  useImageSellingPoints: boolean
 }
 
 interface Props {
@@ -25,6 +26,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const updateSystemPrompt = useSopStore((s) => s.updateSystemPrompt)
   const ignoreCompliance = useSopStore((s) => s.ignoreCompliance)
   const setIgnoreCompliance = useSopStore((s) => s.setIgnoreCompliance)
+  const useImageSellingPoints = useSopStore((s) => s.useImageSellingPoints)
+  const setUseImageSellingPoints = useSopStore((s) => s.setUseImageSellingPoints)
 
   const products = useMemo(() => directions.filter((node) => node.kind !== 'direction'), [directions])
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
@@ -221,6 +224,21 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               </span>
             </span>
           </label>
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <input
+              type="checkbox"
+              checked={useImageSellingPoints}
+              onChange={(e) => setUseImageSellingPoints(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">使用参考图上的卖点文案</span>
+              <span className="block text-[11px] leading-relaxed text-gray-400">
+                默认关闭，卖点以上方选择器为准；打开后模型会从参考图文字里提炼卖点。
+              </span>
+            </span>
+          </label>
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-gray-200 px-5 py-3 dark:border-white/[0.08]">
@@ -234,6 +252,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               groupCount,
               promptsPerGroup: Math.max(1, Number(perGroup) || 1),
               ignoreCompliance,
+              useImageSellingPoints,
             })}
             className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
           >

@@ -72,8 +72,11 @@ interface SopState {
   defaultPick: Record<string, SopPick>
   /** 生成时忽略参考图上的 logo、合规说明、风险提示，默认开启 */
   ignoreCompliance: boolean
+  /** 生成时使用参考图上的卖点文案，默认关闭，卖点以上方选择器为准 */
+  useImageSellingPoints: boolean
   setSopMode: (value: boolean) => void
   setIgnoreCompliance: (value: boolean) => void
+  setUseImageSellingPoints: (value: boolean) => void
   setProgress: (value: SopState['progress']) => void
   setActiveDirection: (id: string) => void
   setActiveFilter: (id: string | null) => void
@@ -104,8 +107,10 @@ export const useSopStore = create<SopState>()(
       lastPick: {},
       defaultPick: {},
       ignoreCompliance: true,
+      useImageSellingPoints: false,
       setSopMode: (value) => set({ sopMode: value }),
       setIgnoreCompliance: (value) => set({ ignoreCompliance: value }),
+      setUseImageSellingPoints: (value) => set({ useImageSellingPoints: value }),
       setProgress: (value) => set({ progress: value }),
       setActiveDirection: (id) => set({ activeDirectionId: id }),
       setActiveFilter: (id) => set((state) => ({
@@ -189,7 +194,7 @@ export const useSopStore = create<SopState>()(
     {
       name: 'gpt-image-sop-store',
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance }),
+      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints }),
     },
   ),
 )
