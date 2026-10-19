@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { SopPreset } from '../lib/sopStore'
-import { useSopStore } from '../lib/sopStore'
+import type { SopPick, SopPreset } from '../lib/sopStore'
+import { NO_PRESET, useSopStore } from '../lib/sopStore'
 import { useStore } from '../store'
 
 /** 按「默认项 → 上次使用 → 第一项」的顺序决定当前选中的卖点/风格 */
@@ -9,13 +9,15 @@ export function resolvePickedPreset(
   directionId: string,
   productId: string,
   kind: SopPreset['kind'],
-  lastPick: Record<string, { pointId?: string; styleId?: string }>,
-  defaultPick: Record<string, { pointId?: string; styleId?: string }>,
+  lastPick: Record<string, SopPick>,
+  defaultPick: Record<string, SopPick>,
 ) {
   const list = presets.filter((item) => item.productId === productId && item.kind === kind)
   const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
   const id = kind === 'point' ? pick.pointId : pick.styleId
-  return list.find((item) => item.id === id) ?? list[0]
+  if (id === NO_PRESET) return undefined
+  if (id) return list.find((item) => item.id === id)
+  return list[0]
 }
 
 interface Props {
@@ -48,6 +50,9 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
     [presets, productId, kind],
   )
   const current = resolvePickedPreset(presets, directionId, productId, kind, lastPick, defaultPick)
+  const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
+  const currentId = kind === 'point' ? pick.pointId : pick.styleId
+  const isNone = currentId === NO_PRESET
 
   useEffect(() => {
     if (!open) return
@@ -99,7 +104,9 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
         className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white/70 px-2.5 py-1 text-xs text-gray-600 transition-colors hover:bg-white dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-300 dark:hover:bg-white/[0.08]"
       >
         <span className="text-gray-400 dark:text-gray-500">{label}</span>
-        <span className="max-w-[140px] truncate font-medium text-gray-700 dark:text-gray-200">{current?.name ?? '未设置'}</span>
+        <span className="max-w-[140px] truncate font-medium text-gray-700 dark:text-gray-200">
+          {current?.name ?? (isNone ? '不使用' : '未设置')}
+        </span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-3 w-3 shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
         </svg>
@@ -108,6 +115,22 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
       {open && (
         <div className="absolute left-0 top-full z-40 mt-1 w-72 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-white/10 dark:bg-gray-800">
           <div className="max-h-64 overflow-auto p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setPick(directionId, {
+                  ...pick,
+                  ...(kind === 'point' ? { pointId: NO_PRESET } : { styleId: NO_PRESET }),
+                })
+                setOpen(false)
+              }}
+              className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-gray-50 dark:hover:bg-white/[0.06] ${isNone ? 'font-medium text-blue-600 dark:text-blue-400' : 'text-gray-700 dark:text-gray-200'}`}
+            >
+              <span className="flex-1 text-left">不使用{label}</span>
+              {isNone && <span className="text-[10px]">当前</span>}
+            </button>
+            <div className="my-1 h-px bg-gray-100 dark:bg-white/[0.06]" />
+
             {!list.length && <p className="px-2 py-3 text-xs text-gray-400">这个产品下还没有{label}</p>}
             {list.map((item) => (
               editingId === item.id ? (

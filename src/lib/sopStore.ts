@@ -37,6 +37,9 @@ const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.r
 /** 侧栏「未归属」筛选项的特殊值 */
 export const UNASSIGNED_FILTER = '__unassigned__'
 
+/** 卖点/风格选择「本次不使用」的特殊值 */
+export const NO_PRESET = '__none__'
+
 /** 卖点 / 风格预设：挂在产品节点下，同产品所有方向共享 */
 export interface SopPreset {
   id: string
