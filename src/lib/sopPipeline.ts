@@ -82,20 +82,25 @@ export function splitEven<T>(items: T[], groups: number): T[][] {
   return out
 }
 
-const SOP_SYSTEM = [
-  '你是广告设计团队的资深生图指导。用户会给你若干张参考图，你要从这些图里反推出一套可复用的「生图 SOP」。',
-  'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
-  '只描述你从参考图里真实观察到的规律，不要编造参考图里没有的品牌、价格或功效。',
-  '参考图上如果出现免责声明、风险提示、警示语、「请见条款及投保须知」这类合规小字，一律不要写进 SOP，也不要写进文字规范。',
-  '输出 Markdown，包含以下小节：## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌。',
-  '不要输出任何解释性开场白。',
-].join('\n')
+function sopSystem(ignoreCompliance: boolean) {
+  return [
+    '你是广告设计团队的资深生图指导。用户会给你若干张参考图，你要从这些图里反推出一套可复用的「生图 SOP」。',
+    'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
+    '只描述你从参考图里真实观察到的规律，不要编造参考图里没有的品牌、价格或功效。',
+    ignoreCompliance
+      ? '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要写进 SOP，也不要要求在生成的图上出现。'
+      : '',
+    '输出 Markdown，包含以下小节：## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌。',
+    '不要输出任何解释性开场白。',
+  ].filter(Boolean).join('\n')
+}
 
 /** 第一步：参考图 + 系统提示词 → 生图 SOP */
 export async function generateSop(
   profile: ApiProfile,
   systemPrompt: string,
   imageDataUrls: string[],
+  ignoreCompliance = true,
 ): Promise<string> {
   const maxSide = imageDataUrls.length > MANY_IMAGE_THRESHOLD ? 768 : MODEL_MAX_SIDE
   const images = await Promise.all(imageDataUrls.map((url) => shrinkToDataUrl(url, maxSide)))
@@ -112,30 +117,38 @@ export async function generateSop(
   for (const url of images) content.push({ type: 'image_url', image_url: { url } })
 
   return chat(profile, [
-    { role: 'system', content: SOP_SYSTEM },
+    { role: 'system', content: sopSystem(ignoreCompliance) },
     { role: 'user', content },
   ])
 }
 
-const PROMPT_SYSTEM = [
-  '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
-  '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。',
-  '图上文字只写主标题和卖点标签。不要写免责声明、风险提示、警示语、合规说明，也不要写「请见条款及投保须知」「本素材纯属广告创意」这类附加小字。',
-  '多条之间要在场景、机位、人物、色调上做出区分，不能只是换几个词。',
-  '只输出编号列表，一行一条，不要任何解释、不要小标题、不要代码块。',
-].join('\n')
+function promptSystem(ignoreCompliance: boolean) {
+  return [
+    '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
+    '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。',
+    ignoreCompliance
+      ? '图上文字只写主标题和卖点标签。不要写品牌 logo、免责声明、风险提示、警示语、合规说明，也不要写「请见条款及投保须知」「本素材纯属广告创意」这类附加小字。'
+      : '',
+    '多条之间要在场景、机位、人物、色调上做出区分，不能只是换几个词。',
+    '只输出编号列表，一行一条，不要任何解释、不要小标题、不要代码块。',
+  ].filter(Boolean).join('\n')
+}
 
 /** 第二步：SOP → 多条具体提示词 */
 export async function generatePrompts(
   profile: ApiProfile,
   sopText: string,
   count: number,
+  ignoreCompliance = true,
 ): Promise<string[]> {
+  const tail = ignoreCompliance
+    ? '\n如果 SOP 里提到 logo、免责声明、警示语、合规小字，一律忽略，不要写进任何一条提示词。'
+    : ''
   const raw = await chat(profile, [
-    { role: 'system', content: PROMPT_SYSTEM },
+    { role: 'system', content: promptSystem(ignoreCompliance) },
     {
       role: 'user',
-      content: `【生图 SOP】\n${sopText.trim()}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。\n如果 SOP 里提到免责声明、警示语、合规小字，一律忽略，不要写进任何一条提示词。`,
+      content: `【生图 SOP】\n${sopText.trim()}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${tail}`,
     },
   ])
   return parseNumberedList(raw)
@@ -168,6 +181,7 @@ export interface SopJobRequest {
   systemPromptText: string
   promptsPerGroup: number
   directionId?: string
+  ignoreCompliance?: boolean
 }
 
 /** 同时在跑的任务卡数量 */
@@ -199,8 +213,8 @@ async function runJob(job: SopJobRequest) {
   const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId)
 
   try {
-    const sop = await generateSop(profile, job.systemPromptText, job.imageDataUrls)
-    const prompts = await generatePrompts(profile, sop, job.promptsPerGroup)
+    const sop = await generateSop(profile, job.systemPromptText, job.imageDataUrls, job.ignoreCompliance !== false)
+    const prompts = await generatePrompts(profile, sop, job.promptsPerGroup, job.ignoreCompliance !== false)
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
 
     await removeSopPlaceholder(placeholderId)

@@ -535,6 +535,7 @@ export default function InputBar() {
       systemPromptText,
       promptsPerGroup: options.promptsPerGroup,
       directionId: options.directionId,
+      ignoreCompliance: options.ignoreCompliance,
     })))
   }, [inputImages, pickedPoint, pickedStyle])
 

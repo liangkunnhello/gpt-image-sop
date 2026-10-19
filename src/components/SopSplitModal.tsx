@@ -7,6 +7,7 @@ export interface SopRunOptions {
   systemPromptText: string
   groupCount: number
   promptsPerGroup: number
+  ignoreCompliance: boolean
 }
 
 interface Props {
@@ -22,6 +23,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const systemPrompts = useSopStore((s) => s.systemPrompts)
   const addSystemPrompt = useSopStore((s) => s.addSystemPrompt)
   const updateSystemPrompt = useSopStore((s) => s.updateSystemPrompt)
+  const ignoreCompliance = useSopStore((s) => s.ignoreCompliance)
+  const setIgnoreCompliance = useSopStore((s) => s.setIgnoreCompliance)
 
   const products = useMemo(() => directions.filter((node) => node.kind !== 'direction'), [directions])
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
@@ -203,6 +206,21 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             />
             <span className="text-[11px] text-gray-400">每条提示词出一张，共约 {groupCount * (Number(perGroup) || 0)} 张</span>
           </div>
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <input
+              type="checkbox"
+              checked={ignoreCompliance}
+              onChange={(e) => setIgnoreCompliance(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">不参考 logo 与合规文案</span>
+              <span className="block text-[11px] leading-relaxed text-gray-400">
+                开启后生成的图不带品牌 logo、免责声明、风险提示；关掉则按参考图原样保留。
+              </span>
+            </span>
+          </label>
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-gray-200 px-5 py-3 dark:border-white/[0.08]">
@@ -215,6 +233,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               systemPromptText: systemPromptText.trim(),
               groupCount,
               promptsPerGroup: Math.max(1, Number(perGroup) || 1),
+              ignoreCompliance,
             })}
             className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
           >
