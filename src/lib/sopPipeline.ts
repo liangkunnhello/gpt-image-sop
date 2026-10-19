@@ -1,5 +1,5 @@
 import type { ApiProfile } from '../types'
-import { submitSopTasks, useStore } from '../store'
+import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, useStore } from '../store'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage } from './imageApiShared'
@@ -162,6 +162,7 @@ export function sopTitleOf(sopText: string, fallback: string): string {
 export interface SopJobRequest {
   label: string
   imageDataUrls: string[]
+  imageIds?: string[]
   systemPromptText: string
   promptsPerGroup: number
   directionId?: string
@@ -191,19 +192,30 @@ async function runJob(job: SopJobRequest) {
   const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
   if (!profile) throw new Error('没有可用的接口配置')
 
-  const sop = await generateSop(profile, job.systemPromptText, job.imageDataUrls)
-  const prompts = await generatePrompts(profile, sop, job.promptsPerGroup)
-  if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
+  const sopJobId = `sop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  // 先占位，用户点完发送立刻能看到这张卡
+  const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId)
 
-  // 出图任务由 submitSopTasks 内部再限并发，这里不等待，避免占住队列
-  void submitSopTasks({
-    sopJobId: `sop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-    sopName: sopTitleOf(sop, job.label),
-    systemPromptName: job.systemPromptText.split('\n')[0].slice(0, 24) || '系统提示词',
-    sopText: sop,
-    directionId: job.directionId,
-    prompts,
-  })
+  try {
+    const sop = await generateSop(profile, job.systemPromptText, job.imageDataUrls)
+    const prompts = await generatePrompts(profile, sop, job.promptsPerGroup)
+    if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
+
+    await removeSopPlaceholder(placeholderId)
+    // 出图任务由 submitSopTasks 内部再限并发，这里不等待，避免占住队列
+    void submitSopTasks({
+      sopJobId,
+      sopName: sopTitleOf(sop, job.label),
+      systemPromptName: job.systemPromptText.split('\n')[0].slice(0, 24) || '系统提示词',
+      sopText: sop,
+      directionId: job.directionId,
+      referenceImageIds: job.imageIds,
+      prompts,
+    })
+  } catch (err) {
+    await removeSopPlaceholder(placeholderId)
+    throw err
+  }
 }
 
 function pump() {

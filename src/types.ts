@@ -337,6 +337,10 @@ export interface TaskRecord {
   sopText?: string
   /** 归属的「产品-方向」节点 id，用于左侧栏筛选；空表示未归属 */
   sopDirectionId?: string
+  /** SOP 模式：反推 SOP 期间插入的占位卡，拿到提示词后会被删除 */
+  sopPlaceholder?: boolean
+  /** SOP 模式：本轮使用的参考图 id，复用配置时回填输入框 */
+  sopReferenceImageIds?: string[]
 }
 
 // ===== SOP 模式 =====

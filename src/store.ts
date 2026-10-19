@@ -4116,9 +4116,10 @@ export async function reuseConfig(task: TaskRecord) {
   )
   clearMaskDraft()
 
-  // 恢复输入图片
+  // 恢复输入图片；SOP 任务的参考图存在 sopReferenceImageIds 里
+  const sourceImageIds = task.inputImageIds.length ? task.inputImageIds : (task.sopReferenceImageIds ?? [])
   const imgs: InputImage[] = []
-  for (const imgId of task.inputImageIds) {
+  for (const imgId of sourceImageIds) {
     const dataUrl = await ensureImageCached(imgId)
     if (dataUrl) {
       imgs.push({ id: imgId, dataUrl })
@@ -4126,7 +4127,7 @@ export async function reuseConfig(task: TaskRecord) {
   }
   setInputImages(imgs)
   // 部分参考图可能已被删除，按图片 id 重新对齐提示词中的图片序号，避免评论和提及错位到其他图片
-  setPrompt(remapImageMentionsForOrder(task.prompt, task.inputImageIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
+  setPrompt(remapImageMentionsForOrder(task.prompt, sourceImageIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
   if (maskTargetImageId && task.maskImageId && imgs.some((img) => img.id === maskTargetImageId)) {
     const maskDataUrl = await ensureImageCached(task.maskImageId)
@@ -4423,9 +4424,13 @@ export async function clearFailedTasks(taskIds?: string[]) {
 
 /** 删除单条任务 */
 export async function removeTask(task: TaskRecord) {
-  const deletedCount = await removeTasks([task.id])
+  // SOP 卡片是一组任务，删除时整组一起清掉
+  const ids = task.sopJobId
+    ? useStore.getState().tasks.filter((item) => item.sopJobId === task.sopJobId).map((item) => item.id)
+    : [task.id]
+  const deletedCount = await removeTasks(ids)
   if (deletedCount === 0) return
-  useStore.getState().showToast('任务已删除', 'success')
+  useStore.getState().showToast(ids.length > 1 ? `已删除该 SOP 下的 ${ids.length} 个任务` : '任务已删除', 'success')
 }
 
 /** 清空数据选项 */
@@ -4865,6 +4870,7 @@ export async function submitSopTasks(input: {
   systemPromptName: string
   sopText?: string
   directionId?: string
+  referenceImageIds?: string[]
   prompts: string[]
 }): Promise<string[]> {
   const state = useStore.getState()
@@ -4897,6 +4903,7 @@ export async function submitSopTasks(input: {
     sopSystemPrompt: input.systemPromptName,
     sopText: input.sopText,
     sopDirectionId: input.directionId,
+    sopReferenceImageIds: input.referenceImageIds,
   }))
 
   useStore.getState().setTasks([...tasks, ...useStore.getState().tasks])
@@ -4917,6 +4924,36 @@ export async function submitSopTasks(input: {
 
   useStore.getState().showToast(`SOP 已提交 ${tasks.length} 条提示词`, 'success')
   return tasks.map((task) => task.id)
+}
+
+/** SOP 模式：先插一张占位卡，让用户点完发送就能看到进度 */
+export function createSopPlaceholder(sopJobId: string, label: string, directionId?: string) {
+  const state = useStore.getState()
+  const task: TaskRecord = {
+    id: genId(),
+    prompt: `${label} · 正在反推 SOP…`,
+    params: { ...state.params, n: 1 },
+    inputImageIds: [],
+    outputImages: [],
+    status: 'running',
+    error: null,
+    createdAt: Date.now(),
+    finishedAt: null,
+    elapsed: null,
+    sopJobId,
+    sopName: label,
+    sopPromptIndex: 0,
+    sopDirectionId: directionId,
+    sopPlaceholder: true,
+  }
+  useStore.getState().setTasks([task, ...useStore.getState().tasks])
+  void putTask(task)
+  return task.id
+}
+
+/** SOP 模式：拿到提示词后移除占位卡，真实任务已经就位 */
+export async function removeSopPlaceholder(taskId: string) {
+  await removeTasks([taskId])
 }
 
 /** SOP 模式：改写某张卡片依据的 SOP 全文，同组任务一起更新 */

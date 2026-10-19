@@ -470,9 +470,13 @@ export default function InputBar() {
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, settingsActiveProfile.id, settings])
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
+  const sopMode = useSopStore((s) => s.sopMode)
   // 批量进行中暂停画廊和 Agent 的提交，需等待完成或停止后再提交
   const batchRunning = Boolean(batchProgress)
-  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning)
+  // SOP 模式靠参考图与系统提示词驱动，输入框可以为空
+  const canSubmit = Boolean(
+    (prompt.trim() || (sopMode && inputImages.length > 0)) && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning,
+  )
   const batchEnabled = appMode === 'gallery' && settings.showBatchPrompt && settings.batchPromptEnabled
   // 批量进行中始终在画廊显示入口，以便查看进度和停止
   const showBatch = appMode === 'gallery' && (settings.showBatchPrompt || batchRunning)
@@ -489,10 +493,11 @@ export default function InputBar() {
     : appMode === 'agent'
     ? '画廊批量任务进行中，请等待完成或回到画廊停止后再提交'
     : '批量任务进行中，请等待完成或停止后再提交'
-  const promptPlaceholder = batchEnabled
+  const promptPlaceholder = sopMode
+    ? 'SOP 模式：可留空，拖入参考图后直接发送...'
+    : batchEnabled
     ? '每条提示词之间空两行分隔，可输入 @ 来指定参考图...'
     : '描述你想生成的图片，可输入 @ 来指定参考图...'
-  const sopMode = useSopStore((s) => s.sopMode)
   const setSopMode = useSopStore((s) => s.setSopMode)
   const sopProgress = useSopStore((s) => s.progress)
   const sopDirections = useSopStore((s) => s.directions)
@@ -526,6 +531,7 @@ export default function InputBar() {
     enqueueSopJobs(groups.map((group, index) => ({
       label: `第 ${index + 1}/${groups.length} 张卡`,
       imageDataUrls: group.map((img) => img.dataUrl),
+      imageIds: group.map((img) => img.id),
       systemPromptText,
       promptsPerGroup: options.promptsPerGroup,
       directionId: options.directionId,

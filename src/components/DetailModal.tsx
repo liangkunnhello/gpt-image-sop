@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask, updateSopText } from '../store'
+import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import { directionPath, useSopStore } from '../lib/sopStore'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
@@ -69,10 +70,29 @@ export default function DetailModal() {
     if (selection && !selection.isCollapsed) selection.removeAllRanges()
   }
 
-  const task = useMemo(
+  const rawTask = useMemo(
     () => tasks.find((t) => t.id === detailTaskId) ?? null,
     [tasks, detailTaskId],
   )
+  // SOP 卡片代表的是整组任务，详情里要展示这份 SOP 下的全部图片
+  const task = useMemo(() => {
+    if (!rawTask) return null
+    if (!rawTask.sopJobId) return rawTask
+    const group = tasks
+      .filter((item) => item.sopJobId === rawTask.sopJobId && !item.sopPlaceholder)
+      .sort((a, b) => (a.sopPromptIndex ?? 0) - (b.sopPromptIndex ?? 0))
+    if (group.length <= 1) return rawTask
+    const leader = group[0]
+    const anyRunning = group.some((item) => item.status === 'running')
+    const allError = group.every((item) => item.status === 'error')
+    return {
+      ...leader,
+      prompt: `${leader.sopName || 'SOP'} · ${group.length} 条提示词`,
+      outputImages: group.flatMap((item) => item.outputImages),
+      status: anyRunning ? 'running' : allError ? 'error' : 'done',
+      elapsed: group.reduce((sum, item) => sum + (item.elapsed ?? 0), 0),
+    } as TaskRecord
+  }, [rawTask, tasks])
   const streamPreviewItems = useMemo(() => {
     const slotEntries = streamPreviewSlots
       ? Object.entries(streamPreviewSlots)
