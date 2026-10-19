@@ -202,10 +202,11 @@ export default function DetailModal() {
       return slot
     })
   }, [task])
-  // 瀑布流列数：按容器宽度和这组图的平均横竖比决定，最多 5 列
+  // 监听图片区实际宽度，窗口或弹窗尺寸变化时重新计算列数
   useEffect(() => {
     const el = galleryRef.current
     if (!el) return
+    setGalleryWidth(el.clientWidth)
     const observer = new ResizeObserver((entries) => {
       setGalleryWidth(entries[0].contentRect.width)
     })
@@ -213,6 +214,7 @@ export default function DetailModal() {
     return () => observer.disconnect()
   }, [detailTaskId, task?.status])
 
+  // 瀑布流列数：按「每张缩略图的目标宽度」反推列数，窗口越宽图越大，最多 6 列
   const galleryColumns = useMemo(() => {
     const sizes = (task?.outputImages ?? []).map((id) => imageSizes[id]).filter(Boolean)
     const ratios = sizes
@@ -222,9 +224,10 @@ export default function DetailModal() {
       })
       .filter((ratio) => ratio > 0)
     const average = ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : 1
-    const tile = average > 1.4 ? 122 : average > 1.05 ? 92 : 72
-    if (!galleryWidth) return 5
-    return Math.max(2, Math.min(5, Math.floor(galleryWidth / tile)))
+    // 竖图偏窄、横图偏宽，保证缩略图看起来大小均衡
+    const tile = average > 1.4 ? 200 : average > 1.05 ? 158 : 132
+    if (!galleryWidth) return 4
+    return Math.max(2, Math.min(6, Math.floor(galleryWidth / tile)))
   }, [task, imageSizes, galleryWidth])
 
   const currentOutputSlot = outputSlots[imageIndex]
@@ -502,7 +505,7 @@ export default function DetailModal() {
       <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
       <div
         ref={modalRef}
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
+        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
@@ -562,14 +565,14 @@ export default function DetailModal() {
           )}
           {task.status === 'done' && outputLen > 0 && (currentOutputImageId || task.outputImages.length > 0) && (
             <>
-              <div ref={galleryRef} className="absolute inset-0 overflow-y-auto px-2.5 pb-2.5 pt-12">
-                <div style={{ columnCount: galleryColumns, columnGap: '6px' }}>
+              <div ref={galleryRef} className="absolute inset-0 overflow-y-auto px-3 pb-3 pt-12">
+                <div style={{ columnCount: galleryColumns, columnGap: '8px' }}>
                   {outputSlots.map((slot, index) => {
                     if (slot.error) {
                       return (
                         <div
                           key={`slot-error-${slot.requestIndex}`}
-                          style={{ breakInside: 'avoid', marginBottom: '6px' }}
+                          style={{ breakInside: 'avoid', marginBottom: '8px' }}
                           className="flex h-20 items-center justify-center rounded-lg bg-black/5 text-xs text-red-500 dark:bg-white/[0.04]"
                         >
                           第 {index + 1} 张失败
@@ -586,7 +589,7 @@ export default function DetailModal() {
                           setImageIndex(index)
                           setLightboxImageId(slot.imageId, task.outputImages)
                         }}
-                        style={{ breakInside: 'avoid', marginBottom: '6px' }}
+                        style={{ breakInside: 'avoid', marginBottom: '8px' }}
                         className={`group relative block w-full overflow-hidden rounded-lg transition-shadow ${index === imageIndex ? 'ring-2 ring-blue-500' : ''}`}
                       >
                         <img
