@@ -761,6 +761,29 @@ export default function SettingsModal() {
     })
   }
 
+  /** Agent 文本配置为空时，用当前配置的地址与密钥一键派生一份 Responses API 配置 */
+  const createAgentTextProfile = () => {
+    if (presetConfigOnly) return
+    const source = activeProfile
+    if (source.provider !== 'openai') return
+    const profile: ApiProfile = {
+      ...source,
+      id: newId('openai'),
+      name: `${source.name}（文本）`,
+      apiMode: 'responses',
+      model: DEFAULT_RESPONSES_MODEL,
+      streamImages: true,
+      isDefault: undefined,
+    }
+    const nextDraft = normalizeSettings({
+      ...draft,
+      profiles: [...draft.profiles, profile],
+      agentTextProfileId: profile.id,
+      agentApiConfigMode: draft.agentApiConfigMode === 'off' ? 'native' : draft.agentApiConfigMode,
+    })
+    commitSettings(nextDraft)
+  }
+
   const duplicateActiveProfile = () => {
     if (presetConfigOnly) return
     setReusedTaskApiProfile(null)
@@ -1254,6 +1277,8 @@ export default function SettingsModal() {
                 agentMaxToolRoundsInput={agentMaxToolRoundsInput}
                 agentTextProfileOptions={agentTextProfileOptions}
                 agentImageProfileOptions={agentImageProfileOptions}
+                canCreateAgentTextProfile={!presetConfigOnly && activeProfile.provider === 'openai'}
+                createAgentTextProfile={createAgentTextProfile}
                 selectedAgentTextProfile={selectedAgentTextProfile}
                 selectedAgentImageProfile={selectedAgentImageProfile}
                 setAgentMaxToolRoundsInput={setAgentMaxToolRoundsInput}

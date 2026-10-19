@@ -20,6 +20,8 @@ interface AgentSettingsTabProps {
   agentImageProfileOptions: SelectOption[]
   selectedAgentTextProfile: ApiProfile | null
   selectedAgentImageProfile: ApiProfile | null
+  canCreateAgentTextProfile: boolean
+  createAgentTextProfile: () => void
   setAgentMaxToolRoundsInput: (value: string) => void
   updateAgentApiConfigMode: (mode: AgentApiConfigMode) => void
   commitSettings: (nextDraft: AppSettings) => void
@@ -33,6 +35,8 @@ export default function AgentSettingsTab({
   agentImageProfileOptions,
   selectedAgentTextProfile,
   selectedAgentImageProfile,
+  canCreateAgentTextProfile,
+  createAgentTextProfile,
   setAgentMaxToolRoundsInput,
   updateAgentApiConfigMode,
   commitSettings,
@@ -82,14 +86,22 @@ export default function AgentSettingsTab({
                     className="w-full px-3 py-1.5 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.07] dark:hover:bg-white/[0.1] text-xs transition-all duration-200 text-gray-700 dark:text-gray-200 outline-none"
                   />
                 ) : (
-                  <div className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 text-center text-xs text-gray-700 transition-all duration-200 dark:bg-white/[0.06] dark:text-gray-200">
-                    没有可用配置
-                  </div>
+                  <button
+                    type="button"
+                    onClick={createAgentTextProfile}
+                    disabled={!canCreateAgentTextProfile || isPresetAgentFieldLocked('textProfileId')}
+                    title="用当前配置的接口地址与密钥新建一份 Responses API 文本配置"
+                    className="w-full rounded-xl border border-dashed border-blue-300 bg-blue-50/60 px-3 py-1.5 text-center text-xs text-blue-600 transition-all duration-200 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20"
+                  >
+                    新建文本配置
+                  </button>
                 )}
               </div>
             </div>
             <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-              用于对话和调用工具，仅支持 Responses API 配置。
+              {agentTextProfileOptions.length > 0
+                ? '用于对话和调用工具，仅支持 Responses API 配置。'
+                : '当前没有「接口模式 = Responses API」的配置，所以这里为空。点右侧按钮会用当前配置的地址与密钥新建一份；画廊出图用的 Images API 配置不会出现在这里。'}
             </div>
           </div>
 
