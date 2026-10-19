@@ -6,6 +6,7 @@ import { customProviderSupportsNativeTransparentBackground } from '../lib/custom
 import { hasActiveDataOperations, trackDataTransfer } from '../lib/dataOperations'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
 import { isTauri } from '../lib/platform'
+import SopModelField from './SopModelField'
 import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
 import {
   createDefaultOpenAIProfile,
@@ -1636,6 +1637,12 @@ export default function SettingsModal() {
                   )}
                 </div>
               </label>
+
+              <SopModelField
+                profile={activeProfile}
+                disabled={activeProfileLocked}
+                onChange={(model) => updateActiveProfile({ sopTextModel: model }, true)}
+              />
 
               {activeProfile.provider === 'openai' && activeProfile.apiMode === 'responses' && (
                 <label className="block">

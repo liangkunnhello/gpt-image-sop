@@ -585,6 +585,9 @@ export function normalizeApiProfile(
     imageGenerationModel: typeof record.imageGenerationModel === 'string'
       ? record.imageGenerationModel.trim()
       : '',
+    sopTextModel: typeof record.sopTextModel === 'string' && record.sopTextModel.trim()
+      ? record.sopTextModel.trim()
+      : undefined,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : defaults.timeout,
     apiMode,
     reasoningEffort: normalizeReasoningEffort(record.reasoningEffort, defaults.reasoningEffort),

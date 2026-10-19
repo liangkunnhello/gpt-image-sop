@@ -85,6 +85,8 @@ export interface ApiProfile {
   /** 首页选中的模型；不在列表中时回退到第一个 */
   selectedModel?: string
   imageGenerationModel?: string
+  /** SOP 模式反推 SOP 与写提示词所用的文本模型；留空使用内置默认 */
+  sopTextModel?: string
   timeout: number
   apiMode: ApiMode
   reasoningEffort?: ReasoningEffort

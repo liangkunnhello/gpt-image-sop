@@ -48,7 +48,8 @@ async function chat(profile: ApiProfile, messages: unknown[], timeoutSeconds = 2
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${profile.apiKey}` },
       cache: 'no-store',
       body: JSON.stringify({
-        model: SOP_TEXT_MODEL,
+        // 优先用配置里指定的反推/写提示词模型
+        model: profile.sopTextModel || SOP_TEXT_MODEL,
         messages,
         temperature: 0.4,
         max_tokens: 4000,
