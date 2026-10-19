@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
+import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, assignTasksDirection, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
 import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
@@ -21,6 +21,7 @@ import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getD
 import { pickSaveDir } from '../lib/saveFile'
 import { isTauri } from '../lib/platform'
 import SizePickerModal from './SizePickerModal'
+import AssignDirectionModal from './AssignDirectionModal'
 import SopSplitModal, { type SopRunOptions } from './SopSplitModal'
 import SopPresetPicker, { resolvePickedPreset } from './SopPresetPicker'
 import { useSopStore } from '../lib/sopStore'
@@ -210,6 +211,17 @@ export default function InputBar() {
       },
     })
   }, [selectedTaskIds, setConfirmDialog])
+
+  const [assignOpen, setAssignOpen] = useState(false)
+
+  const handleAssignDirection = useCallback(() => {
+    setAssignOpen(true)
+  }, [])
+
+  const handleConfirmAssign = useCallback((directionId: string | null) => {
+    setAssignOpen(false)
+    void assignTasksDirection(selectedTaskIds, directionId)
+  }, [selectedTaskIds])
 
   const handleDownloadSelected = useCallback(async () => {
     const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
@@ -1820,6 +1832,7 @@ export default function InputBar() {
             onSelectAllVisibleTasks={handleSelectAllVisibleTasks}
             onInvertVisibleTasks={handleInvertVisibleTasks}
             onToggleFavorite={handleToggleFavorite}
+            onAssignDirection={handleAssignDirection}
             onDownloadSelected={handleDownloadSelected}
             onDeleteSelected={handleDeleteSelected}
           />
@@ -2009,6 +2022,14 @@ export default function InputBar() {
                 imageCount={inputImages.length}
                 onClose={() => setSopSplitOpen(false)}
                 onConfirm={(options) => void runSop(options)}
+              />,
+              document.body,
+            )}
+            {assignOpen && createPortal(
+              <AssignDirectionModal
+                count={selectedTaskIds.length}
+                onClose={() => setAssignOpen(false)}
+                onConfirm={handleConfirmAssign}
               />,
               document.body,
             )}

@@ -51,6 +51,7 @@ export default function InputBatchBars({
   onSelectAllVisibleTasks,
   onInvertVisibleTasks,
   onToggleFavorite,
+  onAssignDirection,
   onDownloadSelected,
   onDeleteSelected,
 }: {
@@ -67,6 +68,7 @@ export default function InputBatchBars({
   onSelectAllVisibleTasks: () => void
   onInvertVisibleTasks: () => void
   onToggleFavorite: () => void
+  onAssignDirection: () => void
   onDownloadSelected: () => void | Promise<void>
   onDeleteSelected: () => void
 }) {
@@ -179,6 +181,17 @@ export default function InputBatchBars({
               <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
             </svg>
           )}
+        </BatchActionButton>
+        <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
+        <BatchActionButton
+          onClick={onAssignDirection}
+          className="p-2 text-sky-500 dark:text-sky-400 hover:text-sky-600 dark:hover:text-sky-300 transition-colors"
+          tooltip="设置归属方向"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+            <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+            <path d="M12 11v5m0 0l-2-2m2 2l2-2" />
+          </svg>
         </BatchActionButton>
         <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
         <BatchActionButton

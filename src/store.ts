@@ -4388,12 +4388,55 @@ async function removeTasks(taskIds: string[], updateState?: TaskDeletionStateUpd
 }
 
 /** 删除多条任务 */
+/** 把选中的任务展开成「所属 SOP 组的全部任务」，避免聚合卡只删掉代表任务 */
+function expandSopGroupTaskIds(taskIds: string[]): string[] {
+  const tasks = useStore.getState().tasks
+  const selected = new Set(taskIds)
+  const sopJobIds = new Set<string>()
+  for (const task of tasks) {
+    if (selected.has(task.id) && task.sopJobId) sopJobIds.add(task.sopJobId)
+  }
+  if (sopJobIds.size === 0) return taskIds
+  const expanded = new Set(taskIds)
+  for (const task of tasks) {
+    if (task.sopJobId && sopJobIds.has(task.sopJobId)) expanded.add(task.id)
+  }
+  return [...expanded]
+}
+
 export async function removeMultipleTasks(taskIds: string[]) {
   if (!taskIds.length) return
 
-  const deletedCount = await removeTasks(taskIds)
+  const ids = expandSopGroupTaskIds(taskIds)
+  const deletedCount = await removeTasks(ids)
   if (deletedCount === 0) return
-  useStore.getState().showToast(`已删除 ${deletedCount} 个任务`, 'success')
+  useStore.getState().showToast(
+    ids.length > taskIds.length
+      ? `已删除 ${deletedCount} 个任务（含同一 SOP 下的其余图片）`
+      : `已删除 ${deletedCount} 个任务`,
+    'success',
+  )
+}
+
+/** 批量把选中的任务归到某个「产品-方向」下，传 null 表示清空归属 */
+export async function assignTasksDirection(taskIds: string[], directionId: string | null) {
+  if (!taskIds.length) return 0
+  const idSet = new Set(taskIds)
+  const changed: TaskRecord[] = []
+  useStore.setState((state) => ({
+    tasks: state.tasks.map((task) => {
+      if (!idSet.has(task.id)) return task
+      const next = { ...task, sopDirectionId: directionId ?? undefined }
+      changed.push(next)
+      return next
+    }),
+  }))
+  for (const task of changed) await putTask(task)
+  useStore.getState().showToast(
+    directionId ? `已把 ${changed.length} 个任务归入所选方向` : `已清空 ${changed.length} 个任务的归属`,
+    'success',
+  )
+  return changed.length
 }
 
 /** 删除所有失败任务 */
