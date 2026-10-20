@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { SopDirectionNode } from '../types'
 import { useStore } from '../store'
@@ -29,6 +29,21 @@ export default function SopDirectionTree() {
   const addNode = useSopStore((s) => s.addNode)
   const removeNode = useSopStore((s) => s.removeNode)
   const tasks = useStore((s) => s.tasks)
+  const activeDirectionId = useSopStore((s) => s.activeDirectionId)
+
+  // 当前所在的业务/产品/方向路径（含自身），用来高亮整条链路
+  const activePath = useMemo(() => {
+    const path = new Set<string>()
+    let cursor = directions.find((node) => node.id === activeDirectionId)
+    while (cursor) {
+      path.add(cursor.id)
+      const parentId = cursor.parentId
+      cursor = parentId ? directions.find((node) => node.id === parentId) : undefined
+    }
+    return path
+  }, [directions, activeDirectionId])
+  const activeDirection = directions.find((node) => node.id === activeDirectionId)
+  const activePathLabel = directionPath(directions, activeDirectionId)
 
   const [postTarget, setPostTarget] = useState<{ id: string; name: string } | null>(null)
   const [postPreview, setPostPreview] = useState('')
@@ -58,6 +73,24 @@ export default function SopDirectionTree() {
     if (dataUrl) setPostPreview(dataUrl)
   }
   const [search, setSearch] = useState('')
+  const activeRowRef = useRef<HTMLButtonElement | null>(null)
+
+  // 当前所在路径自动展开，并把那一行滚进视野
+  useEffect(() => {
+    if (!activePath.size) return
+    setFolded((prev) => {
+      const next = new Set(prev)
+      let changed = false
+      for (const id of activePath) if (next.delete(id)) changed = true
+      return changed ? next : prev
+    })
+  }, [activePath])
+
+  useEffect(() => {
+    if (!activeDirectionId) return
+    const timer = window.setTimeout(() => activeRowRef.current?.scrollIntoView({ block: 'nearest' }), 80)
+    return () => window.clearTimeout(timer)
+  }, [activeDirectionId])
 
   const categories = useMemo(() => directions.filter((node) => node.kind === 'category'), [directions])
   const childrenOf = (id: string) => directions.filter((node) => node.parentId === id)
@@ -120,26 +153,47 @@ export default function SopDirectionTree() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 6l6 6-6 6" />
             </svg>
           </button>
+          {activePathLabel && (
+            <button
+              type="button"
+              onClick={() => setCollapsed(false)}
+              title={`当前：${activePathLabel}`}
+              className="mt-2 flex max-h-[140px] w-9 justify-center overflow-hidden rounded-lg bg-blue-50 px-1 py-2 text-[11px] font-medium text-blue-600 hover:bg-blue-100 dark:bg-blue-500/15 dark:text-blue-300 dark:hover:bg-blue-500/25"
+              style={{ writingMode: 'vertical-rl' }}
+            >
+              <span className="truncate">{activeDirection?.name || activePathLabel}</span>
+            </button>
+          )}
         </div>
       </aside>
     )
   }
 
-  const rowClass = (selected: boolean) =>
+  const rowClass = (selected: boolean, current = false) =>
     `group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors ${
       selected
-        ? 'bg-gray-100 font-medium text-gray-900 dark:bg-white/[0.08] dark:text-white'
+        ? 'bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/15 dark:text-blue-300'
         : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.04]'
-    }`
+    }${current ? ' ring-1 ring-inset ring-blue-400/70' : ''}`
 
   const tailBadge = (text: number, tone: 'muted' | 'accent' = 'muted') => (
     <span className={`shrink-0 text-[11px] tabular-nums ${tone === 'accent' ? 'text-blue-500' : 'text-gray-400'}`}>{text}</span>
   )
 
-  const renderDirection = (node: SopDirectionNode) => (
+  const renderDirection = (node: SopDirectionNode) => {
+    const isCurrent = node.id === activeDirectionId
+    const onPath = activePath.has(node.id) && !isCurrent
+    return (
     <div key={node.id} className="flex items-center pl-8">
-      <button type="button" onClick={() => setActiveFilter(node.id)} className={rowClass(activeFilterId === node.id)}>
-        <span className="min-w-0 flex-1 truncate">{node.name}</span>
+      <button
+        ref={isCurrent ? activeRowRef : undefined}
+        type="button"
+        onClick={() => setActiveFilter(node.id)}
+        title={isCurrent ? '当前所在方向' : undefined}
+        className={rowClass(activeFilterId === node.id, isCurrent)}
+      >
+        {isCurrent && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />}
+        <span className={`min-w-0 flex-1 truncate ${onPath ? 'font-medium text-blue-600 dark:text-blue-400' : ''}`}>{node.name}</span>
         {counts.get(node.id) ? tailBadge(counts.get(node.id) ?? 0) : <span className="shrink-0 text-[11px] tabular-nums text-gray-300">0</span>}
       </button>
       <button
@@ -153,7 +207,8 @@ export default function SopDirectionTree() {
         </svg>
       </button>
     </div>
-  )
+    )
+  }
 
   const renderSearchResults = () => (
     <div className="mt-1 space-y-0.5">
@@ -263,7 +318,7 @@ export default function SopDirectionTree() {
                     </button>
                     <button type="button" onClick={() => setActiveFilter(category.id)} className={rowClass(activeFilterId === category.id)}>
                       <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                      <span className="min-w-0 flex-1 truncate">{category.name}</span>
+                      <span className={`min-w-0 flex-1 truncate ${activePath.has(category.id) ? 'font-medium text-blue-600 dark:text-blue-400' : ''}`}>{category.name}</span>
                       {tailBadge(counts.get(category.id) ?? 0)}
                     </button>
                   </div>
@@ -289,7 +344,7 @@ export default function SopDirectionTree() {
                                 className={rowClass(activeFilterId === product.id)}
                               >
                                 <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                                <span className="min-w-0 flex-1 truncate">{product.name}</span>
+                                <span className={`min-w-0 flex-1 truncate ${activePath.has(product.id) ? 'font-medium text-blue-600 dark:text-blue-400' : ''}`}>{product.name}</span>
                                 {promptCount(product.id) > 0 && tailBadge(promptCount(product.id), 'accent')}
                                 {tailBadge(counts.get(product.id) ?? 0)}
                               </button>
