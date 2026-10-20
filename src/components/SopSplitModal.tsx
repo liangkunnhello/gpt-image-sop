@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useSopStore } from '../lib/sopStore'
+import { NO_PRESET, useSopStore } from '../lib/sopStore'
 import { splitEven } from '../lib/sopPipeline'
 
 export interface SopRunOptions {
@@ -50,7 +50,16 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   )
   const [promptId, setPromptId] = useState('')
   const [draft, setDraft] = useState('')
-  const selectedPrompt = options.find((item) => item.id === promptId) || options[0]
+  const lastPick = useSopStore((s) => s.lastPick)
+  const defaultPick = useSopStore((s) => s.defaultPick)
+  // 默认跟随输入框上方「系统提示词」的当前选择
+  const pickedPromptId = (defaultPick[currentDirectionId] ?? lastPick[currentDirectionId] ?? {}).promptId
+  const pickedPrompt = pickedPromptId === NO_PRESET
+    ? undefined
+    : pickedPromptId
+      ? options.find((item) => item.id === pickedPromptId)
+      : options[0]
+  const selectedPrompt = options.find((item) => item.id === promptId) || pickedPrompt
   const systemPromptText = draft || selectedPrompt?.content || ''
 
   const [mode, setMode] = useState<SplitMode>('one')
@@ -67,7 +76,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
     .map((group) => group.length)
     .join(' / ')
 
-  const canRun = Boolean(currentDirectionId && systemPromptText.trim() && imageCount > 0)
+  // 明确选了「不使用系统提示词」时允许空着跑，其余情况仍要求有内容
+  const canRun = Boolean(currentDirectionId && imageCount > 0 && (systemPromptText.trim() || pickedPromptId === NO_PRESET))
 
   const savePrompt = () => {
     const text = systemPromptText.trim()

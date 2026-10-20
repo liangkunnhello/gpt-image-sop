@@ -53,6 +53,8 @@ export interface SopPreset {
 export interface SopPick {
   pointId?: string
   styleId?: string
+  /** 系统提示词（按方向存） */
+  promptId?: string
 }
 
 interface SopState {
