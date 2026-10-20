@@ -485,9 +485,9 @@ export default function InputBar() {
   const sopMode = useSopStore((s) => s.sopMode)
   // 批量进行中暂停画廊和 Agent 的提交，需等待完成或停止后再提交
   const batchRunning = Boolean(batchProgress)
-  // SOP 模式靠参考图与系统提示词驱动，输入框可以为空
+  // SOP 模式靠参考图与系统提示词驱动，输入框可以为空，发送按钮常亮（缺图时点一下会提示）
   const canSubmit = Boolean(
-    (prompt.trim() || (sopMode && inputImages.length > 0)) && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning,
+    (sopMode || prompt.trim()) && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning,
   )
   const batchEnabled = appMode === 'gallery' && settings.showBatchPrompt && settings.batchPromptEnabled
   // 批量进行中始终在画廊显示入口，以便查看进度和停止
