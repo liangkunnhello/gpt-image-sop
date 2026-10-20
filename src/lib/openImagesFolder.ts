@@ -1,6 +1,6 @@
 import { isTauri } from './platform'
 
-const SIDECAR = 'http://127.0.0.1:7799'
+import { SIDECAR } from './sidecar'
 
 export type OutputFolder = 'images' | 'finished'
 

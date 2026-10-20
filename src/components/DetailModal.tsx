@@ -17,7 +17,7 @@ import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { getApiProviderLabel } from '../lib/apiProfiles'
 import { openImagesFolder } from '../lib/openImagesFolder'
-import { useClipStore } from '../lib/clipSimilarity'
+import { inspectImages, useClipStore } from '../lib/clipSimilarity'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
@@ -50,6 +50,8 @@ export default function DetailModal() {
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
+  /** 手动触发的检查是否在进行中（质检 + 重复度一起跑） */
+  const [inspecting, setInspecting] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
@@ -292,6 +294,15 @@ export default function DetailModal() {
   if (!task) return null
 
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
+
+  // 检查面板用的聚合结果：质检取最差的一张，重复度取最高的一个
+  const inspectQcList = task.outputImages.map((id) => clipQc[id]).filter(Boolean)
+  const inspectQc = inspectQcList.find((item) => item.verdict === 'fail')
+    ?? inspectQcList.find((item) => item.verdict === 'unsure')
+    ?? inspectQcList[0]
+    ?? null
+  const inspectScoreValues = task.outputImages.map((id) => clipScores[id]?.max).filter((v): v is number => typeof v === 'number')
+  const inspectScore = inspectScoreValues.length ? Math.max(...inspectScoreValues) : null
   const showPendingPrompt = isAgentTaskPromptPending(task)
   const isAgentEditTool = task.status === 'done' && String(task.agentToolAction ?? '').toLowerCase() === 'edit'
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
@@ -350,6 +361,34 @@ export default function DetailModal() {
     const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
     const ss = String(seconds % 60).padStart(2, '0')
     return `${mm}:${ss}`
+  }
+
+  /** 手动重跑检查：本任务的图连同同方向历史图一起送后端，一次拿回质检结论和重复度 */
+  const handleInspect = async () => {
+    if (inspecting) return
+    setInspecting(true)
+    try {
+      const entries: Array<{ imageId: string; dataUrl: string }> = []
+      for (const id of task.outputImages) {
+        const dataUrl = await ensureImageCached(id)
+        if (dataUrl) entries.push({ imageId: id, dataUrl })
+      }
+      // 重复度要有同方向的图一起比，凑不够两张时后端只回质检
+      for (const peer of tasks) {
+        if (peer.id === task.id || peer.status !== 'done') continue
+        if (peer.sopDirectionId !== task.sopDirectionId) continue
+        for (const id of peer.outputImages.slice(0, 2)) {
+          const dataUrl = await ensureImageCached(id)
+          if (dataUrl) entries.push({ imageId: id, dataUrl })
+        }
+        if (entries.length >= 12) break
+      }
+      await inspectImages(entries)
+    } catch (err) {
+      showToast(`检查失败：${err instanceof Error ? err.message : '未知原因'}`, 'error')
+    } finally {
+      setInspecting(false)
+    }
   }
 
   const handleReuse = () => {
@@ -1143,6 +1182,70 @@ export default function DetailModal() {
                   </div>
                 )}
               </div>
+            )}
+
+            {/* 检查：质检与重复度一次跑完，结果统一展示 */}
+            {task.status === 'done' && outputLen > 0 && (
+              <>
+                <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
+                  检查
+                </h3>
+                <div className="mb-4 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-gray-400 dark:text-gray-500">质检 + 重复度</span>
+                    <button
+                      type="button"
+                      onClick={handleInspect}
+                      disabled={inspecting}
+                      className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 transition hover:bg-gray-100 disabled:opacity-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/10"
+                    >
+                      {inspecting ? '检查中…' : '重新检查'}
+                    </button>
+                  </div>
+                  {inspectQc || inspectScore != null ? (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="flex items-start gap-1.5">
+                        <span className="shrink-0 text-gray-400 dark:text-gray-500">质检</span>
+                        {inspectQc ? (
+                          <span
+                            className={`rounded px-1 py-0.5 text-[10px] font-medium text-white ${
+                              inspectQc.verdict === 'fail'
+                                ? 'bg-red-500/85'
+                                : inspectQc.verdict === 'unsure'
+                                ? 'bg-amber-500/85'
+                                : 'bg-emerald-600/85'
+                            }`}
+                          >
+                            {inspectQc.verdict === 'fail' ? '不合格' : inspectQc.verdict === 'unsure' ? '待定' : '合格'}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 dark:text-gray-500">未检查</span>
+                        )}
+                        {inspectQc?.reason && (
+                          <span className="min-w-0 flex-1 text-gray-500 dark:text-gray-400">{inspectQc.reason}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="shrink-0 text-gray-400 dark:text-gray-500">重复度</span>
+                        {inspectScore != null ? (
+                          <span className={inspectScore > clipLimit ? 'font-medium text-red-600 dark:text-red-400' : 'font-medium text-gray-700 dark:text-gray-200'}>
+                            {Math.round(inspectScore * 100)}%
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 dark:text-gray-500">需要至少两张同方向的图</span>
+                        )}
+                        {inspectScore != null && (
+                          <span className="text-gray-400 dark:text-gray-500">超过 {Math.round(clipLimit * 100)}% 判为重复</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 text-gray-400 dark:text-gray-500">
+                      {inspecting ? '正在检查…' : '还没检查过，点「重新检查」跑一次'}
+                    </div>
+                  )}
+                </div>
+              </>
             )}
 
             {/* 参数 */}

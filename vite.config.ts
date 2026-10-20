@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import sidecarPlugin from './server/vite-plugin.mjs'
 import { existsSync, readFileSync } from 'fs'
 import { resolve } from 'path'
 import { fileURLToPath } from 'url'
@@ -50,7 +51,8 @@ export default defineConfig(async ({ command, mode }) => {
   const devProxyConfig = command === 'serve' ? loadDevProxyConfig() : null
 
   return {
-    plugins: [react()],
+    // 本地后端（批次生图 / 质检 / 重复度 / 图库）挂在 dev server 上，只开一个端口
+    plugins: [react(), ...(command === 'serve' ? [sidecarPlugin()] : [])],
     base: './',
     envDir,
     define: {

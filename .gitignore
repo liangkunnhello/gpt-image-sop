@@ -11,3 +11,6 @@ src-tauri/dev-data/
 # 开发版更改数据目录时写入的指向文件和迁移标记
 src-tauri/data-dir*
 src-tauri/dev-downloads/
+
+# 本地数据备份（导出的一次性文件，不入库）
+data-backups/

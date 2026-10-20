@@ -1,7 +1,7 @@
 import type { TaskRecord } from '../types'
 
 /** 本地验收服务（批次生图 sidecar）地址 */
-const SIDECAR = 'http://127.0.0.1:7799'
+import { SIDECAR } from './sidecar'
 
 export interface ExpectText {
   mainTitle: string

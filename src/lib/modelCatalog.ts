@@ -1,6 +1,7 @@
 import type { ApiProfile } from '../types'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { apiFetch } from './platform'
+import { sidecarUrl } from './sidecar'
 
 export interface ModelCatalog {
   text: string[]
@@ -32,7 +33,7 @@ export async function fetchModelCatalog(profile: ApiProfile): Promise<ModelCatal
     ids = (json.data ?? []).map((item) => item.id).filter((id): id is string => Boolean(id))
   } catch {
     // 多数中转站的 /models 不开放跨域，交给本地服务转发一次
-    const res = await fetch('http://127.0.0.1:7799/api/models', {
+    const res = await fetch(sidecarUrl('/api/models'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ baseUrl: profile.baseUrl, apiKey: profile.apiKey }),

@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import type { TaskRecord } from '../types'
 import { ensureImageCached } from './imageCache'
 
-const SIDECAR = 'http://127.0.0.1:7799'
+import { SIDECAR } from './sidecar'
 /** 一次最多送多少张去算，太多会很慢 */
 const MAX_IMAGES = 36
 /** 送给 CLIP 前先缩到这个边长，既快又不影响判断 */
@@ -157,10 +157,8 @@ export const useClipStore = create<ClipState>()((set, get) => ({
     enqueue(async () => {
       for (const imageId of imageIds) {
         try {
-          const dataUrl = await ensureImageCached(imageId)
-          if (!dataUrl) continue
-          if (!useClipStore.getState().qc[imageId]) await runQc(dataUrl, imageId)
-          if (!useClipStore.getState().scores[imageId]) await runClipOne(dataUrl, imageId, peers)
+          const state = useClipStore.getState()
+          if (!state.qc[imageId] || !state.scores[imageId]) await inspectOne(imageId, peers)
         } finally {
           set((s) => ({ queued: Math.max(0, s.queued - 1) }))
         }
@@ -194,38 +192,81 @@ export function formatClipPercent(value: number | null) {
 }
 
 
-async function runQc(dataUrl: string, imageId: string) {
-  try {
-    const res = await fetch(`${SIDECAR}/api/qc-image`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dataUrl }),
-      signal: AbortSignal.timeout(150000),
-    })
-    const json = await res.json() as { ok?: boolean; result?: { verdict?: string; reason?: string; confidence?: number } }
-    const result = json?.result
-    if (!result) return
-    const verdict: QcVerdict = result.verdict === 'pass' || result.verdict === 'fail' || result.verdict === 'unsure'
-      ? result.verdict
-      : 'unsure'
-    useClipStore.setState((state) => ({
-      qc: {
-        ...state.qc,
-        [imageId]: {
-          verdict,
-          reason: String(result.reason || ''),
-          confidence: typeof result.confidence === 'number' ? result.confidence : undefined,
-        },
-      },
-    }))
-  } catch {
-    // 质检失败留空，不打扰用户
+/**
+ * 一次调用同时做质检和重复度（后端 /api/inspect），结果按图片 id 写回 store。
+ * 传进来的第一张是主角，其余作为「同方向历史图」一起参与两两比对，
+ * 所以返回的重复度就是主角与它们之中最像那张的相似度。
+ */
+export async function inspectImages(
+  entries: Array<{ imageId: string; dataUrl: string }>,
+  options: { limit?: number } = {},
+): Promise<void> {
+  const payload: Array<{ id: string; dataUrl: string }> = []
+  const imageIdByIndex: string[] = []
+  for (const entry of entries) {
+    const thumb = await toThumb(entry.dataUrl)
+    if (!thumb) continue
+    payload.push({ id: String(payload.length), dataUrl: thumb })
+    imageIdByIndex.push(entry.imageId)
   }
+  if (!payload.length) return
+
+  const res = await fetch(`${SIDECAR}/api/inspect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items: payload, limit: options.limit ?? useClipStore.getState().limit }),
+    signal: AbortSignal.timeout(180000),
+  })
+  const json = await res.json() as {
+    ok?: boolean
+    error?: string
+    limit?: number
+    qc?: Record<string, { ok?: boolean; verdict?: string; reason?: string; confidence?: number | null }>
+    similarity?: { perImage?: Record<string, { mean: number; max: number; nearest?: string | null }> }
+  }
+  if (!res.ok) throw new Error(json?.error || '检查失败')
+
+  const imageIdAt = (key: string) => imageIdByIndex[Number(key)]
+
+  const nextQc: Record<string, QcResult> = { ...useClipStore.getState().qc }
+  for (const [key, item] of Object.entries(json?.qc || {})) {
+    const imageId = imageIdAt(key)
+    if (!imageId || !item) continue
+    const verdict: QcVerdict = item.verdict === 'pass' || item.verdict === 'fail' || item.verdict === 'unsure'
+      ? item.verdict
+      : 'unsure'
+    nextQc[imageId] = {
+      verdict,
+      reason: String(item.reason || ''),
+      confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
+    }
+  }
+
+  const nextScores: Record<string, ClipScore> = { ...useClipStore.getState().scores }
+  for (const [key, score] of Object.entries(json?.similarity?.perImage || {})) {
+    const imageId = imageIdAt(key)
+    if (!imageId) continue
+    const nearestKey = score.nearest ? String(score.nearest).replace(/\.[a-z]+$/i, '') : ''
+    const nearest = nearestKey && Number(nearestKey) !== Number(key) ? imageIdAt(nearestKey) : undefined
+    nextScores[imageId] = { mean: score.mean, max: score.max, nearest }
+  }
+
+  useClipStore.setState((state) => ({
+    qc: nextQc,
+    scores: nextScores,
+    limit: json?.limit ?? state.limit,
+  }))
 }
 
-/** 只算这一张与同方向历史图的重复度，避免每次重算整批 */
-async function runClipOne(dataUrl: string, imageId: string, peers: TaskRecord[]) {
+/**
+ * 一张图连同同方向的历史图一起送检：一次调用同时拿到质检结论和重复度。
+ * 没有历史图时也要走，因为质检本身不依赖比对，只是算不出重复度。
+ */
+async function inspectOne(imageId: string, peers: TaskRecord[]) {
   try {
+    const selfDataUrl = await ensureImageCached(imageId)
+    if (!selfDataUrl) return
+
     const peerIds: string[] = []
     for (const peer of peers) {
       for (const id of peer.outputImages) {
@@ -234,41 +275,13 @@ async function runClipOne(dataUrl: string, imageId: string, peers: TaskRecord[])
       }
       if (peerIds.length >= 10) break
     }
-    if (!peerIds.length) return
 
-    const selfThumb = await toThumb(dataUrl)
-    if (!selfThumb) return
-    const items: string[] = [selfThumb]
+    const entries: Array<{ imageId: string; dataUrl: string }> = [{ imageId, dataUrl: selfDataUrl }]
     for (const id of peerIds) {
-      const peerDataUrl = await ensureImageCached(id)
-      if (!peerDataUrl) continue
-      const thumb = await toThumb(peerDataUrl)
-      if (thumb) items.push(thumb)
+      const dataUrl = await ensureImageCached(id)
+      if (dataUrl) entries.push({ imageId: id, dataUrl })
     }
-    if (items.length < 2) return
-
-    const res = await fetch(`${SIDECAR}/api/clip-similar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit: useClipStore.getState().limit, items: items.map((dataUrl) => ({ dataUrl })) }),
-      signal: AbortSignal.timeout(180000),
-    })
-    const json = await res.json() as {
-      ok?: boolean
-      perImage?: Record<string, { mean: number; max: number; nearest?: string }>
-    }
-    const self = json?.perImage?.['0']
-    if (!json?.ok || !self) return
-    useClipStore.setState((state) => ({
-      scores: {
-        ...state.scores,
-        [imageId]: {
-          mean: self.mean,
-          max: self.max,
-          nearest: peerIds[Number(String(self.nearest || '').replace(/\.[a-z]+$/i, '')) - 1],
-        },
-      },
-    }))
+    await inspectImages(entries)
   } catch {
     // 静默失败，下次进详情还会补算
   }
