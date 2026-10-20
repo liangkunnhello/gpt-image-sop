@@ -701,8 +701,19 @@ export default function DetailModal() {
                   })}
                 </div>
               </div>
-              {/* 无级缩放：拖动滑块连续调整缩略图大小 */}
-              <div className="pointer-events-none absolute inset-x-0 bottom-2.5 z-20 flex justify-center">
+              {/*
+                底部浮层：总数和缩放条并排放在同一行。
+                以前「共 N 张」自己绝对居中、缩放条也绝对居中，两块同 z-index 的浮层
+                叠在同一个位置，互相遮挡。合成一行后谁也不会压住谁。
+                左右留白相等，内容才是真居中；留白宽度取 20 是为了让开右下角的「下载原图」。
+                窄到排不下时 flex-wrap 自动堆成两行，也不会互相压住。
+              */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex flex-wrap items-center justify-center gap-2 px-20">
+                {outputLen > 1 && (
+                  <span className="rounded-full bg-black/50 px-2 py-1 text-xs text-white shadow-sm backdrop-blur-sm">
+                    共 {outputLen} 张
+                  </span>
+                )}
                 <div className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-white shadow-sm backdrop-blur-sm">
                   <button
                     type="button"
@@ -765,11 +776,6 @@ export default function DetailModal() {
                   )
                 )}
               </div>
-              {outputLen > 1 && (
-                <span className="pointer-events-none absolute bottom-2 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/50 px-2 py-0.5 text-xs text-white">
-                  共 {outputLen} 张
-                </span>
-              )}
               {currentOriginalOutputImageId && (
                 <div className="absolute bottom-4 right-4 z-20 flex">
                   <button
