@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateImageSize, normalizeCodexCliImageSize, prependCodexCliSizePrompt, stripInjectedCodexCliSizePrompt } from './size'
+import { calculateImageSize, normalizeCodexCliImageSize, prependCodexCliSizePrompt, stripInjectedCodexCliSizePrompt, withAspectRatioHint } from './size'
 
 describe('calculateImageSize', () => {
   it('uses common 16:9 display resolutions for the built-in tiers', () => {
@@ -44,5 +44,25 @@ describe('Codex CLI size compatibility', () => {
     expect(stripInjectedCodexCliSizePrompt('Generate at 2048x2048 resolution. Draw a cat.', 'Draw a cat.', '1024x1024')).toBe('Generate at 2048x2048 resolution. Draw a cat.')
     expect(stripInjectedCodexCliSizePrompt('Generate at 1024x1024 resolution. Draw a cat.', 'Generate at 1024x1024 resolution. Draw a cat.', '1024x1024')).toBe('Generate at 1024x1024 resolution. Draw a cat.')
     expect(stripInjectedCodexCliSizePrompt('Generate at 1024x1024 resolution. Draw a cat.', 'Draw a cat.', 'auto')).toBe('Generate at 1024x1024 resolution. Draw a cat.')
+  })
+})
+
+describe('withAspectRatioHint', () => {
+  it('appends the ratio of the requested size', () => {
+    expect(withAspectRatioHint('Draw a cat.', '2048x1152')).toBe('Draw a cat.\n\n画面比例严格为 16:9（2048×1152，横版构图），不要改成其他比例。')
+    expect(withAspectRatioHint('Draw a cat.', '1024x1536')).toContain('2:3')
+    expect(withAspectRatioHint('Draw a cat.', '1024x1536')).toContain('竖版构图')
+  })
+
+  it('is a no-op for auto or unparsable sizes', () => {
+    expect(withAspectRatioHint('Draw a cat.', 'auto')).toBe('Draw a cat.')
+    expect(withAspectRatioHint('Draw a cat.', '')).toBe('Draw a cat.')
+    expect(withAspectRatioHint('Draw a cat.', undefined)).toBe('Draw a cat.')
+    expect(withAspectRatioHint('Draw a cat.', '1K')).toBe('Draw a cat.')
+  })
+
+  it('does not append twice', () => {
+    const once = withAspectRatioHint('Draw a cat.', '1024x1024')
+    expect(withAspectRatioHint(once, '1024x1024')).toBe(once)
   })
 })

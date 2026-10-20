@@ -74,7 +74,7 @@ import { cleanStaleAgentInputDrafts, clearInputDraftState, isEmptyAgentInputDraf
 import { ALL_FAVORITES_COLLECTION_ID, DEFAULT_FAVORITE_COLLECTION_ID, createDefaultFavoriteCollection, deleteFavoriteCollectionState, ensureDefaultFavoriteCollection, getTaskFavoriteCollectionIds, mergeFavoriteCollections, normalizeFavoriteCollectionIds, normalizeFavoriteCollectionName, normalizeFavoriteCollections, normalizeFavoritePatch, normalizeLoadedFavoriteState, resolveDefaultFavoriteCollectionId, sameFavoriteCollectionIds } from './lib/favoriteState'
 import { createPersistedState, mergePersistedAgentConversations, migratePersistedState, normalizePersistedState } from './lib/persistedState'
 import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
-import { stripInjectedCodexCliSizePrompt } from './lib/size'
+import { stripInjectedCodexCliSizePrompt, withAspectRatioHint } from './lib/size'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
 import { pickSaveDir, saveFile, saveFileToDir, type SaveOptions } from './lib/saveFile'
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
@@ -3027,7 +3027,11 @@ async function executeAgentRound(
     }) => {
       const result = await callImageApi({
         settings: imageRequestSettings,
-        prompt: replaceImageMentionsForApi(opts.prompt, opts.referenceImageDataUrls.length),
+        // 有的渠道不严格遵守 size，画幅比例会乱跳，先把比例写进提示词
+        prompt: withAspectRatioHint(
+          replaceImageMentionsForApi(opts.prompt, opts.referenceImageDataUrls.length),
+          opts.taskParams.size,
+        ),
         params: opts.taskParams,
         inputImageDataUrls: opts.referenceImageDataUrls,
         skipCodexCliSizePrompt: true,
@@ -3741,7 +3745,11 @@ async function executeTask(taskId: string) {
 
     const result = await callImageApi({
       settings: requestSettings,
-      prompt: replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
+      // 有的渠道不严格遵守 size，画幅比例会乱跳，先把比例写进提示词
+      prompt: withAspectRatioHint(
+        replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
+        task.params.size,
+      ),
       params: task.params,
       nativeTransparentBackground: task.params.transparent_output && !task.transparentOutput,
       inputImageDataUrls: inputDataUrls,

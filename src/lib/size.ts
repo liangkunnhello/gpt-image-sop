@@ -101,6 +101,26 @@ export function stripInjectedCodexCliSizePrompt(prompt: string, originalPrompt: 
   return trimmed.slice(prefix.length).trimStart()
 }
 
+/**
+ * 有的渠道不严格遵守 size 参数，画幅比例会乱跳。
+ * 把「画面比例」写进提示词末尾，作为第二道约束；size 为 auto 或解析不了时原样返回。
+ */
+export function withAspectRatioHint(prompt: string, size: string | undefined) {
+  const value = String(size || '').trim()
+  if (!value || value === 'auto') return prompt
+  const match = value.match(SIZE_PATTERN)
+  if (!match) return prompt
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!(width > 0 && height > 0)) return prompt
+  const ratio = formatImageRatio(width, height)
+  if (!ratio) return prompt
+  const shape = width > height ? '横版' : width < height ? '竖版' : '方形'
+  const hint = `画面比例严格为 ${ratio}（${width}×${height}，${shape}构图），不要改成其他比例。`
+  if (prompt.includes(hint)) return prompt
+  return `${prompt.trimEnd()}\n\n${hint}`
+}
+
 export function parseRatio(ratio: string) {
   const match = ratio.match(RATIO_PATTERN)
   if (!match) return null
