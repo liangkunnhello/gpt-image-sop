@@ -99,7 +99,29 @@ function sopSystem(ignoreCompliance: boolean, useImageSellingPoints: boolean) {
   ].filter(Boolean).join('\n')
 }
 
-/** 第一步：参考图 + 系统提示词 → 生图 SOP */
+/** 根据正文自动起一个短标题，用于卖点 / 风格 / 系统提示词的名称 */
+export async function generateTitle(profile: ApiProfile, content: string, kindLabel = ''): Promise<string> {
+  const system = [
+    '你是资深广告文案编辑。用户会给你一段正文，你要为它起一个中文短标题。',
+    '要求：概括主旨、口语化、不超过 12 个字，不要照抄正文开头一句，不要带标点符号。',
+    '只输出标题本身，一行，不要加引号、不要写「标题：」、不要任何解释。',
+  ].join('\n')
+  const user = `${kindLabel ? `【类型】${kindLabel}\n` : ''}【正文】\n${content.trim()}`
+  const raw = await chat(profile, [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ], 60)
+  return raw
+    .split('\n')[0]
+    .trim()
+    .replace(/^(标题|名称)[:：]\s*/, '')
+    .replace(/^[#*\s]+/, '')
+    .replace(/^[「『"'（(]+/, '')
+    .replace(/[」』"'）)]+$/, '')
+    .replace(/[*#`]/g, '')
+    .slice(0, 20)
+}
+
 export interface RewriteResult {
   /** 模型给的新名称，解析不到时为空串 */
   name: string
@@ -146,6 +168,7 @@ export async function rewriteText(
   return { name: nameLine, content }
 }
 
+/** 第一步：参考图 + 系统提示词 → 生图 SOP */
 export async function generateSop(
   profile: ApiProfile,
   systemPrompt: string,

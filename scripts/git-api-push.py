@@ -22,8 +22,15 @@ def api(path, method='GET', body=None):
 
 
 def git(*args):
-    return subprocess.check_output(['git', *args], cwd=REPO_DIR)
+    # core.quotepath=false：非 ASCII 路径（如「停止.bat」）不被转义成八进制
+    return subprocess.check_output(['git', '-c', 'core.quotepath=false', *args], cwd=REPO_DIR)
 
+
+# 路径 -> blob sha，避免把中文文件名当参数传给 git
+tree_blobs = {}
+for line in git('ls-tree', '-r', 'HEAD').decode('utf-8').splitlines():
+    meta, path = line.split('\t', 1)
+    tree_blobs[path] = meta.split()[2]
 
 ref = api(f'/repos/{OWNER}/{REPO}/git/ref/heads/main')
 head_sha = ref['object']['sha']
@@ -44,7 +51,7 @@ for status, path in changed:
     if status == 'D':
         entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': None})
         continue
-    blob = git('cat-file', 'blob', f'HEAD:{path}')
+    blob = git('cat-file', 'blob', tree_blobs[path])
     sha = api(f'/repos/{OWNER}/{REPO}/git/blobs', 'POST', {
         'content': base64.b64encode(blob).decode('ascii'),
         'encoding': 'base64',

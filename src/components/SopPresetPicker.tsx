@@ -3,6 +3,7 @@ import type { SopPick, SopPreset } from '../lib/sopStore'
 import { NO_PRESET, useSopStore } from '../lib/sopStore'
 import { useStore } from '../store'
 import AiRewriteBar from './AiRewriteBar'
+import AiTitleBar from './AiTitleBar'
 
 /** 按「默认项 → 上次使用 → 第一项」的顺序决定当前选中的卖点/风格 */
 export function resolvePickedPreset(
@@ -161,11 +162,11 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
             {list.map((item) => (
               editingId === item.id ? (
                 <div key={item.id} className="space-y-1 rounded-lg bg-gray-50 p-2 dark:bg-white/[0.06]">
-                  <input
-                    autoFocus
-                    value={draftName}
-                    onChange={(e) => setDraftName(e.target.value)}
-                    className="w-full rounded border border-gray-200 px-1.5 py-1 text-xs dark:border-white/10 dark:bg-gray-700 dark:text-gray-100"
+                  <AiTitleBar
+                    name={draftName}
+                    content={draftContent}
+                    kindLabel={label}
+                    onChangeName={setDraftName}
                   />
                   <textarea
                     value={draftContent}
