@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { SopDirectionNode } from '../types'
 import { useStore } from '../store'
 import { directionPath, useSopStore, UNASSIGNED_FILTER } from '../lib/sopStore'
+import { ensureImageCached } from '../lib/imageCache'
+import PostTemplateModal from './PostTemplateModal'
 
 const FolderIcon = ({ className = 'h-4 w-4' }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={className}>
@@ -27,9 +30,33 @@ export default function SopDirectionTree() {
   const removeNode = useSopStore((s) => s.removeNode)
   const tasks = useStore((s) => s.tasks)
 
+  const [postTarget, setPostTarget] = useState<{ id: string; name: string } | null>(null)
+  const [postPreview, setPostPreview] = useState('')
   const [folded, setFolded] = useState<Set<string>>(new Set())
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
+
+  const openPostTemplate = async (product: SopDirectionNode) => {
+    setPostTarget({ id: product.id, name: product.name })
+    setPostPreview('')
+    const subtree = new Set([product.id])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const node of directions) {
+        if (node.parentId && subtree.has(node.parentId) && !subtree.has(node.id)) {
+          subtree.add(node.id)
+          grew = true
+        }
+      }
+    }
+    const latest = [...tasks]
+      .filter((task) => task.status === 'done' && task.outputImages.length && task.sopDirectionId && subtree.has(task.sopDirectionId))
+      .sort((a, b) => b.createdAt - a.createdAt)[0]
+    if (!latest) return
+    const dataUrl = await ensureImageCached(latest.outputImages[0])
+    if (dataUrl) setPostPreview(dataUrl)
+  }
   const [search, setSearch] = useState('')
 
   const categories = useMemo(() => directions.filter((node) => node.kind === 'category'), [directions])
@@ -251,7 +278,16 @@ export default function SopDirectionTree() {
                               <button type="button" onClick={() => toggle(product.id)} className="flex h-7 w-5 shrink-0 items-center justify-center text-gray-400">
                                 <Chevron open={!productFolded} />
                               </button>
-                              <button type="button" onClick={() => setActiveFilter(product.id)} className={rowClass(activeFilterId === product.id)}>
+                              <button
+                                type="button"
+                                onClick={() => setActiveFilter(product.id)}
+                                onContextMenu={(event) => {
+                                  event.preventDefault()
+                                  void openPostTemplate(product)
+                                }}
+                                title="右键：后处理模板"
+                                className={rowClass(activeFilterId === product.id)}
+                              >
                                 <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
                                 <span className="min-w-0 flex-1 truncate">{product.name}</span>
                                 {promptCount(product.id) > 0 && tailBadge(promptCount(product.id), 'accent')}
@@ -296,6 +332,16 @@ export default function SopDirectionTree() {
           </>
         )}
       </div>
+
+      {postTarget && createPortal(
+        <PostTemplateModal
+          productId={postTarget.id}
+          productName={postTarget.name}
+          previewSrc={postPreview}
+          onClose={() => setPostTarget(null)}
+        />,
+        document.body,
+      )}
     </aside>
   )
 }

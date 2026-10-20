@@ -75,6 +75,8 @@ import { ALL_FAVORITES_COLLECTION_ID, DEFAULT_FAVORITE_COLLECTION_ID, createDefa
 import { createPersistedState, mergePersistedAgentConversations, migratePersistedState, normalizePersistedState } from './lib/persistedState'
 import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
 import { stripInjectedCodexCliSizePrompt, withAspectRatioHint } from './lib/size'
+import { applyPostTemplate, templateForDirection } from './lib/applyPostTemplate'
+import { saveFinishedCopy } from './lib/openImagesFolder'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
 import { pickSaveDir, saveFile, saveFileToDir, type SaveOptions } from './lib/saveFile'
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
@@ -2186,8 +2188,28 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
   const transparentOriginalImageIds: string[] = []
   const storedImageIds: string[] = []
 
+  // 产品开了后处理模板：先把原图按模板尺寸裁切并叠水印，再入库
+  const sopState = useSopStore.getState()
+  const postTemplate = templateForDirection(sopState.postTemplates, sopState.directions, task.sopDirectionId)
+  let finalImages = images
+  if (postTemplate) {
+    finalImages = await Promise.all(images.map(async (url) => {
+      try {
+        return await applyPostTemplate(url, postTemplate)
+      } catch (err) {
+        console.warn('后处理模板应用失败，已保留原图', err)
+        return url
+      }
+    }))
+    // 顺手落一份到 data/finished，方便直接去文件夹取成品
+    const stamp = Date.now()
+    finalImages.forEach((url, index) => {
+      void saveFinishedCopy(`${task.id.slice(0, 8)}-${stamp}-${index + 1}`, url)
+    })
+  }
+
   try {
-    for (const dataUrl of images) {
+    for (const dataUrl of finalImages) {
       let outputDataUrl = dataUrl
       if (task.transparentOutput) {
         const original = await storeImageWithSize(dataUrl, 'generated')

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { SopDirectionNode, SopSystemPrompt } from '../types'
+import type { PostTemplate } from './postTemplate'
 
 /** 初始树按现有策略分类搭骨架，内容后续在界面里增删 */
 const SEED_DIRECTIONS: SopDirectionNode[] = [
@@ -81,8 +82,11 @@ interface SopState {
   useImageSellingPoints: boolean
   /** 每张任务卡生成几条提示词（=几张图），SOP 模式下唯一的数量来源 */
   promptsPerGroup: number
-  setSopMode: (value: boolean) => void
+  /** 按产品存的后处理模板 */
+  postTemplates: Record<string, PostTemplate>
   setPromptsPerGroup: (value: number) => void
+  setPostTemplate: (productId: string, template: PostTemplate) => void
+  setSopMode: (value: boolean) => void
   setIgnoreCompliance: (value: boolean) => void
   setUseImageSellingPoints: (value: boolean) => void
   setProgress: (value: SopState['progress']) => void
@@ -117,8 +121,12 @@ export const useSopStore = create<SopState>()(
       ignoreCompliance: true,
       useImageSellingPoints: false,
       promptsPerGroup: 5,
+      postTemplates: {},
       setSopMode: (value) => set({ sopMode: value }),
       setPromptsPerGroup: (value) => set({ promptsPerGroup: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
+      setPostTemplate: (productId, template) => set((state) => ({
+        postTemplates: { ...state.postTemplates, [productId]: template },
+      })),
       setIgnoreCompliance: (value) => set({ ignoreCompliance: value }),
       setUseImageSellingPoints: (value) => set({ useImageSellingPoints: value }),
       setProgress: (value) => set({ progress: value }),
@@ -220,7 +228,7 @@ export const useSopStore = create<SopState>()(
         return { ...state, systemPrompts: migrated } as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, promptsPerGroup: state.promptsPerGroup }),
+      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, promptsPerGroup: state.promptsPerGroup, postTemplates: state.postTemplates }),
     },
   ),
 )
