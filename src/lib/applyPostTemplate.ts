@@ -28,14 +28,22 @@ function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: numb
   const y = el.y * height
 
   if (el.kind === 'text') {
-    const size = Math.max(8, Math.round(el.fontSize * width))
+    const size = Math.max(8, Math.round(el.fontSize))
     ctx.font = `${el.fontWeight} ${size}px ${POST_FONT_STACK}`
     ctx.fillStyle = el.color
     ctx.textBaseline = 'top'
     ctx.textAlign = el.align === 'center' ? 'center' : el.align === 'right' ? 'right' : 'left'
+    ctx.lineJoin = 'round'
+    ctx.miterLimit = 2
     const lines = el.text.split('\n')
     lines.forEach((line, index) => {
-      ctx.fillText(line, x, y + index * size * 1.35)
+      const lineY = y + index * size * 1.35
+      if (el.strokeWidth > 0) {
+        ctx.lineWidth = el.strokeWidth
+        ctx.strokeStyle = el.strokeColor
+        ctx.strokeText(line, x, lineY)
+      }
+      ctx.fillText(line, x, lineY)
     })
   } else if (logo) {
     const w = Math.max(8, el.width * width)

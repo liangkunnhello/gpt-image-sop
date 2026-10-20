@@ -134,6 +134,8 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
   }
 
   const ratio = active ? active.width / active.height : 1
+  // 预览按成品宽等比缩小，字号与描边都要跟着缩
+  const scale = active && active.width > 0 && previewWidth > 0 ? previewWidth / active.width : 1
   const enabledCount = templates.filter((item) => item.enabled).length
 
   return (
@@ -196,9 +198,12 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                           onBlur={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' })}
                           style={{
                             fontFamily: POST_FONT_STACK,
-                            fontSize: `${element.fontSize * previewWidth}px`,
+                            fontSize: `${Math.max(1, element.fontSize * scale)}px`,
                             fontWeight: element.fontWeight,
                             color: element.color,
+                            WebkitTextStroke: element.strokeWidth > 0
+                              ? `${Math.max(0.2, element.strokeWidth * scale)}px ${element.strokeColor}`
+                              : undefined,
                             textAlign: element.align,
                             lineHeight: 1.35,
                             whiteSpace: 'pre',
@@ -356,14 +361,23 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                           字号
                           <input
                             type="range"
-                            min={0.008}
-                            max={0.12}
-                            step={0.002}
+                            min={8}
+                            max={Math.max(48, Math.round(active.height * 0.3))}
+                            step={1}
                             value={selected.fontSize}
                             onChange={(e) => patchElement(selected.id, { fontSize: Number(e.target.value) })}
                             className="flex-1 accent-blue-500"
                           />
-                          <span className="w-8 tabular-nums">{Math.round(selected.fontSize * 1000) / 10}%</span>
+                          <span className="flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min={8}
+                              value={selected.fontSize}
+                              onChange={(e) => patchElement(selected.id, { fontSize: Math.max(1, Number(e.target.value) || 1) })}
+                              className="w-12 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                            />
+                            px
+                          </span>
                         </label>
                         <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
                           颜色
@@ -383,6 +397,38 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                             <option value={700}>加粗</option>
                           </select>
                         </div>
+                        <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                          描边
+                          <input
+                            type="color"
+                            value={selected.strokeColor}
+                            onChange={(e) => patchElement(selected.id, { strokeColor: e.target.value })}
+                            className="h-6 w-8 cursor-pointer rounded border border-gray-200 dark:border-white/10"
+                          />
+                          <input
+                            type="range"
+                            min={0}
+                            max={24}
+                            step={0.5}
+                            value={selected.strokeWidth}
+                            onChange={(e) => patchElement(selected.id, { strokeWidth: Number(e.target.value) })}
+                            className="flex-1 accent-blue-500"
+                          />
+                          <span className="flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.5}
+                              value={selected.strokeWidth}
+                              onChange={(e) => patchElement(selected.id, { strokeWidth: Math.max(0, Number(e.target.value) || 0) })}
+                              className="w-11 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                            />
+                            px
+                          </span>
+                        </div>
+                        {selected.strokeWidth > 0 && (
+                          <p className="text-[10px] text-gray-400">居中描边，太粗会吃掉笔画内部。</p>
+                        )}
                       </>
                     ) : (
                       <label className="flex cursor-pointer items-center justify-between rounded border border-dashed border-gray-300 px-2 py-1 text-[11px] text-gray-500 dark:border-white/15">

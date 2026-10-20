@@ -212,27 +212,56 @@ export const useSopStore = create<SopState>()(
     }),
     {
       name: 'gpt-image-sop-store',
-      // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」
-      version: 3,
+      // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边
+      version: 4,
       migrate: (persisted, version) => {
-        const state = persisted as Partial<SopState> | undefined
-        if (!state?.systemPrompts?.length) return state as SopState
+        const state = (persisted ?? {}) as Partial<SopState>
+
+        // v2：系统提示词补齐 productId
+        if (version < 2 && state.systemPrompts?.length) {
+          const byId = new Map((state.directions ?? []).map((node) => [node.id, node]))
+          state.systemPrompts = state.systemPrompts
+            .map((item) => {
+              if (item.productId) return item
+              const node = item.directionId ? byId.get(item.directionId) : undefined
+              const productId = node?.kind === 'direction' ? node.parentId ?? '' : node?.id ?? ''
+              return { ...item, productId }
+            })
+            .filter((item) => Boolean(item.productId))
+        }
+
+        // v3：单模板对象 → 模板数组
         if (version < 3 && state.postTemplates) {
           const normalized: Record<string, PostTemplate[]> = {}
-          for (const [productId, value] of Object.entries(state.postTemplates as unknown as Record<string, PostTemplate | PostTemplate[]>)) {
-            normalized[productId] = Array.isArray(value) ? value : [{ ...value, id: value.id ?? `tpl-${productId}`, label: value.label ?? '默认模板', isDefault: true }]
+          const raw = state.postTemplates as unknown as Record<string, PostTemplate | PostTemplate[]>
+          for (const [productId, value] of Object.entries(raw)) {
+            normalized[productId] = Array.isArray(value)
+              ? value
+              : [{ ...value, id: value.id ?? `tpl-${productId}`, label: value.label ?? '默认模板', isDefault: true }]
           }
           state.postTemplates = normalized
         }
-        if (version >= 2) return state as SopState
-        const byId = new Map((state.directions ?? []).map((node) => [node.id, node]))
-        const migrated = state.systemPrompts.map((item) => {
-          if (item.productId) return item
-          const node = item.directionId ? byId.get(item.directionId) : undefined
-          const productId = node?.kind === 'direction' ? node.parentId ?? '' : node?.id ?? ''
-          return { ...item, productId }
-        }).filter((item) => Boolean(item.productId))
-        return { ...state, systemPrompts: migrated } as SopState
+
+        // v4：字号从「占画布宽度的比例」改成 px，并补上描边字段
+        if (version < 4 && state.postTemplates) {
+          const upgraded: Record<string, PostTemplate[]> = {}
+          for (const [productId, list] of Object.entries(state.postTemplates)) {
+            upgraded[productId] = list.map((tpl) => ({
+              ...tpl,
+              elements: (tpl.elements ?? []).map((element) => ({
+                ...element,
+                strokeColor: element.strokeColor ?? '#ffffff',
+                strokeWidth: typeof element.strokeWidth === 'number' ? element.strokeWidth : 0,
+                fontSize: element.fontSize < 1
+                  ? Math.max(8, Math.round(element.fontSize * tpl.width))
+                  : element.fontSize,
+              })),
+            }))
+          }
+          state.postTemplates = upgraded
+        }
+
+        return state as SopState
       },
       // 进度是运行时状态，不落盘
       partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, promptsPerGroup: state.promptsPerGroup, postTemplates: state.postTemplates }),

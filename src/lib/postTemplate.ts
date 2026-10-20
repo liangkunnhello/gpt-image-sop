@@ -8,9 +8,13 @@ export interface PostElement {
   /** 相对画布的位置，0~1 */
   x: number
   y: number
-  /** 文字：相对画布宽度的字号 */
+  /** 文字字号，单位 px，指成品图上的实际像素 */
   fontSize: number
   color: string
+  /** 描边颜色，配合 strokeWidth 使用 */
+  strokeColor: string
+  /** 描边粗细（px），0 表示不描边 */
+  strokeWidth: number
   fontWeight: number
   align: 'left' | 'center' | 'right'
   /** 文字内容 */
@@ -46,7 +50,10 @@ export function createPostTemplate(width: number, height: number, label: string)
     height,
     enabled: false,
     isDefault: false,
-    elements: defaultPostTemplate().elements,
+    elements: defaultPostTemplate().elements.map((item, index) => ({
+      ...item,
+      id: `post-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 5)}`,
+    })),
   }
 }
 
@@ -91,8 +98,10 @@ export function newPostElement(kind: PostElementKind, index: number): PostElemen
         kind: 'text',
         x: 0.06,
         y: 0.06,
-        fontSize: 0.03,
+        fontSize: 48,
         color: '#111827',
+        strokeColor: '#ffffff',
+        strokeWidth: 0,
         fontWeight: 600,
         align: 'left',
         text: '双击编辑文字',
@@ -104,8 +113,10 @@ export function newPostElement(kind: PostElementKind, index: number): PostElemen
         kind: 'logo',
         x: 0.06,
         y: 0.06,
-        fontSize: 0.03,
+        fontSize: 48,
         color: '#111827',
+        strokeColor: '#ffffff',
+        strokeWidth: 0,
         fontWeight: 400,
         align: 'left',
         text: '',
@@ -126,7 +137,7 @@ export function defaultPostTemplate(): PostTemplate {
       {
         ...newPostElement('text', 1),
         text: '主标题留白，可在模板里改',
-        fontSize: 0.045,
+        fontSize: 92,
         fontWeight: 700,
         x: 0.06,
         y: 0.08,
@@ -134,7 +145,7 @@ export function defaultPostTemplate(): PostTemplate {
       {
         ...newPostElement('text', 2),
         text: '免赔额、赔付比例、费率等请见保险条款及投保须知',
-        fontSize: 0.014,
+        fontSize: 28,
         color: '#9ca3af',
         fontWeight: 400,
         x: 0.06,
