@@ -663,6 +663,12 @@ export default function DetailModal() {
               {/* 无级缩放：拖动滑块连续调整缩略图大小 */}
               <div className="pointer-events-none absolute inset-x-0 bottom-2.5 z-20 flex justify-center">
                 <div className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-white shadow-sm backdrop-blur-sm">
+                  {outputLen > 1 && (
+                    <>
+                      <span className="pl-1 text-[10px] tabular-nums text-white/70">{outputLen} 张</span>
+                      <span className="mx-0.5 h-3 w-px bg-white/25" />
+                    </>
+                  )}
                   <button
                     type="button"
                     aria-label="缩小"
@@ -724,11 +730,6 @@ export default function DetailModal() {
                   )
                 )}
               </div>
-              {outputLen > 1 && (
-                <span className="pointer-events-none absolute bottom-2 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/50 px-2 py-0.5 text-xs text-white">
-                  共 {outputLen} 张
-                </span>
-              )}
               {currentOriginalOutputImageId && (
                 <div className="absolute bottom-4 right-4 z-20 flex">
                   <button
