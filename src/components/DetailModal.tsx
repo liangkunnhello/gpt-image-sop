@@ -274,6 +274,21 @@ export default function DetailModal() {
     }
   }, [maskTargetSrc, maskSrc])
 
+  // 这几个 Hook 必须在下面的 `if (!task) return null` 之前调用：
+  // 否则详情关闭时少调用、打开时多调用，Hook 数量变化会让 React 直接报错并卸载整棵树（表现为点开详情变空白）
+  const clipScores = useClipStore((s) => s.scores)
+  const clipQc = useClipStore((s) => s.qc)
+  const clipLimit = useClipStore((s) => s.limit)
+  const ensureClip = useClipStore((s) => s.ensure)
+
+  useEffect(() => {
+    if (!task) return
+    // 同方向的图放一起比才有意义，数量不够就退到全部成品
+    const sameDirection = tasks.filter((item) => item.status === 'done' && item.sopDirectionId === task.sopDirectionId)
+    const scope = sameDirection.length >= 2 ? sameDirection : tasks.filter((item) => item.status === 'done')
+    ensureClip(scope)
+  }, [task?.id, ensureClip, tasks])
+
   if (!task) return null
 
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
@@ -346,19 +361,6 @@ export default function DetailModal() {
     editOutputs(task)
     setDetailTaskId(null)
   }
-
-  const clipScores = useClipStore((s) => s.scores)
-  const clipQc = useClipStore((s) => s.qc)
-  const clipLimit = useClipStore((s) => s.limit)
-  const ensureClip = useClipStore((s) => s.ensure)
-
-  useEffect(() => {
-    if (!task) return
-    // 同方向的图放一起比才有意义，数量不够就退到全部成品
-    const sameDirection = tasks.filter((item) => item.status === 'done' && item.sopDirectionId === task.sopDirectionId)
-    const scope = sameDirection.length >= 2 ? sameDirection : tasks.filter((item) => item.status === 'done')
-    ensureClip(scope)
-  }, [task?.id, ensureClip, tasks])
 
   const handleOpenFolder = async (dir: 'finished' | 'images') => {
     const result = await openImagesFolder(dir)
