@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { SopDirectionNode } from '../types'
 import { useStore } from '../store'
@@ -24,6 +24,8 @@ export default function SopDirectionTree() {
   const systemPrompts = useSopStore((s) => s.systemPrompts)
   const activeFilterId = useSopStore((s) => s.activeFilterId)
   const setActiveFilter = useSopStore((s) => s.setActiveFilter)
+  const activeDirectionId = useSopStore((s) => s.activeDirectionId)
+  const sopMode = useSopStore((s) => s.sopMode)
   const collapsed = useSopStore((s) => s.sidebarCollapsed)
   const setCollapsed = useSopStore((s) => s.setSidebarCollapsed)
   const addNode = useSopStore((s) => s.addNode)
@@ -58,6 +60,41 @@ export default function SopDirectionTree() {
     if (dataUrl) setPostPreview(dataUrl)
   }
   const [search, setSearch] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  /** 当前归属节点及其全部祖先，用于让整条路径高亮 + 自动展开 */
+  const currentPathIds = useMemo(() => {
+    const set = new Set<string>()
+    let cursor = directions.find((node) => node.id === activeDirectionId)
+    while (cursor) {
+      set.add(cursor.id)
+      const parentId = cursor.parentId
+      cursor = parentId ? directions.find((node) => node.id === parentId) : undefined
+    }
+    return set
+  }, [directions, activeDirectionId])
+
+  // 当前归属被折叠在树里时自动展开祖先，否则用户看不到高亮在哪。
+  // 只在归属本身变化时做，避免别处改动把用户手动折叠的层级又强行展开。
+  const expandedFor = useRef('')
+  useEffect(() => {
+    if (!activeDirectionId || expandedFor.current === activeDirectionId) return
+    expandedFor.current = activeDirectionId
+    setFolded((prev) => {
+      if (!prev.size) return prev
+      const next = new Set(prev)
+      let changed = false
+      for (const id of currentPathIds) {
+        if (id !== activeDirectionId && next.delete(id)) changed = true
+      }
+      return changed ? next : prev
+    })
+    // 展开后等一帧再滚动，否则节点还没渲染出来
+    const timer = setTimeout(() => {
+      scrollRef.current?.querySelector<HTMLElement>('[data-current="true"]')?.scrollIntoView({ block: 'nearest' })
+    }, 60)
+    return () => clearTimeout(timer)
+  }, [activeDirectionId, currentPathIds])
 
   const categories = useMemo(() => directions.filter((node) => node.kind === 'category'), [directions])
   const childrenOf = (id: string) => directions.filter((node) => node.parentId === id)
@@ -95,6 +132,8 @@ export default function SopDirectionTree() {
   }
 
   const activeNode = directions.find((node) => node.id === activeFilterId)
+  const currentNode = directions.find((node) => node.id === activeDirectionId)
+  const currentPath = currentNode ? directionPath(directions, activeDirectionId) : ''
   const parentProduct = activeNode?.kind === 'direction'
     ? directions.find((node) => node.id === activeNode.parentId)
     : activeNode
@@ -113,7 +152,7 @@ export default function SopDirectionTree() {
           <button
             type="button"
             onClick={() => setCollapsed(false)}
-            title="展开产品-方向"
+            title={currentPath ? `展开产品-方向（当前归属：${currentPath}）` : '展开产品-方向'}
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-800 dark:border-white/10 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-white/[0.08]"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
@@ -125,63 +164,94 @@ export default function SopDirectionTree() {
     )
   }
 
-  const rowClass = (selected: boolean) =>
-    `group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors ${
-      selected
-        ? 'bg-gray-100 font-medium text-gray-900 dark:bg-white/[0.08] dark:text-white'
-        : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.04]'
-    }`
+  /**
+   * 行样式分三档，优先级从高到低：
+   * - current：当前归属，新生成的图会归到这里 → 蓝色主色 + 左侧竖条
+   * - selected：正在筛选这一层 → 中性灰底
+   * - onPath：属于当前归属的祖先链 → 淡底，让整条路径连起来
+   */
+  const rowClass = (state: { current?: boolean; selected?: boolean; onPath?: boolean }) => {
+    const base = 'group relative flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors'
+    if (state.current) return `${base} bg-blue-50 font-semibold text-blue-700 dark:bg-blue-500/[0.18] dark:text-blue-200`
+    if (state.selected) return `${base} bg-gray-100 font-medium text-gray-900 dark:bg-white/[0.08] dark:text-white`
+    if (state.onPath) return `${base} bg-gray-50 font-medium text-gray-800 dark:bg-white/[0.04] dark:text-gray-100`
+    return `${base} text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.04]`
+  }
+
+  /** 当前归属左侧的竖条，和文字错开不重叠 */
+  const currentBar = <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-blue-500 dark:bg-blue-400" />
+
+  /** 当前归属尾部的小圆点，竖条被遮挡时也能认出来 */
+  const currentDot = <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500 dark:bg-blue-400" />
 
   const tailBadge = (text: number, tone: 'muted' | 'accent' = 'muted') => (
     <span className={`shrink-0 text-[11px] tabular-nums ${tone === 'accent' ? 'text-blue-500' : 'text-gray-400'}`}>{text}</span>
   )
 
-  const renderDirection = (node: SopDirectionNode) => (
-    <div key={node.id} className="flex items-center pl-8">
-      <button type="button" onClick={() => setActiveFilter(node.id)} className={rowClass(activeFilterId === node.id)}>
-        <span className="min-w-0 flex-1 truncate">{node.name}</span>
-        {counts.get(node.id) ? tailBadge(counts.get(node.id) ?? 0) : <span className="shrink-0 text-[11px] tabular-nums text-gray-300">0</span>}
-      </button>
-      <button
-        type="button"
-        onClick={() => removeNode(node.id)}
-        title="删除方向"
-        className="ml-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-gray-300 hover:bg-red-50 hover:text-red-500 group-hover:flex dark:hover:bg-red-500/10"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3 w-3">
-          <path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" />
-        </svg>
-      </button>
-    </div>
-  )
+  const renderDirection = (node: SopDirectionNode) => {
+    const isCurrent = node.id === activeDirectionId
+    return (
+      <div key={node.id} className="flex items-center pl-8">
+        <button
+          type="button"
+          data-current={isCurrent || undefined}
+          onClick={() => setActiveFilter(node.id)}
+          title={isCurrent ? '当前归属：新生成的图会归到这个方向' : '点击设为当前归属并筛选'}
+          className={rowClass({ current: isCurrent, selected: activeFilterId === node.id })}
+        >
+          {isCurrent && currentBar}
+          <span className="min-w-0 flex-1 truncate">{node.name}</span>
+          {isCurrent && currentDot}
+          {counts.get(node.id) ? tailBadge(counts.get(node.id) ?? 0) : <span className="shrink-0 text-[11px] tabular-nums text-gray-300">0</span>}
+        </button>
+        <button
+          type="button"
+          onClick={() => removeNode(node.id)}
+          title="删除方向"
+          className="ml-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-gray-300 hover:bg-red-50 hover:text-red-500 group-hover:flex dark:hover:bg-red-500/10"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3 w-3">
+            <path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+      </div>
+    )
+  }
 
   const renderSearchResults = () => (
     <div className="mt-1 space-y-0.5">
       {matches.length === 0 && <p className="px-2 py-3 text-xs text-gray-400">没有匹配的项目</p>}
-      {matches.map((node) => (
-        <button
-          key={node.id}
-          type="button"
-          onClick={() => {
-            setActiveFilter(node.id)
-            setSearch('')
-          }}
-          className={rowClass(activeFilterId === node.id)}
-        >
-          <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-          <span className="min-w-0 flex-1 truncate">
-            <span className="text-gray-400">{directionPath(directions, node.id).replace(/\/\s*[^/]+$/, '').replace(/\/$/, '')} / </span>
-            {node.name}
-          </span>
-          {tailBadge(counts.get(node.id) ?? 0)}
-        </button>
-      ))}
+      {matches.map((node) => {
+        const isCurrent = node.id === activeDirectionId
+        return (
+          <button
+            key={node.id}
+            type="button"
+            data-current={isCurrent || undefined}
+            onClick={() => {
+              setActiveFilter(node.id)
+              setSearch('')
+            }}
+            title={isCurrent ? '当前归属：新生成的图会归到这个方向' : '点击设为当前归属并筛选'}
+            className={rowClass({ current: isCurrent, selected: activeFilterId === node.id })}
+          >
+            {isCurrent && currentBar}
+            <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+            <span className="min-w-0 flex-1 truncate">
+              <span className="text-gray-400">{directionPath(directions, node.id).replace(/\/\s*[^/]+$/, '').replace(/\/$/, '')} / </span>
+              {node.name}
+            </span>
+            {isCurrent && currentDot}
+            {tailBadge(counts.get(node.id) ?? 0)}
+          </button>
+        )
+      })}
     </div>
   )
 
   return (
     <aside className="hidden w-56 shrink-0 lg:block">
-      <div className="sticky top-20 max-h-[calc(100vh-11rem)] overflow-auto pr-1">
+      <div ref={scrollRef} className="sticky top-20 max-h-[calc(100vh-11rem)] overflow-auto pr-1">
         <div className="relative mb-3">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400">
             <circle cx="11" cy="11" r="6.5" />
@@ -195,9 +265,25 @@ export default function SopDirectionTree() {
           />
         </div>
 
+        {/* 当前归属常驻显示：树折叠或滚走了也能一眼看到现在归到哪 */}
+        {currentNode && (
+          <button
+            type="button"
+            onClick={() => setActiveFilter(activeDirectionId)}
+            title={`${sopMode ? '当前归属' : '默认归属'}：${currentPath}（点击只看这个方向）`}
+            className="mb-2 flex w-full min-w-0 flex-col gap-0.5 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-left transition-colors hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/[0.14] dark:hover:bg-blue-500/20"
+          >
+            <span className="flex items-center gap-1 text-[10px] font-medium text-blue-600 dark:text-blue-300">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500 dark:bg-blue-400" />
+              {sopMode ? '当前归属' : '默认归属'}
+            </span>
+            <span className="min-w-0 truncate text-[12px] font-semibold text-blue-800 dark:text-blue-100">{currentPath}</span>
+          </button>
+        )}
+
         {search.trim() ? renderSearchResults() : (
           <>
-            <button type="button" onClick={() => setActiveFilter(null)} className={`${rowClass(activeFilterId === null)} mb-0.5`}>
+            <button type="button" onClick={() => setActiveFilter(null)} className={`${rowClass({ selected: activeFilterId === null })} mb-0.5`}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0 text-gray-400">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 7l8-4 8 4-8 4-8-4zm0 5l8 4 8-4M4 17l8 4 8-4" />
               </svg>
@@ -209,7 +295,7 @@ export default function SopDirectionTree() {
               <button
                 type="button"
                 onClick={() => setActiveFilter(UNASSIGNED_FILTER)}
-                className={`${rowClass(activeFilterId === UNASSIGNED_FILTER)} mb-0.5`}
+                className={`${rowClass({ selected: activeFilterId === UNASSIGNED_FILTER })} mb-0.5`}
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0 text-gray-400">
                   <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
@@ -261,7 +347,11 @@ export default function SopDirectionTree() {
                     <button type="button" onClick={() => toggle(category.id)} className="flex h-7 w-5 shrink-0 items-center justify-center text-gray-400">
                       <Chevron open={!isFolded} />
                     </button>
-                    <button type="button" onClick={() => setActiveFilter(category.id)} className={rowClass(activeFilterId === category.id)}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveFilter(category.id)}
+                      className={rowClass({ selected: activeFilterId === category.id, onPath: currentPathIds.has(category.id) })}
+                    >
                       <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
                       <span className="min-w-0 flex-1 truncate">{category.name}</span>
                       {tailBadge(counts.get(category.id) ?? 0)}
@@ -286,7 +376,7 @@ export default function SopDirectionTree() {
                                   void openPostTemplate(product)
                                 }}
                                 title="右键：后处理模板"
-                                className={rowClass(activeFilterId === product.id)}
+                                className={rowClass({ selected: activeFilterId === product.id, onPath: currentPathIds.has(product.id) })}
                               >
                                 <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
                                 <span className="min-w-0 flex-1 truncate">{product.name}</span>
