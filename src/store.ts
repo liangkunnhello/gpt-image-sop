@@ -75,7 +75,9 @@ import { ALL_FAVORITES_COLLECTION_ID, DEFAULT_FAVORITE_COLLECTION_ID, createDefa
 import { createPersistedState, mergePersistedAgentConversations, migratePersistedState, normalizePersistedState } from './lib/persistedState'
 import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
 import { stripInjectedCodexCliSizePrompt, withAspectRatioHint } from './lib/size'
-import { applyPostTemplate, templateForDirection } from './lib/applyPostTemplate'
+import { applyPostTemplate, productIdForDirection } from './lib/applyPostTemplate'
+import { imageSizeFromDataUrl } from './lib/imageDimensions'
+import { pickTemplateForImage } from './lib/postTemplate'
 import { saveFinishedCopy } from './lib/openImagesFolder'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
 import { pickSaveDir, saveFile, saveFileToDir, type SaveOptions } from './lib/saveFile'
@@ -2188,24 +2190,33 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
   const transparentOriginalImageIds: string[] = []
   const storedImageIds: string[] = []
 
-  // 产品开了后处理模板：先把原图按模板尺寸裁切并叠水印，再入库
+  // 后处理：按这张图自己的比例挑模板，没有对得上的模板就原样保留
   const sopState = useSopStore.getState()
-  const postTemplate = templateForDirection(sopState.postTemplates, sopState.directions, task.sopDirectionId)
+  const postProductId = productIdForDirection(sopState.directions, task.sopDirectionId)
+  const postTemplates = postProductId ? (sopState.postTemplates[postProductId] ?? []) : []
   let finalImages = images
-  if (postTemplate) {
-    finalImages = await Promise.all(images.map(async (url) => {
+  if (postTemplates.some((item) => item.enabled)) {
+    const appliedIndexes: number[] = []
+    finalImages = await Promise.all(images.map(async (url, index) => {
+      const size = imageSizeFromDataUrl(url)
+      const template = size ? pickTemplateForImage(postTemplates, size.width, size.height) : null
+      if (!template) return url
       try {
-        return await applyPostTemplate(url, postTemplate)
+        const output = await applyPostTemplate(url, template)
+        appliedIndexes.push(index)
+        return output
       } catch (err) {
         console.warn('后处理模板应用失败，已保留原图', err)
         return url
       }
     }))
     // 顺手落一份到 data/finished，方便直接去文件夹取成品
-    const stamp = Date.now()
-    finalImages.forEach((url, index) => {
-      void saveFinishedCopy(`${task.id.slice(0, 8)}-${stamp}-${index + 1}`, url)
-    })
+    if (appliedIndexes.length) {
+      const stamp = Date.now()
+      for (const index of appliedIndexes) {
+        void saveFinishedCopy(`${task.id.slice(0, 8)}-${stamp}-${index + 1}`, finalImages[index])
+      }
+    }
   }
 
   try {

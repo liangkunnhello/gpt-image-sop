@@ -4,7 +4,7 @@ import {
   POST_FONT_STACK,
   POST_SIZE_PRESETS,
   clamp01,
-  defaultPostTemplate,
+  createPostTemplate,
   newPostElement,
   type PostElement,
   type PostTemplate,
@@ -21,10 +21,11 @@ interface Props {
 
 export default function PostTemplateModal({ productId, productName, previewSrc, onClose }: Props) {
   const stored = useSopStore((s) => s.postTemplates[productId])
-  const setPostTemplate = useSopStore((s) => s.setPostTemplate)
+  const setPostTemplates = useSopStore((s) => s.setPostTemplates)
 
-  const [template, setTemplate] = useState<PostTemplate>(() => stored ?? defaultPostTemplate())
-  const [selectedId, setSelectedId] = useState<string>(() => (stored ?? defaultPostTemplate()).elements[0]?.id ?? '')
+  const [templates, setTemplates] = useState<PostTemplate[]>(() => stored ?? [])
+  const [activeId, setActiveId] = useState<string>(() => stored?.[0]?.id ?? '')
+  const [selectedId, setSelectedId] = useState<string>('')
   const [previewWidth, setPreviewWidth] = useState(0)
   const stageRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
@@ -36,27 +37,52 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     const observer = new ResizeObserver((entries) => setPreviewWidth(entries[0].contentRect.width))
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  }, [activeId])
 
+  const active = useMemo(
+    () => templates.find((item) => item.id === activeId) ?? templates[0] ?? null,
+    [templates, activeId],
+  )
   const selected = useMemo(
-    () => template.elements.find((item) => item.id === selectedId) ?? null,
-    [template.elements, selectedId],
+    () => active?.elements.find((item) => item.id === selectedId) ?? null,
+    [active, selectedId],
   )
 
-  const patch = (next: Partial<PostTemplate>) => setTemplate((prev) => ({ ...prev, ...next }))
-  const patchElement = (id: string, next: Partial<PostElement>) => setTemplate((prev) => ({
-    ...prev,
-    elements: prev.elements.map((item) => (item.id === id ? { ...item, ...next } : item)),
-  }))
+  const patchActive = (next: Partial<PostTemplate>) => setTemplates((prev) => prev.map((item) => (
+    item.id === active?.id ? { ...item, ...next } : item
+  )))
+
+  const patchElement = (id: string, next: Partial<PostElement>) => setTemplates((prev) => prev.map((item) => (
+    item.id === active?.id
+      ? { ...item, elements: item.elements.map((element) => (element.id === id ? { ...element, ...next } : element)) }
+      : item
+  )))
+
+  const addTemplate = (width: number, height: number, label: string) => {
+    const template = { ...createPostTemplate(width, height, label), enabled: true }
+    // 同比例还没有默认的，就把新的一套设为默认
+    const hasDefault = templates.some((item) => item.isDefault && Math.abs(item.width / item.height - width / height) < 0.02)
+    template.isDefault = !hasDefault
+    setTemplates((prev) => [...prev, template])
+    setActiveId(template.id)
+    setSelectedId('')
+  }
+
+  const removeTemplate = (id: string) => {
+    setTemplates((prev) => prev.filter((item) => item.id !== id))
+    if (activeId === id) setActiveId('')
+  }
 
   const addElement = (kind: PostElement['kind']) => {
-    const element = newPostElement(kind, template.elements.length + 1)
-    setTemplate((prev) => ({ ...prev, elements: [...prev.elements, element] }))
+    if (!active) return
+    const element = newPostElement(kind, active.elements.length + 1)
+    patchActive({ elements: [...active.elements, element] })
     setSelectedId(element.id)
   }
 
   const removeElement = (id: string) => {
-    setTemplate((prev) => ({ ...prev, elements: prev.elements.filter((item) => item.id !== id) }))
+    if (!active) return
+    patchActive({ elements: active.elements.filter((item) => item.id !== id) })
     if (selectedId === id) setSelectedId('')
   }
 
@@ -80,13 +106,10 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     const el = stageRef.current
     if (!drag || !el) return
     const rect = el.getBoundingClientRect()
-    const dx = (event.clientX - drag.startX) / rect.width
-    const dy = (event.clientY - drag.startY) / rect.height
-    patchElement(drag.id, { x: clamp01(drag.originX + dx), y: clamp01(drag.originY + dy) })
-  }
-
-  const endDrag = () => {
-    dragRef.current = null
+    patchElement(drag.id, {
+      x: clamp01(drag.originX + (event.clientX - drag.startX) / rect.width),
+      y: clamp01(drag.originY + (event.clientY - drag.startY) / rect.height),
+    })
   }
 
   const uploadLogo = async (file: File) => {
@@ -98,19 +121,20 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     })
     if (selected?.kind === 'logo') {
       patchElement(selected.id, { text: dataUrl })
-    } else {
-      const element = { ...newPostElement('logo', template.elements.length + 1), text: dataUrl }
-      setTemplate((prev) => ({ ...prev, elements: [...prev.elements, element] }))
+    } else if (active) {
+      const element = { ...newPostElement('logo', active.elements.length + 1), text: dataUrl }
+      patchActive({ elements: [...active.elements, element] })
       setSelectedId(element.id)
     }
   }
 
   const save = () => {
-    setPostTemplate(productId, template)
+    setPostTemplates(productId, templates)
     onClose()
   }
 
-  const ratio = template.width / template.height
+  const ratio = active ? active.width / active.height : 1
+  const enabledCount = templates.filter((item) => item.enabled).length
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-3 sm:p-6" onClick={onClose}>
@@ -121,18 +145,9 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
         <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 px-4 py-3 dark:border-white/[0.08]">
           <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">{productName} · 后处理模板</h2>
           <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-white/10 dark:text-gray-400">
-            {template.width}×{template.height}
+            {enabledCount} 套启用 / 共 {templates.length} 套
           </span>
           <div className="flex-1" />
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300">
-            <input
-              type="checkbox"
-              checked={template.enabled}
-              onChange={(e) => patch({ enabled: e.target.checked })}
-              className="h-3.5 w-3.5 accent-blue-500"
-            />
-            出图后自动套用
-          </label>
           <button type="button" onClick={onClose} className="rounded-lg px-3 py-1 text-sm text-gray-500 hover:bg-gray-100 dark:hover:bg-white/[0.06]">取消</button>
           <button type="button" onClick={save} className="rounded-lg bg-blue-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-600">保存</button>
         </div>
@@ -140,192 +155,160 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
         <div className="flex min-h-0 flex-1">
           {/* 画布预览 */}
           <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-gray-100 p-4 dark:bg-black/30">
-            <div
-              ref={stageRef}
-              className="relative max-h-full w-full overflow-hidden shadow-lg"
-              style={{ aspectRatio: `${template.width} / ${template.height}`, maxWidth: ratio >= 1 ? '100%' : `${Math.round(ratio * 420)}px` }}
-              onPointerMove={onDrag}
-              onPointerUp={endDrag}
-              onPointerCancel={endDrag}
-              onClick={() => setSelectedId('')}
-            >
-              {previewSrc ? (
-                <img src={previewSrc} alt="" className="absolute inset-0 h-full w-full object-cover" />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-200 to-gray-300 text-xs text-gray-500 dark:from-gray-800 dark:to-gray-700">
-                  这个产品还没有成品图，可先用白底排版
-                </div>
-              )}
-
-              {template.elements.map((element) => {
-                const active = selectedId === element.id
-                return (
-                  <div
-                    key={element.id}
-                    onClick={(e) => { e.stopPropagation(); setSelectedId(element.id) }}
-                    className={`absolute ${active ? 'ring-2 ring-blue-500' : 'ring-1 ring-transparent hover:ring-blue-300'}`}
-                    style={{
-                      left: `${element.x * 100}%`,
-                      top: `${element.y * 100}%`,
-                      opacity: element.opacity,
-                    }}
-                  >
-                    {active && (
-                      <div
-                        onPointerDown={(e) => startDrag(e, element)}
-                        title="拖动调整位置"
-                        className="absolute -left-2 -top-2 h-4 w-4 cursor-move rounded-full border-2 border-white bg-blue-500 shadow"
-                      />
-                    )}
-                    {element.kind === 'text' ? (
-                      <div
-                        contentEditable
-                        suppressContentEditableWarning
-                        onBlur={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' })}
-                        style={{
-                          fontFamily: POST_FONT_STACK,
-                          fontSize: `${element.fontSize * previewWidth}px`,
-                          fontWeight: element.fontWeight,
-                          color: element.color,
-                          textAlign: element.align,
-                          lineHeight: 1.35,
-                          whiteSpace: 'pre',
-                        }}
-                      >
-                        {element.text}
-                      </div>
-                    ) : element.text ? (
-                      <img
-                        src={element.text}
-                        alt=""
-                        draggable={false}
-                        style={{ width: `${element.width * previewWidth}px` }}
-                      />
-                    ) : (
-                      <div className="rounded border border-dashed border-gray-400 px-3 py-1 text-[10px] text-gray-500">未选 logo</div>
-                    )}
+            {active ? (
+              <div
+                ref={stageRef}
+                className="relative max-h-full w-full overflow-hidden shadow-lg"
+                style={{ aspectRatio: `${active.width} / ${active.height}`, maxWidth: ratio >= 1 ? '100%' : `${Math.round(ratio * 420)}px` }}
+                onPointerMove={onDrag}
+                onPointerUp={() => { dragRef.current = null }}
+                onPointerCancel={() => { dragRef.current = null }}
+                onClick={() => setSelectedId('')}
+              >
+                {previewSrc ? (
+                  <img src={previewSrc} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-200 to-gray-300 text-xs text-gray-500 dark:from-gray-800 dark:to-gray-700">
+                    这个产品还没有成品图，先按白底排版
                   </div>
-                )
-              })}
-            </div>
+                )}
+
+                {active.elements.map((element) => {
+                  const isActive = selectedId === element.id
+                  return (
+                    <div
+                      key={element.id}
+                      onClick={(e) => { e.stopPropagation(); setSelectedId(element.id) }}
+                      className={`absolute ${isActive ? 'ring-2 ring-blue-500' : 'ring-1 ring-transparent hover:ring-blue-300'}`}
+                      style={{ left: `${element.x * 100}%`, top: `${element.y * 100}%`, opacity: element.opacity }}
+                    >
+                      {isActive && (
+                        <div
+                          onPointerDown={(e) => startDrag(e, element)}
+                          title="拖动调整位置"
+                          className="absolute -left-2 -top-2 h-4 w-4 cursor-move rounded-full border-2 border-white bg-blue-500 shadow"
+                        />
+                      )}
+                      {element.kind === 'text' ? (
+                        <div
+                          contentEditable
+                          suppressContentEditableWarning
+                          onBlur={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' })}
+                          style={{
+                            fontFamily: POST_FONT_STACK,
+                            fontSize: `${element.fontSize * previewWidth}px`,
+                            fontWeight: element.fontWeight,
+                            color: element.color,
+                            textAlign: element.align,
+                            lineHeight: 1.35,
+                            whiteSpace: 'pre',
+                          }}
+                        >
+                          {element.text}
+                        </div>
+                      ) : element.text ? (
+                        <img src={element.text} alt="" draggable={false} style={{ width: `${element.width * previewWidth}px` }} />
+                      ) : (
+                        <div className="rounded border border-dashed border-gray-400 px-3 py-1 text-[10px] text-gray-500">未选 logo</div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="text-center text-sm text-gray-500 dark:text-gray-400">
+                还没有模板
+                <div className="mt-1 text-xs">右边选一个比例新建一套</div>
+              </div>
+            )}
           </div>
 
           {/* 右侧面板 */}
-          <div className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-gray-200 p-3 dark:border-white/[0.08]">
+          <div className="flex w-80 shrink-0 flex-col overflow-y-auto border-l border-gray-200 p-3 dark:border-white/[0.08]">
+            <div className="mb-2 text-[11px] font-medium text-gray-500 dark:text-gray-400">模板（按出图比例自动选）</div>
+            <div className="mb-2 space-y-1">
+              {templates.map((item) => (
+                <div
+                  key={item.id}
+                  className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] ${active?.id === item.id ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.04]'}`}
+                >
+                  <button type="button" onClick={() => { setActiveId(item.id); setSelectedId('') }} className="min-w-0 flex-1 truncate text-left">
+                    {item.label}
+                    <span className="ml-1 text-gray-400">{item.width}×{item.height}</span>
+                    {item.isDefault && <span className="ml-1 rounded bg-blue-100 px-1 text-[10px] text-blue-600 dark:bg-blue-500/20 dark:text-blue-300">默认</span>}
+                  </button>
+                  <label className="flex shrink-0 items-center gap-0.5 text-[10px] text-gray-400" title="启用后参与自动套用">
+                    <input
+                      type="checkbox"
+                      checked={item.enabled}
+                      onChange={(e) => setTemplates((prev) => prev.map((t) => (t.id === item.id ? { ...t, enabled: e.target.checked } : t)))}
+                      className="h-3 w-3 accent-blue-500"
+                    />
+                    启用
+                  </label>
+                  <button
+                    type="button"
+                    title="设为默认"
+                    onClick={() => setTemplates((prev) => prev.map((t) => {
+                      if (t.id === item.id) return { ...t, isDefault: true }
+                      return Math.abs(t.width / t.height - item.width / item.height) < 0.02 ? { ...t, isDefault: false } : t
+                    }))}
+                    className={`shrink-0 rounded px-1 ${item.isDefault ? 'text-blue-500' : 'text-gray-300 hover:text-blue-500'}`}
+                  >
+                    ★
+                  </button>
+                  <button type="button" onClick={() => removeTemplate(item.id)} className="shrink-0 text-gray-300 hover:text-red-500">✕</button>
+                </div>
+              ))}
+              {!templates.length && <p className="px-1 py-1 text-[11px] text-gray-400">还没有模板</p>}
+            </div>
+
             <div className="mb-3">
-              <div className="mb-1 text-[11px] font-medium text-gray-500 dark:text-gray-400">成品尺寸</div>
-              <select
-                value={`${template.width}x${template.height}`}
-                onChange={(e) => {
-                  const [w, h] = e.target.value.split('x').map(Number)
-                  patch({ width: w, height: h })
-                }}
-                className="w-full rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
-              >
-                {POST_SIZE_PRESETS.map((item) => (
-                  <option key={item.label} value={`${item.width}x${item.height}`}>{item.label}</option>
+              <div className="mb-1 text-[10px] text-gray-400">新建模板（点比例即建一套）</div>
+              <div className="flex flex-wrap gap-1">
+                {POST_SIZE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => addTemplate(preset.width, preset.height, preset.label.split('  ')[0])}
+                    className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-300"
+                  >
+                    {preset.label.split('  ')[0]}
+                  </button>
                 ))}
-                <option value={`${template.width}x${template.height}`}>自定义 {template.width}×{template.height}</option>
-              </select>
-              <div className="mt-1.5 flex items-center gap-1">
-                <input
-                  type="number"
-                  value={template.width}
-                  onChange={(e) => patch({ width: Math.max(64, Number(e.target.value) || 0) })}
-                  className="w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
-                />
-                <span className="text-gray-400">×</span>
-                <input
-                  type="number"
-                  value={template.height}
-                  onChange={(e) => patch({ height: Math.max(64, Number(e.target.value) || 0) })}
-                  className="w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
-                />
               </div>
             </div>
 
-            <div className="mb-2 flex gap-1">
-              <button type="button" onClick={() => addElement('text')} className="flex-1 rounded-lg bg-gray-100 px-2 py-1.5 text-[11px] text-gray-700 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-200">+ 文字</button>
-              <label className="flex-1 cursor-pointer rounded-lg bg-gray-100 px-2 py-1.5 text-center text-[11px] text-gray-700 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-200">
-                + Logo
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) void uploadLogo(file)
-                    e.target.value = ''
-                  }}
-                />
-              </label>
-            </div>
-
-            <div className="mb-3 space-y-1">
-              {template.elements.map((element, index) => (
-                <div
-                  key={element.id}
-                  className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] ${selectedId === element.id ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.04]'}`}
-                >
-                  <button type="button" onClick={() => setSelectedId(element.id)} className="min-w-0 flex-1 truncate text-left">
-                    {element.kind === 'text' ? `文字 ${index + 1}｜${element.text.slice(0, 12) || '空'}` : `Logo ${index + 1}`}
-                  </button>
-                  <button type="button" onClick={() => removeElement(element.id)} className="shrink-0 text-gray-400 hover:text-red-500">✕</button>
-                </div>
-              ))}
-              {!template.elements.length && <p className="px-1 py-2 text-[11px] text-gray-400">还没有元素，点上面的按钮添加</p>}
-            </div>
-
-            {selected && (
-              <div className="space-y-2 rounded-lg bg-gray-50 p-2 dark:bg-white/[0.04]">
-                <div className="text-[11px] font-medium text-gray-500 dark:text-gray-400">
-                  {selected.kind === 'text' ? '文字设置' : 'Logo 设置'}
-                  <span className="ml-1 text-gray-400">拖动画面里的元素可调位置</span>
-                </div>
-
-                {selected.kind === 'text' ? (
-                  <>
-                    <textarea
-                      value={selected.text}
-                      onChange={(e) => patchElement(selected.id, { text: e.target.value })}
-                      rows={3}
-                      className="w-full resize-y rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+            {active && (
+              <>
+                <div className="mb-2">
+                  <div className="mb-1 text-[11px] font-medium text-gray-500 dark:text-gray-400">模板名称 / 尺寸</div>
+                  <input
+                    value={active.label}
+                    onChange={(e) => patchActive({ label: e.target.value })}
+                    className="mb-1 w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                  />
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      value={active.width}
+                      onChange={(e) => patchActive({ width: Math.max(64, Number(e.target.value) || 0) })}
+                      className="w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                     />
-                    <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
-                      字号
-                      <input
-                        type="range"
-                        min={0.008}
-                        max={0.12}
-                        step={0.002}
-                        value={selected.fontSize}
-                        onChange={(e) => patchElement(selected.id, { fontSize: Number(e.target.value) })}
-                        className="flex-1 accent-blue-500"
-                      />
-                      <span className="w-8 tabular-nums">{Math.round(selected.fontSize * 1000) / 10}%</span>
-                    </label>
-                    <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
-                      颜色
-                      <input
-                        type="color"
-                        value={selected.color}
-                        onChange={(e) => patchElement(selected.id, { color: e.target.value })}
-                        className="h-6 w-10 cursor-pointer rounded border border-gray-200 dark:border-white/10"
-                      />
-                      <select
-                        value={selected.fontWeight}
-                        onChange={(e) => patchElement(selected.id, { fontWeight: Number(e.target.value) })}
-                        className="rounded border border-gray-200 px-1 py-0.5 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
-                      >
-                        <option value={400}>常规</option>
-                        <option value={600}>中粗</option>
-                        <option value={700}>加粗</option>
-                      </select>
-                    </div>
-                  </>
-                ) : (
-                  <label className="flex cursor-pointer items-center justify-between rounded border border-dashed border-gray-300 px-2 py-1 text-[11px] text-gray-500 dark:border-white/15">
-                    重新选择 logo
+                    <span className="text-gray-400">×</span>
+                    <input
+                      type="number"
+                      value={active.height}
+                      onChange={(e) => patchActive({ height: Math.max(64, Number(e.target.value) || 0) })}
+                      className="w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                    />
+                  </div>
+                </div>
+
+                <div className="mb-2 flex gap-1">
+                  <button type="button" onClick={() => addElement('text')} className="flex-1 rounded-lg bg-gray-100 px-2 py-1.5 text-[11px] text-gray-700 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-200">+ 文字</button>
+                  <label className="flex-1 cursor-pointer rounded-lg bg-gray-100 px-2 py-1.5 text-center text-[11px] text-gray-700 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-200">
+                    + Logo
                     <input
                       type="file"
                       accept="image/*"
@@ -337,43 +320,124 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                       }}
                     />
                   </label>
-                )}
+                </div>
 
-                {selected.kind === 'logo' && (
-                  <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
-                    宽度
-                    <input
-                      type="range"
-                      min={0.02}
-                      max={0.6}
-                      step={0.005}
-                      value={selected.width}
-                      onChange={(e) => patchElement(selected.id, { width: Number(e.target.value) })}
-                      className="flex-1 accent-blue-500"
-                    />
-                    <span className="w-8 tabular-nums">{Math.round(selected.width * 100)}%</span>
-                  </label>
-                )}
+                <div className="mb-3 space-y-1">
+                  {active.elements.map((element, index) => (
+                    <div
+                      key={element.id}
+                      className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] ${selectedId === element.id ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.04]'}`}
+                    >
+                      <button type="button" onClick={() => setSelectedId(element.id)} className="min-w-0 flex-1 truncate text-left">
+                        {element.kind === 'text' ? `文字 ${index + 1}｜${element.text.slice(0, 10) || '空'}` : `Logo ${index + 1}`}
+                      </button>
+                      <button type="button" onClick={() => removeElement(element.id)} className="shrink-0 text-gray-400 hover:text-red-500">✕</button>
+                    </div>
+                  ))}
+                  {!active.elements.length && <p className="px-1 py-2 text-[11px] text-gray-400">还没有元素</p>}
+                </div>
 
-                <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
-                  透明度
-                  <input
-                    type="range"
-                    min={0.1}
-                    max={1}
-                    step={0.05}
-                    value={selected.opacity}
-                    onChange={(e) => patchElement(selected.id, { opacity: Number(e.target.value) })}
-                    className="flex-1 accent-blue-500"
-                  />
-                  <span className="w-8 tabular-nums">{Math.round(selected.opacity * 100)}%</span>
-                </label>
-              </div>
+                {selected && (
+                  <div className="space-y-2 rounded-lg bg-gray-50 p-2 dark:bg-white/[0.04]">
+                    <div className="text-[11px] font-medium text-gray-500 dark:text-gray-400">
+                      {selected.kind === 'text' ? '文字设置' : 'Logo 设置'}
+                      <span className="ml-1 text-gray-400">拖蓝点移动</span>
+                    </div>
+
+                    {selected.kind === 'text' ? (
+                      <>
+                        <textarea
+                          value={selected.text}
+                          onChange={(e) => patchElement(selected.id, { text: e.target.value })}
+                          rows={3}
+                          className="w-full resize-y rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                        />
+                        <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                          字号
+                          <input
+                            type="range"
+                            min={0.008}
+                            max={0.12}
+                            step={0.002}
+                            value={selected.fontSize}
+                            onChange={(e) => patchElement(selected.id, { fontSize: Number(e.target.value) })}
+                            className="flex-1 accent-blue-500"
+                          />
+                          <span className="w-8 tabular-nums">{Math.round(selected.fontSize * 1000) / 10}%</span>
+                        </label>
+                        <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                          颜色
+                          <input
+                            type="color"
+                            value={selected.color}
+                            onChange={(e) => patchElement(selected.id, { color: e.target.value })}
+                            className="h-6 w-10 cursor-pointer rounded border border-gray-200 dark:border-white/10"
+                          />
+                          <select
+                            value={selected.fontWeight}
+                            onChange={(e) => patchElement(selected.id, { fontWeight: Number(e.target.value) })}
+                            className="rounded border border-gray-200 px-1 py-0.5 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                          >
+                            <option value={400}>常规</option>
+                            <option value={600}>中粗</option>
+                            <option value={700}>加粗</option>
+                          </select>
+                        </div>
+                      </>
+                    ) : (
+                      <label className="flex cursor-pointer items-center justify-between rounded border border-dashed border-gray-300 px-2 py-1 text-[11px] text-gray-500 dark:border-white/15">
+                        重新选择 logo
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            if (file) void uploadLogo(file)
+                            e.target.value = ''
+                          }}
+                        />
+                      </label>
+                    )}
+
+                    {selected.kind === 'logo' && (
+                      <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                        宽度
+                        <input
+                          type="range"
+                          min={0.02}
+                          max={0.6}
+                          step={0.005}
+                          value={selected.width}
+                          onChange={(e) => patchElement(selected.id, { width: Number(e.target.value) })}
+                          className="flex-1 accent-blue-500"
+                        />
+                        <span className="w-8 tabular-nums">{Math.round(selected.width * 100)}%</span>
+                      </label>
+                    )}
+
+                    <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                      透明度
+                      <input
+                        type="range"
+                        min={0.1}
+                        max={1}
+                        step={0.05}
+                        value={selected.opacity}
+                        onChange={(e) => patchElement(selected.id, { opacity: Number(e.target.value) })}
+                        className="flex-1 accent-blue-500"
+                      />
+                      <span className="w-8 tabular-nums">{Math.round(selected.opacity * 100)}%</span>
+                    </label>
+                  </div>
+                )}
+              </>
             )}
 
             <p className="mt-3 text-[10px] leading-relaxed text-gray-400">
-              开启「出图后自动套用」后，这个产品新出的图会先按上面的尺寸裁切、再叠上文字和 logo 存入库。
-              字体默认思源黑体，系统没装时按 Noto Sans / 微软雅黑 兜底。
+              出图时先看这张图的比例，只套用比例对得上（误差 2% 内）且已启用的模板；
+              同比例有多套时优先用标 ★ 的默认模板，没标就随机取一套；比例没配模板的图保持原图。
+              字体默认思源黑体，缺失时按 Noto Sans / 微软雅黑兜底。
             </p>
           </div>
         </div>

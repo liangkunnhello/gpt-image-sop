@@ -82,10 +82,10 @@ interface SopState {
   useImageSellingPoints: boolean
   /** 每张任务卡生成几条提示词（=几张图），SOP 模式下唯一的数量来源 */
   promptsPerGroup: number
-  /** 按产品存的后处理模板 */
-  postTemplates: Record<string, PostTemplate>
+  /** 按产品存的后处理模板，同一产品可以有多套（按比例匹配） */
+  postTemplates: Record<string, PostTemplate[]>
   setPromptsPerGroup: (value: number) => void
-  setPostTemplate: (productId: string, template: PostTemplate) => void
+  setPostTemplates: (productId: string, templates: PostTemplate[]) => void
   setSopMode: (value: boolean) => void
   setIgnoreCompliance: (value: boolean) => void
   setUseImageSellingPoints: (value: boolean) => void
@@ -124,8 +124,8 @@ export const useSopStore = create<SopState>()(
       postTemplates: {},
       setSopMode: (value) => set({ sopMode: value }),
       setPromptsPerGroup: (value) => set({ promptsPerGroup: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
-      setPostTemplate: (productId, template) => set((state) => ({
-        postTemplates: { ...state.postTemplates, [productId]: template },
+      setPostTemplates: (productId, templates) => set((state) => ({
+        postTemplates: { ...state.postTemplates, [productId]: templates },
       })),
       setIgnoreCompliance: (value) => set({ ignoreCompliance: value }),
       setUseImageSellingPoints: (value) => set({ useImageSellingPoints: value }),
@@ -212,11 +212,18 @@ export const useSopStore = create<SopState>()(
     }),
     {
       name: 'gpt-image-sop-store',
-      // v2：系统提示词从「方向级」改为「产品级」
-      version: 2,
+      // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」
+      version: 3,
       migrate: (persisted, version) => {
         const state = persisted as Partial<SopState> | undefined
         if (!state?.systemPrompts?.length) return state as SopState
+        if (version < 3 && state.postTemplates) {
+          const normalized: Record<string, PostTemplate[]> = {}
+          for (const [productId, value] of Object.entries(state.postTemplates as unknown as Record<string, PostTemplate | PostTemplate[]>)) {
+            normalized[productId] = Array.isArray(value) ? value : [{ ...value, id: value.id ?? `tpl-${productId}`, label: value.label ?? '默认模板', isDefault: true }]
+          }
+          state.postTemplates = normalized
+        }
         if (version >= 2) return state as SopState
         const byId = new Map((state.directions ?? []).map((node) => [node.id, node]))
         const migrated = state.systemPrompts.map((item) => {

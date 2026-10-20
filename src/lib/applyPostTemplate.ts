@@ -10,18 +10,15 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   })
 }
 
-/** 找到任务归属产品下启用的后处理模板 */
-export function templateForDirection(
-  templates: Record<string, PostTemplate>,
+/** 方向节点 → 所属产品 id（模板挂在产品上） */
+export function productIdForDirection(
   directions: SopDirectionNode[],
   directionId: string | undefined,
-): PostTemplate | null {
-  if (!directionId) return null
+): string {
+  if (!directionId) return ''
   const node = directions.find((item) => item.id === directionId)
-  if (!node) return null
-  const productId = node.kind === 'direction' ? node.parentId ?? '' : node.id
-  const template = templates[productId]
-  return template?.enabled ? template : null
+  if (!node) return ''
+  return node.kind === 'direction' ? node.parentId ?? '' : node.id
 }
 
 function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: number, height: number, logo: HTMLImageElement | null) {

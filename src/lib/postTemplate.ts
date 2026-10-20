@@ -22,12 +22,56 @@ export interface PostElement {
 }
 
 export interface PostTemplate {
-  /** 目标画布尺寸 */
+  id: string
+  /** 模板名，例如「9:16 竖版 A」 */
+  label: string
+  /** 目标画布尺寸；出图比例要能对上才会套用 */
   width: number
   height: number
-  /** 是否启用：启用后出图会自动套这个模板 */
+  /** 是否启用 */
   enabled: boolean
+  /** 同比例有多套时，默认这套优先；都没设默认则随机取 */
+  isDefault: boolean
   elements: PostElement[]
+}
+
+/** 比例匹配容差：相对误差 2% 以内算同一比例 */
+export const POST_RATIO_TOLERANCE = 0.02
+
+export function createPostTemplate(width: number, height: number, label: string): PostTemplate {
+  return {
+    id: `tpl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    label,
+    width,
+    height,
+    enabled: false,
+    isDefault: false,
+    elements: defaultPostTemplate().elements,
+  }
+}
+
+/**
+ * 按原图比例挑选模板：
+ * 只认比例对得上的（2% 容差）；有默认用默认，没有就随机。
+ * 没有匹配项时返回 null —— 调用方保持原图不动。
+ */
+export function pickTemplateForImage(
+  templates: PostTemplate[],
+  srcWidth: number,
+  srcHeight: number,
+): PostTemplate | null {
+  if (!(srcWidth > 0 && srcHeight > 0)) return null
+  const ratio = srcWidth / srcHeight
+  const matches = templates.filter((item) => (
+    item.enabled
+    && item.width > 0
+    && item.height > 0
+    && Math.abs(item.width / item.height - ratio) / ratio <= POST_RATIO_TOLERANCE + 1e-6
+  ))
+  if (!matches.length) return null
+  const preferred = matches.find((item) => item.isDefault)
+  if (preferred) return preferred
+  return matches[Math.floor(Math.random() * matches.length)]
 }
 
 export const POST_FONT_STACK = '"Source Han Sans SC", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif'
@@ -72,9 +116,12 @@ export function newPostElement(kind: PostElementKind, index: number): PostElemen
 
 export function defaultPostTemplate(): PostTemplate {
   return {
+    id: `tpl-${Date.now().toString(36)}`,
+    label: '1:1 方图',
     width: 2048,
     height: 2048,
     enabled: false,
+    isDefault: true,
     elements: [
       {
         ...newPostElement('text', 1),
