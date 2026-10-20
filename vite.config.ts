@@ -50,26 +50,7 @@ export default defineConfig(async ({ command, mode }) => {
   const devProxyConfig = command === 'serve' ? loadDevProxyConfig() : null
 
   return {
-    plugins: [
-      react(),
-      // 浏览器按域名隔离 IndexedDB：localhost 与 127.0.0.1 会变成两套数据。
-      // 这里把 localhost 的访问统一 302 到 127.0.0.1，保证只有一个数据源。
-      {
-        name: 'canonical-host-redirect',
-        configureServer(server) {
-          server.middlewares.use((req, res, next) => {
-            const host = String(req.headers.host || '')
-            if (/^localhost(:\d+)?$/i.test(host)) {
-              const port = host.split(':')[1] || '5173'
-              res.writeHead(302, { Location: `http://127.0.0.1:${port}${req.url || '/'}` })
-              res.end()
-              return
-            }
-            next()
-          })
-        },
-      },
-    ],
+    plugins: [react()],
     base: './',
     envDir,
     define: {

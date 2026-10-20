@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "mock:api": "node scripts/mock-image-api.mjs",
-    "build": "tsc -b && node scripts/build.mjs",
+    "build": "tsc -b && vite build",
     "deploy:cf": "npm run build && wrangler deploy",
     "preview": "vite preview",
     "test": "vitest run",

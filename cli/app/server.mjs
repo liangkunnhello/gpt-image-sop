@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
- * 本地服务：既托管打包好的网页版，也给网页版提供 /api/* 能力
- *   - 打开 http://127.0.0.1:7799 就是网页版本体（npm run build 的 dist 产物）
- *   - 旧批次控制台仍在 /console
+ * 本地 Web 控制台（测试版）
+ *   - 批次列表 / 批次详情 / 一键跑批 / 一键质检 / 一键算相似度
  *   - 图库直接读 GPT Image Playground 客户端的 data.db（只读，共用同一数据源）
  *   - 一键启动：双击 启动.bat；一键停止：界面右上角"停止服务"或 停止.bat
  */
@@ -20,8 +19,6 @@ import { qcImage } from '../src/batch/qc.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const PUBLIC = path.join(__dirname, 'public');
-/** 网页版打包产物：只在 7799 一个地址上提供服务，避免多个地址各存一份浏览器数据 */
-const WEB = path.join(ROOT, '..', 'dist');
 const BAT = path.join(ROOT, 'batches');
 const PORT = Number(process.env.PORT || 7799);
 const CLIENT_DATA = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'GPT Image Playground', 'data');
@@ -517,18 +514,8 @@ const server = http.createServer(async (req, res) => {
       return sendFile(res, abs);
     }
 
-    // 静态资源：优先发网页版产物，未命中的路径回入口（单页应用交给前端路由）
-    const rel = p.replace(/^\/+/, '');
-    const webIndex = path.join(WEB, 'index.html');
-    if (p === '/') return sendFile(res, fs.existsSync(webIndex) ? webIndex : path.join(PUBLIC, 'index.html'));
-    if (rel === 'console') return sendFile(res, path.join(PUBLIC, 'index.html'));
-    const webFile = path.resolve(WEB, rel);
-    if (webFile.startsWith(WEB + path.sep) && fs.existsSync(webFile) && fs.statSync(webFile).isFile()) return sendFile(res, webFile);
-    if (fs.existsSync(webIndex)) return sendFile(res, webIndex);
-
-    // 还没打包网页时退回旧控制台，至少服务能起来
-    const pubFile = path.resolve(PUBLIC, rel);
-    if (pubFile.startsWith(PUBLIC + path.sep) && fs.existsSync(pubFile) && fs.statSync(pubFile).isFile()) return sendFile(res, pubFile);
+    const file = p === '/' ? path.join(PUBLIC, 'index.html') : path.join(PUBLIC, p.replace(/^\/+/, ''));
+    if (file.startsWith(PUBLIC) && fs.existsSync(file) && fs.statSync(file).isFile()) return sendFile(res, file);
 
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('404');
@@ -539,7 +526,7 @@ const server = http.createServer(async (req, res) => {
 
 function sendFile(res, abs) {
   const ext = path.extname(abs).toLowerCase();
-  const type = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.webmanifest': 'application/manifest+json; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.json': 'application/json; charset=utf-8' }[ext] || 'application/octet-stream';
+  const type = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.json': 'application/json; charset=utf-8' }[ext] || 'application/octet-stream';
   res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   fs.createReadStream(abs).pipe(res);
 }
