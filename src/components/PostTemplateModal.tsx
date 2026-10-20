@@ -192,24 +192,46 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                         />
                       )}
                       {element.kind === 'text' ? (
-                        <div
-                          contentEditable
-                          suppressContentEditableWarning
-                          onBlur={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' })}
-                          style={{
-                            fontFamily: POST_FONT_STACK,
-                            fontSize: `${Math.max(1, element.fontSize * scale)}px`,
-                            fontWeight: element.fontWeight,
-                            color: element.color,
-                            WebkitTextStroke: element.strokeWidth > 0
-                              ? `${Math.max(0.2, element.strokeWidth * scale)}px ${element.strokeColor}`
-                              : undefined,
-                            textAlign: element.align,
-                            lineHeight: 1.35,
-                            whiteSpace: 'pre',
-                          }}
-                        >
-                          {element.text}
+                        <div className="relative">
+                          {/* 外描边：底层用双倍居中线宽铺色，上层文字盖住内侧一半 */}
+                          {element.strokeWidth > 0 && (
+                            <div
+                              aria-hidden
+                              style={{
+                                position: 'absolute',
+                                left: 0,
+                                top: 0,
+                                fontFamily: POST_FONT_STACK,
+                                fontSize: `${Math.max(1, element.fontSize * scale)}px`,
+                                fontWeight: element.fontWeight,
+                                color: element.strokeColor,
+                                WebkitTextStroke: `${Math.max(0.4, element.strokeWidth * 2 * scale)}px ${element.strokeColor}`,
+                                lineHeight: 1.35,
+                                whiteSpace: 'pre',
+                                pointerEvents: 'none',
+                              }}
+                            >
+                              {element.text}
+                            </div>
+                          )}
+                          <div
+                            contentEditable
+                            suppressContentEditableWarning
+                            onInput={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' })}
+                            onBlur={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' })}
+                            style={{
+                              position: 'relative',
+                              fontFamily: POST_FONT_STACK,
+                              fontSize: `${Math.max(1, element.fontSize * scale)}px`,
+                              fontWeight: element.fontWeight,
+                              color: element.color,
+                              textAlign: element.align,
+                              lineHeight: 1.35,
+                              whiteSpace: 'pre',
+                            }}
+                          >
+                            {element.text}
+                          </div>
                         </div>
                       ) : element.text ? (
                         <img src={element.text} alt="" draggable={false} style={{ width: `${element.width * previewWidth}px` }} />
@@ -427,7 +449,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                           </span>
                         </div>
                         {selected.strokeWidth > 0 && (
-                          <p className="text-[10px] text-gray-400">居中描边，太粗会吃掉笔画内部。</p>
+                          <p className="text-[10px] text-gray-400">向外描边，不会吃掉笔画。</p>
                         )}
                       </>
                     ) : (

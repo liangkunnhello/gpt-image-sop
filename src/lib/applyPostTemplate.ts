@@ -39,7 +39,8 @@ function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: numb
     lines.forEach((line, index) => {
       const lineY = y + index * size * 1.35
       if (el.strokeWidth > 0) {
-        ctx.lineWidth = el.strokeWidth
+        // canvas 的描边是居中的：线宽加倍后填充盖掉内侧一半，留在外面的正好是 strokeWidth
+        ctx.lineWidth = el.strokeWidth * 2
         ctx.strokeStyle = el.strokeColor
         ctx.strokeText(line, x, lineY)
       }
