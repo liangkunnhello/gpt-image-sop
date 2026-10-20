@@ -11,3 +11,10 @@ src-tauri/dev-data/
 # 开发版更改数据目录时写入的指向文件和迁移标记
 src-tauri/data-dir*
 src-tauri/dev-downloads/
+
+# CLI / 本地验收服务（并入仓库，但不提交密钥与产物）
+cli/.env
+cli/.env.*.local
+cli/out/
+cli/batches/
+cli/node_modules/

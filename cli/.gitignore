@@ -1,0 +1,13 @@
+# 凭据与产物不入库
+.env
+.env.local
+.env.*.local
+
+# 生成产物
+out/
+out-*/
+
+# 依赖与临时文件
+node_modules/
+models.json
+*.log
