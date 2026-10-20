@@ -80,6 +80,7 @@ import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage } from './lib/postTemplate'
 import { saveFinishedCopy } from './lib/openImagesFolder'
 import { useClipStore } from './lib/clipSimilarity'
+import { backupTaskToClient } from './lib/clientBackup'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
 import { pickSaveDir, saveFile, saveFileToDir, type SaveOptions } from './lib/saveFile'
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
@@ -3880,6 +3881,18 @@ async function executeTask(taskId: string) {
       customRecoverable: false,
     })
     void deleteUnreferencedImageIds(partialImageIdsToClean)
+
+    // 同时落一份到客户端 data.db，浏览器存储丢了还能找回
+    if (outputDataUrls.length) {
+      void backupTaskToClient({
+        prompt: task.prompt,
+        size: task.params.size,
+        model: task.apiModel,
+        quality: task.params.quality,
+        title: task.prompt.slice(0, 24),
+        images: outputDataUrls,
+      })
+    }
 
     // 出完图立刻排进后台：先质检、再算重复度，不阻塞下一个任务
     if (outputIds.length) {
