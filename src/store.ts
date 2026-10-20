@@ -194,7 +194,8 @@ function showSupportPromptForExistingLocalData(tasks: TaskRecord[]) {
       return { supportPromptSkippedForImportedData: false }
     }
     if (state.supportPromptSkippedForImportedData) return {}
-    return { supportPromptOpen: true }
+    // 赞助弹窗自动弹出已关闭：本地已有超阈值数据时不再打开（组件与状态字段保留，便于后续恢复）
+    return {}
   })
 }
 
@@ -209,7 +210,7 @@ function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskReco
   const previousCount = countSuccessfulOutputImages(previousTasks)
   const nextCount = countSuccessfulOutputImages(nextTasks)
   if (previousCount <= SUPPORT_PROMPT_IMAGE_THRESHOLD && nextCount > SUPPORT_PROMPT_IMAGE_THRESHOLD) {
-    useStore.setState({ supportPromptOpen: true })
+    // 赞助弹窗自动弹出已关闭：生成数量首次超过阈值时不再打开（组件与状态字段保留，便于后续恢复）
   }
 }
 

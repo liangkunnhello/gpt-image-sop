@@ -216,7 +216,8 @@ export function normalizePersistedState(
       favoriteCollections,
       defaultFavoriteCollectionId: resolveDefaultFavoriteCollectionId(favoriteCollections, preferredDefaultFavoriteCollectionId),
       supportPromptDismissed: Boolean(persistedState.supportPromptDismissed),
-      supportPromptOpen: Boolean(persistedState.supportPromptOpen),
+      // 赞助弹窗自动弹出已关闭：恢复时强制为关闭，避免历史持久化值让弹窗重新出现
+      supportPromptOpen: false,
       supportPromptSkippedForImportedData: Boolean(persistedState.supportPromptSkippedForImportedData),
       prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
       inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
