@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, importClientTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { isTauri } from '../lib/platform'
 import { getIndexesInRect } from '../lib/virtualGrid'
@@ -67,6 +67,24 @@ export default function TaskGrid() {
   const displayTasks = useMemo(() => groupSopTasks(filteredTasks), [filteredTasks])
 
   // 后台算一次当前视图的 CLIP 重复度，算完各自卡片会显示平均重复度
+  const [importing, setImporting] = useState(false)
+  const showToast = useStore((s) => s.showToast)
+  const runClientImport = async () => {
+    setImporting(true)
+    try {
+      const result = await importClientTasks()
+      if (result.imported) {
+        showToast(`已从桌面客户端导入 ${result.imported} 条任务`, 'success')
+      } else {
+        showToast(`没有新任务可导入（共 ${result.total} 条，跳过 ${result.skipped}）`, 'info')
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '导入失败', 'error')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   const ensureClip = useClipStore((s) => s.ensure)
   useEffect(() => {
     if (!filteredTasks.length) return
@@ -306,6 +324,14 @@ export default function TaskGrid() {
               />
             </svg>
             <p className="text-sm">输入提示词开始生成图片</p>
+            <button
+              type="button"
+              onClick={() => void runClientImport()}
+              disabled={importing}
+              className="mt-3 rounded-lg border border-blue-200 px-3 py-1.5 text-xs text-blue-600 transition hover:bg-blue-50 disabled:opacity-50 dark:border-blue-500/30 dark:text-blue-400 dark:hover:bg-blue-500/10"
+            >
+              {importing ? '正在导入…' : '从桌面客户端导入历史任务'}
+            </button>
             {isTauri && !tasks.length && (
               <p className="mt-3 text-xs">
                 从网页版迁移：在网页版的「设置 → 数据管理」中导出备份，再
