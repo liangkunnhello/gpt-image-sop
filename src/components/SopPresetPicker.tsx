@@ -96,6 +96,23 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
     startEdit({ id, productId, kind, name, content: name, updatedAt: Date.now() })
   }
 
+  /** 复制一份，名称加「副本」，并直接选中，方便在此基础上改 */
+  const copyPreset = (item: SopPreset) => {
+    const existing = new Set(list.map((entry) => entry.name))
+    let name = `${item.name} 副本`
+    let seq = 2
+    while (existing.has(name)) {
+      name = `${item.name} 副本 ${seq}`
+      seq += 1
+    }
+    const id = addPreset(productId, kind, name, item.content)
+    setPick(directionId, {
+      ...lastPick[directionId],
+      ...(kind === 'point' ? { pointId: id } : { styleId: id }),
+    })
+    showToast(`已复制为「${name}」`, 'success')
+  }
+
   return (
     <div className="relative" ref={rootRef}>
       <button
@@ -192,6 +209,17 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
                   </button>
                   <button
                     type="button"
+                    onClick={() => copyPreset(item)}
+                    title="复制"
+                    className="mt-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 group-hover:flex dark:hover:bg-white/10"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3 w-3">
+                      <rect x="9" y="9" width="11" height="11" rx="2" />
+                      <path strokeLinecap="round" d="M15 5.5A1.5 1.5 0 0013.5 4h-8A1.5 1.5 0 004 5.5v8A1.5 1.5 0 005.5 15" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => removePreset(item.id)}
                     title="删除"
                     className="mt-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400 hover:bg-red-50 hover:text-red-500 group-hover:flex dark:hover:bg-red-500/10"
@@ -215,7 +243,7 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
               placeholder={`新建${label}，回车添加`}
               className="w-full rounded-lg border border-dashed border-gray-200 px-2 py-1 text-xs text-gray-700 placeholder:text-gray-300 focus:border-blue-400 focus:outline-none dark:border-white/10 dark:bg-transparent dark:text-gray-200"
             />
-            <p className="mt-1 px-1 text-[10px] text-gray-400">右键某一项可设为这个方向的默认{label}；同产品的所有方向共用这份列表。</p>
+            <p className="mt-1 px-1 text-[10px] text-gray-400">悬停某一项可编辑、复制、删除；右键可设为这个方向的默认{label}；同产品的所有方向共用这份列表。</p>
           </div>
         </div>
       )}
