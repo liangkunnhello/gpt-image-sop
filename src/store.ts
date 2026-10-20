@@ -3027,10 +3027,11 @@ async function executeAgentRound(
     }) => {
       const result = await callImageApi({
         settings: imageRequestSettings,
-        // 有的渠道不严格遵守 size，画幅比例会乱跳，先把比例写进提示词
+        // 有的渠道不严格遵守 size，画幅比例会乱跳，先把比例写进提示词；auto 时跟参考图一致
         prompt: withAspectRatioHint(
           replaceImageMentionsForApi(opts.prompt, opts.referenceImageDataUrls.length),
           opts.taskParams.size,
+          opts.referenceImageDataUrls,
         ),
         params: opts.taskParams,
         inputImageDataUrls: opts.referenceImageDataUrls,
@@ -3743,12 +3744,20 @@ async function executeTask(taskId: string) {
       ? task.transparentPrompt
       : task.prompt
 
+    // 尺寸为 auto 时要靠参考图定比例；SOP 任务没有输入图，但有参考图记录
+    let ratioReferenceDataUrls = inputDataUrls
+    if (!ratioReferenceDataUrls.length && task.sopReferenceImageIds?.length) {
+      const ref = await ensureImageCached(task.sopReferenceImageIds[0])
+      if (ref) ratioReferenceDataUrls = [ref]
+    }
+
     const result = await callImageApi({
       settings: requestSettings,
-      // 有的渠道不严格遵守 size，画幅比例会乱跳，先把比例写进提示词
+      // 有的渠道不严格遵守 size，画幅比例会乱跳，先把比例写进提示词；auto 时跟参考图一致
       prompt: withAspectRatioHint(
         replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
         task.params.size,
+        ratioReferenceDataUrls,
       ),
       params: task.params,
       nativeTransparentBackground: task.params.transparent_output && !task.transparentOutput,

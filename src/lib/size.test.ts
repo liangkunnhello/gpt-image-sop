@@ -65,4 +65,24 @@ describe('withAspectRatioHint', () => {
     const once = withAspectRatioHint('Draw a cat.', '1024x1024')
     expect(withAspectRatioHint(once, '1024x1024')).toBe(once)
   })
+
+  it('falls back to the first reference image when size is auto', () => {
+    const bytes = new Uint8Array(33)
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+    bytes.set([0, 0, 0, 13], 8)
+    bytes.set([0x49, 0x48, 0x44, 0x52], 12)
+    new DataView(bytes.buffer).setUint32(16, 2160)
+    new DataView(bytes.buffer).setUint32(20, 3840)
+    let bin = ''
+    for (const b of bytes) bin += String.fromCharCode(b)
+    const ref = `data:image/png;base64,${btoa(bin)}`
+
+    const hinted = withAspectRatioHint('Draw a cat.', 'auto', [ref])
+    expect(hinted).toContain('9:16')
+    expect(hinted).toContain('竖版构图')
+    expect(hinted).toContain('与参考图保持一致')
+
+    // 没有参考图时保持原样
+    expect(withAspectRatioHint('Draw a cat.', 'auto', [])).toBe('Draw a cat.')
+  })
 })
