@@ -17,6 +17,7 @@ import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { getApiProviderLabel } from '../lib/apiProfiles'
 import { openImagesFolder } from '../lib/openImagesFolder'
+import { useClipStore } from '../lib/clipSimilarity'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
@@ -346,6 +347,18 @@ export default function DetailModal() {
     setDetailTaskId(null)
   }
 
+  const clipScores = useClipStore((s) => s.scores)
+  const clipLimit = useClipStore((s) => s.limit)
+  const ensureClip = useClipStore((s) => s.ensure)
+
+  useEffect(() => {
+    if (!task) return
+    // 同方向的图放一起比才有意义，数量不够就退到全部成品
+    const sameDirection = tasks.filter((item) => item.status === 'done' && item.sopDirectionId === task.sopDirectionId)
+    const scope = sameDirection.length >= 2 ? sameDirection : tasks.filter((item) => item.status === 'done')
+    ensureClip(scope)
+  }, [task?.id, ensureClip, tasks])
+
   const handleOpenFolder = async (dir: 'finished' | 'images') => {
     const result = await openImagesFolder(dir)
     if (result.ok) return
@@ -613,6 +626,16 @@ export default function DetailModal() {
                         <span className="absolute bottom-1 right-1 rounded bg-black/55 px-1 py-0.5 font-mono text-[9px] leading-none text-white">
                           {index + 1}
                         </span>
+                        {clipScores[slot.imageId] && (
+                          <span
+                            className={`absolute bottom-1 left-1 rounded px-1 py-0.5 text-[9px] font-medium leading-none text-white ${
+                              clipScores[slot.imageId].max > clipLimit ? 'bg-red-500/85' : 'bg-black/55'
+                            }`}
+                            title={`与最像的一张重复度 ${Math.round(clipScores[slot.imageId].max * 100)}%，同批平均 ${Math.round(clipScores[slot.imageId].mean * 100)}%`}
+                          >
+                            重复 {Math.round(clipScores[slot.imageId].max * 100)}%
+                          </span>
+                        )}
                       </button>
                     )
                   })}

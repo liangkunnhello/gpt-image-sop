@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
 import { useStore, retryTask } from '../store'
+import { useClipStore } from '../lib/clipSimilarity'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { useNearViewport } from '../hooks/useNearViewport'
 import { formatImageRatio } from '../lib/size'
@@ -83,6 +84,16 @@ export default function TaskCard({
   const settings = useStore((s) => s.settings)
   const openFavoritePicker = useStore((s) => s.openFavoritePicker)
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
+  const clipScores = useClipStore((s) => s.scores)
+  const clipLimit = useClipStore((s) => s.limit)
+  // 卡片显示这张任务的平均重复度：自己几张图的重复度取平均
+  const clipAverage = (() => {
+    const values = task.outputImages
+      .map((id) => clipScores[id]?.max)
+      .filter((value): value is number => typeof value === 'number')
+    if (!values.length) return null
+    return values.reduce((sum, value) => sum + value, 0) / values.length
+  })()
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -530,7 +541,18 @@ export default function TaskCard({
                   loading="lazy"
                   alt=""
                 />
-              )}              {(hasPartialOutputFailure || task.outputImages.length > 1) && (
+              )}
+              {clipAverage != null && (
+                <span
+                  className={`absolute bottom-1 left-1 rounded px-1 py-0.5 text-[10px] font-medium text-white ${
+                    clipAverage > clipLimit ? 'bg-red-500/85' : 'bg-black/60'
+                  }`}
+                  title={`平均重复度 ${Math.round(clipAverage * 100)}%（图片左下角可看单张明细）`}
+                >
+                  重复 {Math.round(clipAverage * 100)}%
+                </span>
+              )}
+              {(hasPartialOutputFailure || task.outputImages.length > 1) && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
                   {hasPartialOutputFailure ? <>{requestedOutputCount} | <span className="font-semibold text-yellow-300">{outputSuccessCount}</span></> : task.outputImages.length}
                 </span>

@@ -7,6 +7,7 @@ import { groupSopTasks } from '../lib/sopGroup'
 import { collectSubtreeIds, UNASSIGNED_FILTER, useSopStore } from '../lib/sopStore'
 import { useVirtualGrid } from '../hooks/useVirtualGrid'
 import TaskCard from './TaskCard'
+import { useClipStore } from '../lib/clipSimilarity'
 
 export default function TaskGrid() {
   const tasks = useStore((s) => s.tasks)
@@ -64,6 +65,13 @@ export default function TaskGrid() {
   }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId, defaultFavoriteCollectionId, directionFilter, activeFilterId])
   // 同一份 SOP 生成的多个任务合并成一张卡，其余任务原样展示
   const displayTasks = useMemo(() => groupSopTasks(filteredTasks), [filteredTasks])
+
+  // 后台算一次当前视图的 CLIP 重复度，算完各自卡片会显示平均重复度
+  const ensureClip = useClipStore((s) => s.ensure)
+  useEffect(() => {
+    if (!filteredTasks.length) return
+    ensureClip(filteredTasks)
+  }, [ensureClip, filteredTasks])
   // 框选的事件处理只在挂载时注册，通过 ref 读取最新列表
   const filteredTasksRef = useRef(displayTasks)
   filteredTasksRef.current = displayTasks
