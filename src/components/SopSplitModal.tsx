@@ -51,7 +51,9 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
 
   const [mode, setMode] = useState<SplitMode>('one')
   const [customCount, setCustomCount] = useState(String(Math.max(1, Math.min(4, imageCount))))
-  const [perGroup, setPerGroup] = useState('5')
+  // SOP 模式下「出几张图」只由这个值决定，跟输入框的数量不再是两个数
+  const promptsPerGroup = useSopStore((s) => s.promptsPerGroup)
+  const setPromptsPerGroup = useSopStore((s) => s.setPromptsPerGroup)
 
   const groupCount = mode === 'one'
     ? 1
@@ -164,11 +166,11 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               type="number"
               min={1}
               max={30}
-              value={perGroup}
-              onChange={(e) => setPerGroup(e.target.value)}
+              value={String(promptsPerGroup)}
+              onChange={(e) => setPromptsPerGroup(Number(e.target.value) || 1)}
               className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
             />
-            <span className="text-[11px] text-gray-400">每条提示词出一张，共约 {groupCount * (Number(perGroup) || 0)} 张</span>
+            <span className="text-[11px] text-gray-400">每条提示词出一张，共约 {groupCount * promptsPerGroup} 张</span>
           </div>
 
           <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
@@ -211,7 +213,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               directionId: currentDirectionId,
               systemPromptText: systemPromptText.trim(),
               groupCount,
-              promptsPerGroup: Math.max(1, Number(perGroup) || 1),
+              promptsPerGroup,
               ignoreCompliance,
               useImageSellingPoints,
             })}

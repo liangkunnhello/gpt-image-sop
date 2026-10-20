@@ -117,6 +117,7 @@ export default function InputParamsPanel({
   moderationHint,
   moderationDisabled,
   agentAutoImageCount,
+  hideCount,
   outputImageLimit,
   nInput,
   setNInputFocused,
@@ -167,6 +168,8 @@ export default function InputParamsPanel({
   moderationHint: HintTooltipState
   moderationDisabled: boolean
   agentAutoImageCount: boolean
+  /** SOP 模式：出图数量改由生成弹窗决定，这里不再显示 */
+  hideCount?: boolean
   outputImageLimit: number
   nInput: string
   setNInputFocused: (focused: boolean) => void
@@ -270,6 +273,7 @@ export default function InputParamsPanel({
           text={isFalProvider ? <>fal.ai 不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 质量参数</> : 'Codex CLI 不支持质量参数'}
         />
       </div>
+      {!hideCount && (
       <label
         className={`relative flex items-center max-sm:flex-auto sm:shrink-0 ${agentAutoImageCount ? CHIP_DISABLED_CLASS : `${CHIP_CLASS} cursor-text`}`}
         onMouseEnter={() => { showAgentNHint(); streamConcurrentHint.show() }}
@@ -312,6 +316,7 @@ export default function InputParamsPanel({
         <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
         <ButtonTooltip visible={streamConcurrentByN && streamConcurrentHint.visible && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
       </label>
+      )}
       <ParamPopoverChip label="更多" summary={moreSummary} className="sm:min-w-[5rem]">
             <div className={ROW_CLASS}>
               <span className={ROW_LABEL_CLASS}>格式</span>

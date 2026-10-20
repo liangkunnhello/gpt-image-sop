@@ -1766,6 +1766,7 @@ export default function InputBar() {
       moderationHint={moderationHint}
       moderationDisabled={moderationDisabled}
       agentAutoImageCount={agentAutoImageCount}
+      hideCount={sopMode}
       outputImageLimit={outputImageLimit}
       nInput={nInput}
       setNInputFocused={setNInputFocused}

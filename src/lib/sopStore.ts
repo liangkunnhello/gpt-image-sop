@@ -79,7 +79,10 @@ interface SopState {
   ignoreCompliance: boolean
   /** 生成时使用参考图上的卖点文案，默认关闭，卖点以上方选择器为准 */
   useImageSellingPoints: boolean
+  /** 每张任务卡生成几条提示词（=几张图），SOP 模式下唯一的数量来源 */
+  promptsPerGroup: number
   setSopMode: (value: boolean) => void
+  setPromptsPerGroup: (value: number) => void
   setIgnoreCompliance: (value: boolean) => void
   setUseImageSellingPoints: (value: boolean) => void
   setProgress: (value: SopState['progress']) => void
@@ -113,7 +116,9 @@ export const useSopStore = create<SopState>()(
       defaultPick: {},
       ignoreCompliance: true,
       useImageSellingPoints: false,
+      promptsPerGroup: 5,
       setSopMode: (value) => set({ sopMode: value }),
+      setPromptsPerGroup: (value) => set({ promptsPerGroup: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
       setIgnoreCompliance: (value) => set({ ignoreCompliance: value }),
       setUseImageSellingPoints: (value) => set({ useImageSellingPoints: value }),
       setProgress: (value) => set({ progress: value }),
@@ -215,7 +220,7 @@ export const useSopStore = create<SopState>()(
         return { ...state, systemPrompts: migrated } as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints }),
+      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, promptsPerGroup: state.promptsPerGroup }),
     },
   ),
 )
