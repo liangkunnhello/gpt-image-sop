@@ -86,6 +86,14 @@ export default function TaskCard({
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
   const clipScores = useClipStore((s) => s.scores)
   const clipLimit = useClipStore((s) => s.limit)
+  const clipQc = useClipStore((s) => s.qc)
+  const qcWorst = (() => {
+    const list = task.outputImages.map((id) => clipQc[id]).filter(Boolean)
+    if (!list.length) return null
+    return list.find((item) => item.verdict === 'fail')
+      ?? list.find((item) => item.verdict === 'unsure')
+      ?? list[0]
+  })()
   // 卡片显示这张任务的平均重复度：自己几张图的重复度取平均
   const clipAverage = (() => {
     const values = task.outputImages
@@ -542,15 +550,33 @@ export default function TaskCard({
                   alt=""
                 />
               )}
-              {clipAverage != null && (
-                <span
-                  className={`absolute bottom-1 left-1 rounded px-1 py-0.5 text-[10px] font-medium text-white ${
-                    clipAverage > clipLimit ? 'bg-red-500/85' : 'bg-black/60'
-                  }`}
-                  title={`平均重复度 ${Math.round(clipAverage * 100)}%（图片左下角可看单张明细）`}
-                >
-                  重复 {Math.round(clipAverage * 100)}%
-                </span>
+              {(qcWorst || clipAverage != null) && (
+                <div className="absolute bottom-1 left-1 flex items-center gap-1">
+                  {qcWorst && (
+                    <span
+                      className={`rounded px-1 py-0.5 text-[10px] font-medium text-white ${
+                        qcWorst.verdict === 'fail'
+                          ? 'bg-red-500/85'
+                          : qcWorst.verdict === 'unsure'
+                            ? 'bg-amber-500/85'
+                            : 'bg-emerald-600/85'
+                      }`}
+                      title={qcWorst.reason || '质检结论'}
+                    >
+                      {qcWorst.verdict === 'fail' ? '不合格' : qcWorst.verdict === 'unsure' ? '待定' : '合格'}
+                    </span>
+                  )}
+                  {clipAverage != null && (
+                    <span
+                      className={`rounded px-1 py-0.5 text-[10px] font-medium text-white ${
+                        clipAverage > clipLimit ? 'bg-red-500/85' : 'bg-black/60'
+                      }`}
+                      title={`平均重复度 ${Math.round(clipAverage * 100)}%（详情里可看单张）`}
+                    >
+                      重复 {Math.round(clipAverage * 100)}%
+                    </span>
+                  )}
+                </div>
               )}
               {(hasPartialOutputFailure || task.outputImages.length > 1) && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">

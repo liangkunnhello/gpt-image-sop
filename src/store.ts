@@ -79,6 +79,7 @@ import { applyPostTemplate, productIdForDirection } from './lib/applyPostTemplat
 import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage } from './lib/postTemplate'
 import { saveFinishedCopy } from './lib/openImagesFolder'
+import { useClipStore } from './lib/clipSimilarity'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
 import { pickSaveDir, saveFile, saveFileToDir, type SaveOptions } from './lib/saveFile'
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
@@ -3879,6 +3880,17 @@ async function executeTask(taskId: string) {
       customRecoverable: false,
     })
     void deleteUnreferencedImageIds(partialImageIdsToClean)
+
+    // 出完图立刻排进后台：先质检、再算重复度，不阻塞下一个任务
+    if (outputIds.length) {
+      const doneTask = useStore.getState().tasks.find((item) => item.id === taskId)
+      if (doneTask) {
+        const peers = useStore.getState().tasks
+          .filter((item) => item.id !== taskId && item.status === 'done' && item.sopDirectionId && item.sopDirectionId === doneTask.sopDirectionId)
+          .slice(0, 12)
+        useClipStore.getState().enqueueTask(doneTask, peers)
+      }
+    }
 
     const failedCount = result.failedRequests?.length ?? 0
     const completionMessage = failedCount > 0

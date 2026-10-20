@@ -348,6 +348,7 @@ export default function DetailModal() {
   }
 
   const clipScores = useClipStore((s) => s.scores)
+  const clipQc = useClipStore((s) => s.qc)
   const clipLimit = useClipStore((s) => s.limit)
   const ensureClip = useClipStore((s) => s.ensure)
 
@@ -626,15 +627,33 @@ export default function DetailModal() {
                         <span className="absolute bottom-1 right-1 rounded bg-black/55 px-1 py-0.5 font-mono text-[9px] leading-none text-white">
                           {index + 1}
                         </span>
-                        {clipScores[slot.imageId] && (
-                          <span
-                            className={`absolute bottom-1 left-1 rounded px-1 py-0.5 text-[9px] font-medium leading-none text-white ${
-                              clipScores[slot.imageId].max > clipLimit ? 'bg-red-500/85' : 'bg-black/55'
-                            }`}
-                            title={`与最像的一张重复度 ${Math.round(clipScores[slot.imageId].max * 100)}%，同批平均 ${Math.round(clipScores[slot.imageId].mean * 100)}%`}
-                          >
-                            重复 {Math.round(clipScores[slot.imageId].max * 100)}%
-                          </span>
+                        {(clipQc[slot.imageId] || clipScores[slot.imageId]) && (
+                          <div className="absolute bottom-1 left-1 flex items-center gap-1">
+                            {clipQc[slot.imageId] && (
+                              <span
+                                className={`rounded px-1 py-0.5 text-[9px] font-medium leading-none text-white ${
+                                  clipQc[slot.imageId].verdict === 'fail'
+                                    ? 'bg-red-500/85'
+                                    : clipQc[slot.imageId].verdict === 'unsure'
+                                      ? 'bg-amber-500/85'
+                                      : 'bg-emerald-600/85'
+                                }`}
+                                title={clipQc[slot.imageId].reason || '质检结论'}
+                              >
+                                {clipQc[slot.imageId].verdict === 'fail' ? '不合格' : clipQc[slot.imageId].verdict === 'unsure' ? '待定' : '合格'}
+                              </span>
+                            )}
+                            {clipScores[slot.imageId] && (
+                              <span
+                                className={`rounded px-1 py-0.5 text-[9px] font-medium leading-none text-white ${
+                                  clipScores[slot.imageId].max > clipLimit ? 'bg-red-500/85' : 'bg-black/55'
+                                }`}
+                                title={`与最像的一张重复度 ${Math.round(clipScores[slot.imageId].max * 100)}%，同批平均 ${Math.round(clipScores[slot.imageId].mean * 100)}%`}
+                              >
+                                重复 {Math.round(clipScores[slot.imageId].max * 100)}%
+                              </span>
+                            )}
+                          </div>
                         )}
                       </button>
                     )

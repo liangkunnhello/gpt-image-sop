@@ -9,6 +9,14 @@ const MAX_IMAGES = 36
 /** 送给 CLIP 前先缩到这个边长，既快又不影响判断 */
 const THUMB_SIZE = 384
 
+export type QcVerdict = 'pass' | 'fail' | 'unsure'
+
+export interface QcResult {
+  verdict: QcVerdict
+  reason: string
+  confidence?: number
+}
+
 export interface ClipScore {
   /** 与同批其他图的平均相似度 */
   mean: number
@@ -19,11 +27,25 @@ export interface ClipScore {
 
 interface ClipState {
   scores: Record<string, ClipScore>
+  /** 质检结果，按图片 id 存 */
+  qc: Record<string, QcResult>
   running: boolean
   error: string
   limit: number
   ensure: (tasks: TaskRecord[]) => void
   scoreOfTask: (task: TaskRecord) => number | null
+  /** 任务出完图后调用：后台串行跑质检 + 重复度；peers 是同方向的历史任务 */
+  enqueueTask: (task: TaskRecord, peers: TaskRecord[]) => void
+  qcOfTask: (task: TaskRecord) => QcResult | null
+  queued: number
+}
+
+/** 后台任务串行执行，避免同时开一堆模型请求 */
+let chain: Promise<void> = Promise.resolve()
+function enqueue(fn: () => Promise<void>) {
+  chain = chain.then(fn).catch((err) => {
+    console.warn('后台质检/重复度失败', err)
+  })
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -58,9 +80,11 @@ async function toThumb(dataUrl: string): Promise<string | null> {
 
 export const useClipStore = create<ClipState>()((set, get) => ({
   scores: {},
+  qc: {},
   running: false,
   error: '',
   limit: 0.92,
+  queued: 0,
 
   /** 对还没算过的任务图做一次 CLIP 相似度，结果按图片 id 缓存 */
   ensure: (tasks: TaskRecord[]) => {
@@ -125,6 +149,36 @@ export const useClipStore = create<ClipState>()((set, get) => ({
     })()
   },
 
+  /** 任务出完图就排进后台队列，一张一张串行处理 */
+  enqueueTask: (task: TaskRecord, peers: TaskRecord[]) => {
+    const imageIds = task.outputImages.filter(Boolean)
+    if (!imageIds.length) return
+    set((s) => ({ queued: s.queued + imageIds.length }))
+    enqueue(async () => {
+      for (const imageId of imageIds) {
+        try {
+          const dataUrl = await ensureImageCached(imageId)
+          if (!dataUrl) continue
+          if (!useClipStore.getState().qc[imageId]) await runQc(dataUrl, imageId)
+          if (!useClipStore.getState().scores[imageId]) await runClipOne(dataUrl, imageId, peers)
+        } finally {
+          set((s) => ({ queued: Math.max(0, s.queued - 1) }))
+        }
+      }
+    })
+  },
+
+  /** 任务整体质检结论：取最差的一张（fail > unsure > pass） */
+  qcOfTask: (task: TaskRecord) => {
+    const { qc } = get()
+    const list = task.outputImages.map((id) => qc[id]).filter(Boolean)
+    if (!list.length) return null
+    const worst = list.find((item) => item.verdict === 'fail')
+      ?? list.find((item) => item.verdict === 'unsure')
+      ?? list[0]
+    return worst
+  },
+
   /** 任务的平均重复度：它自己几张图的重复度取平均；一张都没算出来返回 null */
   scoreOfTask: (task: TaskRecord) => {
     const { scores } = get()
@@ -137,4 +191,85 @@ export const useClipStore = create<ClipState>()((set, get) => ({
 export function formatClipPercent(value: number | null) {
   if (value == null) return ''
   return `${Math.round(value * 100)}%`
+}
+
+
+async function runQc(dataUrl: string, imageId: string) {
+  try {
+    const res = await fetch(`${SIDECAR}/api/qc-image`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataUrl }),
+      signal: AbortSignal.timeout(150000),
+    })
+    const json = await res.json() as { ok?: boolean; result?: { verdict?: string; reason?: string; confidence?: number } }
+    const result = json?.result
+    if (!result) return
+    const verdict: QcVerdict = result.verdict === 'pass' || result.verdict === 'fail' || result.verdict === 'unsure'
+      ? result.verdict
+      : 'unsure'
+    useClipStore.setState((state) => ({
+      qc: {
+        ...state.qc,
+        [imageId]: {
+          verdict,
+          reason: String(result.reason || ''),
+          confidence: typeof result.confidence === 'number' ? result.confidence : undefined,
+        },
+      },
+    }))
+  } catch {
+    // 质检失败留空，不打扰用户
+  }
+}
+
+/** 只算这一张与同方向历史图的重复度，避免每次重算整批 */
+async function runClipOne(dataUrl: string, imageId: string, peers: TaskRecord[]) {
+  try {
+    const peerIds: string[] = []
+    for (const peer of peers) {
+      for (const id of peer.outputImages) {
+        if (id !== imageId && !peerIds.includes(id)) peerIds.push(id)
+        if (peerIds.length >= 10) break
+      }
+      if (peerIds.length >= 10) break
+    }
+    if (!peerIds.length) return
+
+    const selfThumb = await toThumb(dataUrl)
+    if (!selfThumb) return
+    const items: string[] = [selfThumb]
+    for (const id of peerIds) {
+      const peerDataUrl = await ensureImageCached(id)
+      if (!peerDataUrl) continue
+      const thumb = await toThumb(peerDataUrl)
+      if (thumb) items.push(thumb)
+    }
+    if (items.length < 2) return
+
+    const res = await fetch(`${SIDECAR}/api/clip-similar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: useClipStore.getState().limit, items: items.map((dataUrl) => ({ dataUrl })) }),
+      signal: AbortSignal.timeout(180000),
+    })
+    const json = await res.json() as {
+      ok?: boolean
+      perImage?: Record<string, { mean: number; max: number; nearest?: string }>
+    }
+    const self = json?.perImage?.['0']
+    if (!json?.ok || !self) return
+    useClipStore.setState((state) => ({
+      scores: {
+        ...state.scores,
+        [imageId]: {
+          mean: self.mean,
+          max: self.max,
+          nearest: peerIds[Number(String(self.nearest || '').replace(/\.[a-z]+$/i, '')) - 1],
+        },
+      },
+    }))
+  } catch {
+    // 静默失败，下次进详情还会补算
+  }
 }
