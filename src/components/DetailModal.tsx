@@ -16,6 +16,7 @@ import { downloadImageEntriesAsZip, downloadImageIds, getDownloadErrorMessage, g
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { getApiProviderLabel } from '../lib/apiProfiles'
+import { openImagesFolder } from '../lib/openImagesFolder'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
@@ -343,6 +344,16 @@ export default function DetailModal() {
   const handleEdit = () => {
     editOutputs(task)
     setDetailTaskId(null)
+  }
+
+  const handleOpenFolder = async () => {
+    const result = await openImagesFolder()
+    if (result.ok) return
+    if (result.webOnly) {
+      showToast('网页版的图片存在浏览器里，没有本地文件夹；要用这个按钮请用桌面客户端', 'info')
+      return
+    }
+    showToast(`打开文件夹失败：${result.error || '未知原因'}${result.path ? `（路径 ${result.path}）` : ''}`, 'error')
   }
 
   const handleDelete = () => {
@@ -1212,10 +1223,20 @@ export default function DetailModal() {
             </button>
             <button
               onClick={handleDelete}
-              className="col-span-3 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
+              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
             >
               <TrashIcon className="w-4 h-4 flex-shrink-0" />
               删除任务
+            </button>
+            <button
+              onClick={() => void handleOpenFolder()}
+              className="col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 transition hover:bg-blue-50 hover:text-blue-500 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
+              title="打开成品图所在文件夹"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18" />
+              </svg>
             </button>
             <button
               onClick={handleToggleFavorite}
