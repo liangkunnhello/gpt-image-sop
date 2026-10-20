@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { NO_PRESET, useSopStore } from '../lib/sopStore'
+import AiRewriteBar from './AiRewriteBar'
 import { splitEven } from '../lib/sopPipeline'
 
 export interface SopRunOptions {
@@ -168,6 +169,24 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               placeholder="写这个方向通用的系统提示词，例如：你是京东保品牌视觉，主色墨绿，标题必须含「赔付总限额600万」…"
               className="w-full resize-y rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-300 dark:border-white/10 dark:bg-gray-800 dark:text-gray-200 dark:placeholder:text-gray-600"
             />
+            <div className="mt-1.5">
+              <AiRewriteBar
+                value={systemPromptText}
+                onDone={(next) => {
+                  const base = selectedPrompt?.name || '系统提示词'
+                  const existing = new Set(options.map((entry) => entry.name))
+                  let name = `${base}（AI）`
+                  let seq = 2
+                  while (existing.has(name)) {
+                    name = `${base}（AI）${seq}`
+                    seq += 1
+                  }
+                  const id = addSystemPrompt(currentDirectionId, name, next)
+                  setPromptId(id)
+                  setDraft('')
+                }}
+              />
+            </div>
           </div>
 
           <div>

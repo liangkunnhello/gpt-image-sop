@@ -4,6 +4,7 @@ import type { SopPick } from '../lib/sopStore'
 import { NO_PRESET, useSopStore } from '../lib/sopStore'
 import type { SopSystemPrompt } from '../types'
 import { useStore } from '../store'
+import AiRewriteBar from './AiRewriteBar'
 
 /** 按「默认项 → 上次使用 → 第一项」的顺序决定当前系统提示词 */
 export function resolveSystemPrompt(
@@ -152,6 +153,23 @@ export default function SopSystemPromptPicker({ directionId }: Props) {
                     onChange={(e) => setDraftContent(e.target.value)}
                     rows={4}
                     className="w-full resize-y rounded border border-gray-200 px-1.5 py-1 text-xs dark:border-white/10 dark:bg-gray-700 dark:text-gray-100"
+                  />
+                  <AiRewriteBar
+                    value={draftContent}
+                    onDone={(next) => {
+                      const base = draftName.trim() || item.name
+                      const existing = new Set(list.map((entry) => entry.name))
+                      let name = `${base}（AI）`
+                      let seq = 2
+                      while (existing.has(name)) {
+                        name = `${base}（AI）${seq}`
+                        seq += 1
+                      }
+                      const id = addSystemPrompt(directionId, name, next)
+                      setPick(directionId, { ...lastPick[directionId], promptId: id })
+                      setEditingId('')
+                      showToast(`已另存为新版本「${name}」，原内容未改动`, 'success')
+                    }}
                   />
                   <div className="flex justify-end gap-1">
                     <button type="button" onClick={() => setEditingId('')} className="rounded px-2 py-0.5 text-[11px] text-gray-500 hover:bg-gray-200 dark:hover:bg-white/10">取消</button>

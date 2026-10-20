@@ -100,6 +100,20 @@ function sopSystem(ignoreCompliance: boolean, useImageSellingPoints: boolean) {
 }
 
 /** 第一步：参考图 + 系统提示词 → 生图 SOP */
+/** 让模型按一句话要求改写一段正文，用于卖点 / 风格 / 系统提示词的「AI 修改」 */
+export async function rewriteText(profile: ApiProfile, original: string, instruction: string): Promise<string> {
+  const system = [
+    '你是资深广告文案编辑。用户会给你一段原文和一条修改要求，你要严格按修改要求改写这段原文。',
+    '只输出改写后的正文，不要任何解释、不要加引号、不要加小标题、不要用代码块包裹。',
+    '除非修改要求明确要求增删，否则保留原文的结构、关键信息和语气。',
+  ].join('\n')
+  const user = `【原文】\n${original.trim()}\n\n【修改要求】\n${instruction.trim()}`
+  return chat(profile, [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ])
+}
+
 export async function generateSop(
   profile: ApiProfile,
   systemPrompt: string,
