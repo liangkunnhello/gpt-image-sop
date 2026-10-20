@@ -93,7 +93,7 @@ interface SopState {
   setDefaultPick: (directionId: string, pick: SopPick) => void
   addNode: (parentId: string | null, name: string, kind: SopDirectionNode['kind']) => string
   removeNode: (id: string) => void
-  addSystemPrompt: (directionId: string, name: string, content: string) => string
+  addSystemPrompt: (productId: string, name: string, content: string) => string
   updateSystemPrompt: (id: string, patch: Partial<Pick<SopSystemPrompt, 'name' | 'content'>>) => void
   removeSystemPrompt: (id: string) => void
 }
@@ -174,14 +174,15 @@ export const useSopStore = create<SopState>()(
           }
           return {
             directions: state.directions.filter((node) => !doomed.has(node.id)),
-            systemPrompts: state.systemPrompts.filter((item) => !doomed.has(item.directionId)),
+            // 系统提示词挂在产品上：删方向不动它，删产品/类目才跟着清
+            systemPrompts: state.systemPrompts.filter((item) => !doomed.has(item.productId)),
           }
         })
       },
-      addSystemPrompt: (directionId, name, content) => {
+      addSystemPrompt: (productId, name, content) => {
         const id = newId('sys')
         set((state) => ({
-          systemPrompts: [...state.systemPrompts, { id, directionId, name, content, updatedAt: Date.now() }],
+          systemPrompts: [...state.systemPrompts, { id, productId, name, content, updatedAt: Date.now() }],
         }))
         return id
       },
@@ -198,6 +199,21 @@ export const useSopStore = create<SopState>()(
     }),
     {
       name: 'gpt-image-sop-store',
+      // v2：系统提示词从「方向级」改为「产品级」
+      version: 2,
+      migrate: (persisted, version) => {
+        const state = persisted as Partial<SopState> | undefined
+        if (!state?.systemPrompts?.length) return state as SopState
+        if (version >= 2) return state as SopState
+        const byId = new Map((state.directions ?? []).map((node) => [node.id, node]))
+        const migrated = state.systemPrompts.map((item) => {
+          if (item.productId) return item
+          const node = item.directionId ? byId.get(item.directionId) : undefined
+          const productId = node?.kind === 'direction' ? node.parentId ?? '' : node?.id ?? ''
+          return { ...item, productId }
+        }).filter((item) => Boolean(item.productId))
+        return { ...state, systemPrompts: migrated } as SopState
+      },
       // 进度是运行时状态，不落盘
       partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints }),
     },

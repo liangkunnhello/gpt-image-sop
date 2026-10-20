@@ -1876,7 +1876,7 @@ export default function InputBar() {
 
           {sopMode && currentDirection && currentProduct && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <SopSystemPromptPicker directionId={currentDirection.id} />
+              <SopSystemPromptPicker productId={currentProduct.id} directionId={currentDirection.id} />
               <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} productId={currentProduct.id} />
               <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} productId={currentProduct.id} />
             </div>

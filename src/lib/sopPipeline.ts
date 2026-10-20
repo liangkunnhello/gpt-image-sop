@@ -100,18 +100,50 @@ function sopSystem(ignoreCompliance: boolean, useImageSellingPoints: boolean) {
 }
 
 /** 第一步：参考图 + 系统提示词 → 生图 SOP */
-/** 让模型按一句话要求改写一段正文，用于卖点 / 风格 / 系统提示词的「AI 修改」 */
-export async function rewriteText(profile: ApiProfile, original: string, instruction: string): Promise<string> {
+export interface RewriteResult {
+  /** 模型给的新名称，解析不到时为空串 */
+  name: string
+  content: string
+}
+
+/**
+ * 让模型按一句话要求同时改写「名称 + 正文」，用于卖点 / 风格 / 系统提示词的「AI 修改」。
+ * 输出约定：第一行是名称，空一行，之后是正文。
+ */
+export async function rewriteText(
+  profile: ApiProfile,
+  original: string,
+  instruction: string,
+  currentName = '',
+): Promise<RewriteResult> {
   const system = [
-    '你是资深广告文案编辑。用户会给你一段原文和一条修改要求，你要严格按修改要求改写这段原文。',
-    '只输出改写后的正文，不要任何解释、不要加引号、不要加小标题、不要用代码块包裹。',
+    '你是资深广告文案编辑。用户会给你一段原文（可能带现有名称）和一条修改要求，你要按要求同时改写名称和正文。',
+    '输出格式必须严格是：第一行只写新的名称（不超过 16 个字，不要写「标题：」这类前缀）；第二行空一行；从第三行开始是新的正文。',
+    '不要输出任何解释、不要加引号、不要用小标题、不要用代码块包裹。',
     '除非修改要求明确要求增删，否则保留原文的结构、关键信息和语气。',
   ].join('\n')
-  const user = `【原文】\n${original.trim()}\n\n【修改要求】\n${instruction.trim()}`
-  return chat(profile, [
+  const user = [
+    currentName.trim() ? `【现有名称】\n${currentName.trim()}` : '',
+    `【原文】\n${original.trim()}`,
+    `【修改要求】\n${instruction.trim()}`,
+  ].filter(Boolean).join('\n\n')
+
+  const raw = await chat(profile, [
     { role: 'system', content: system },
     { role: 'user', content: user },
   ])
+
+  // 必须出现「名称 + 空行 + 正文」才算解析成功，否则整段当正文，名称交给调用方兜底
+  const cut = raw.indexOf('\n\n')
+  if (cut < 0) return { name: '', content: raw.trim() }
+  const nameLine = raw.slice(0, cut).trim()
+    .replace(/^(标题|名称)[:：]\s*/, '')
+    .replace(/^#+\s*/, '')
+    .replace(/^[「『"']|[」』"']$/g, '')
+    .trim()
+  const content = raw.slice(cut).trim()
+  if (!content) return { name: '', content: raw.trim() }
+  return { name: nameLine, content }
 }
 
 export async function generateSop(

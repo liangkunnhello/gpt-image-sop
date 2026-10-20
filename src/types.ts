@@ -358,7 +358,10 @@ export interface SopDirectionNode {
 /** 挂在「方向」节点下的系统提示词，同一方向可有多条 */
 export interface SopSystemPrompt {
   id: string
-  directionId: string
+  /** 所属产品：同一产品下的所有方向共用这份列表 */
+  productId: string
+  /** 旧数据遗留字段，仅用于迁移时定位产品 */
+  directionId?: string
   name: string
   content: string
   updatedAt: number

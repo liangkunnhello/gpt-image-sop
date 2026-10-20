@@ -175,16 +175,17 @@ export default function SopPresetPicker({ kind, label, directionId, productId }:
                   />
                   <AiRewriteBar
                     value={draftContent}
-                    onDone={(next) => {
-                      const base = draftName.trim() || item.name
+                    currentName={draftName}
+                    onDone={(result) => {
+                      const base = result.name.trim() || `${draftName.trim() || item.name}（AI）`
                       const existing = new Set(list.map((entry) => entry.name))
-                      let name = `${base}（AI）`
+                      let name = base
                       let seq = 2
                       while (existing.has(name)) {
-                        name = `${base}（AI）${seq}`
+                        name = `${base} ${seq}`
                         seq += 1
                       }
-                      const id = addPreset(productId, kind, name, next)
+                      const id = addPreset(productId, kind, name, result.content)
                       setPick(directionId, {
                         ...lastPick[directionId],
                         ...(kind === 'point' ? { pointId: id } : { styleId: id }),

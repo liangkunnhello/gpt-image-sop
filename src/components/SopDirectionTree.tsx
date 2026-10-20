@@ -34,7 +34,7 @@ export default function SopDirectionTree() {
 
   const categories = useMemo(() => directions.filter((node) => node.kind === 'category'), [directions])
   const childrenOf = (id: string) => directions.filter((node) => node.parentId === id)
-  const promptCount = (directionId: string) => systemPrompts.filter((item) => item.directionId === directionId).length
+  const promptCount = (productId: string) => systemPrompts.filter((item) => item.productId === productId).length
 
   const counts = useMemo(() => {
     const map = new Map<string, number>()
@@ -113,7 +113,6 @@ export default function SopDirectionTree() {
     <div key={node.id} className="flex items-center pl-8">
       <button type="button" onClick={() => setActiveFilter(node.id)} className={rowClass(activeFilterId === node.id)}>
         <span className="min-w-0 flex-1 truncate">{node.name}</span>
-        {promptCount(node.id) > 0 && tailBadge(promptCount(node.id), 'accent')}
         {counts.get(node.id) ? tailBadge(counts.get(node.id) ?? 0) : <span className="shrink-0 text-[11px] tabular-nums text-gray-300">0</span>}
       </button>
       <button
@@ -255,6 +254,7 @@ export default function SopDirectionTree() {
                               <button type="button" onClick={() => setActiveFilter(product.id)} className={rowClass(activeFilterId === product.id)}>
                                 <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
                                 <span className="min-w-0 flex-1 truncate">{product.name}</span>
+                                {promptCount(product.id) > 0 && tailBadge(promptCount(product.id), 'accent')}
                                 {tailBadge(counts.get(product.id) ?? 0)}
                               </button>
                             </div>

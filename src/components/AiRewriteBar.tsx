@@ -7,12 +7,14 @@ import { useStore } from '../store'
 interface Props {
   /** 当前编辑器里的正文，作为改写的原文 */
   value: string
+  /** 当前名称，模型会一起改 */
+  currentName?: string
   /** 改写完成，交给调用方另存为新内容 */
-  onDone: (next: string) => void
+  onDone: (result: { name: string; content: string }) => void
 }
 
-/** 内嵌在编辑框里的「AI 修改」：按一句话要求改写，结果交出去另存 */
-export default function AiRewriteBar({ value, onDone }: Props) {
+/** 内嵌在编辑框里的「AI 修改」：按一句话要求改写名称和正文，结果交出去另存 */
+export default function AiRewriteBar({ value, currentName = '', onDone }: Props) {
   const settings = useStore((s) => s.settings)
   const showToast = useStore((s) => s.showToast)
   const [instruction, setInstruction] = useState('')
@@ -32,9 +34,9 @@ export default function AiRewriteBar({ value, onDone }: Props) {
     }
     setBusy(true)
     try {
-      const next = await rewriteText(profile, value, ask)
-      if (!next.trim()) throw new Error('模型返回了空内容')
-      onDone(next)
+      const result = await rewriteText(profile, value, ask, currentName)
+      if (!result.content.trim()) throw new Error('模型返回了空内容')
+      onDone(result)
       setInstruction('')
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'AI 修改失败', 'error')

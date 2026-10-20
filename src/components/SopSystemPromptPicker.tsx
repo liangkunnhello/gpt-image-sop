@@ -6,14 +6,15 @@ import type { SopSystemPrompt } from '../types'
 import { useStore } from '../store'
 import AiRewriteBar from './AiRewriteBar'
 
-/** 按「默认项 → 上次使用 → 第一项」的顺序决定当前系统提示词 */
+/** 按「默认项 → 上次使用 → 第一项」的顺序决定当前系统提示词；列表按产品共享 */
 export function resolveSystemPrompt(
   prompts: SopSystemPrompt[],
+  productId: string,
   directionId: string,
   lastPick: Record<string, SopPick>,
   defaultPick: Record<string, SopPick>,
 ) {
-  const list = prompts.filter((item) => item.directionId === directionId)
+  const list = prompts.filter((item) => item.productId === productId)
   const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
   if (pick.promptId === NO_PRESET) return undefined
   if (pick.promptId) return list.find((item) => item.id === pick.promptId)
@@ -21,10 +22,11 @@ export function resolveSystemPrompt(
 }
 
 interface Props {
+  productId: string
   directionId: string
 }
 
-export default function SopSystemPromptPicker({ directionId }: Props) {
+export default function SopSystemPromptPicker({ productId, directionId }: Props) {
   const systemPrompts = useSopStore((s) => s.systemPrompts)
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
@@ -44,12 +46,12 @@ export default function SopSystemPromptPicker({ directionId }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
 
   const list = useMemo(
-    () => systemPrompts.filter((item) => item.directionId === directionId),
-    [systemPrompts, directionId],
+    () => systemPrompts.filter((item) => item.productId === productId),
+    [systemPrompts, productId],
   )
   const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
   const isNone = pick.promptId === NO_PRESET
-  const current = resolveSystemPrompt(systemPrompts, directionId, lastPick, defaultPick)
+  const current = resolveSystemPrompt(systemPrompts, productId, directionId, lastPick, defaultPick)
 
   useEffect(() => {
     if (!open) return
@@ -80,10 +82,10 @@ export default function SopSystemPromptPicker({ directionId }: Props) {
   const createNew = () => {
     const name = newName.trim()
     if (!name) return
-    const id = addSystemPrompt(directionId, name, name)
+    const id = addSystemPrompt(productId, name, name)
     setNewName('')
     setPick(directionId, { ...lastPick[directionId], promptId: id })
-    startEdit({ id, directionId, name, content: name, updatedAt: Date.now() })
+    startEdit({ id, productId, name, content: name, updatedAt: Date.now() })
   }
 
   const copyPrompt = (item: SopSystemPrompt) => {
@@ -94,7 +96,7 @@ export default function SopSystemPromptPicker({ directionId }: Props) {
       name = `${item.name} 副本 ${seq}`
       seq += 1
     }
-    const id = addSystemPrompt(directionId, name, item.content)
+    const id = addSystemPrompt(productId, name, item.content)
     setPick(directionId, { ...lastPick[directionId], promptId: id })
     showToast(`已复制为「${name}」`, 'success')
   }
@@ -156,16 +158,17 @@ export default function SopSystemPromptPicker({ directionId }: Props) {
                   />
                   <AiRewriteBar
                     value={draftContent}
-                    onDone={(next) => {
-                      const base = draftName.trim() || item.name
+                    currentName={draftName}
+                    onDone={(result) => {
+                      const base = result.name.trim() || `${draftName.trim() || item.name}（AI）`
                       const existing = new Set(list.map((entry) => entry.name))
-                      let name = `${base}（AI）`
+                      let name = base
                       let seq = 2
                       while (existing.has(name)) {
-                        name = `${base}（AI）${seq}`
+                        name = `${base} ${seq}`
                         seq += 1
                       }
-                      const id = addSystemPrompt(directionId, name, next)
+                      const id = addSystemPrompt(productId, name, result.content)
                       setPick(directionId, { ...lastPick[directionId], promptId: id })
                       setEditingId('')
                       showToast(`已另存为新版本「${name}」，原内容未改动`, 'success')

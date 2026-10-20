@@ -46,7 +46,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
   // 系统提示词统一在输入框上方的选择器里维护，这里只负责取当前选中的那份
-  const selectedPrompt = resolveSystemPrompt(systemPrompts, currentDirectionId, lastPick, defaultPick)
+  const selectedPrompt = resolveSystemPrompt(systemPrompts, productId, currentDirectionId, lastPick, defaultPick)
   const systemPromptText = selectedPrompt?.content || ''
 
   const [mode, setMode] = useState<SplitMode>('one')
