@@ -61,7 +61,7 @@ export default defineConfig(async ({ command, mode }) => {
       host: true,
       // Tauri 开发模式的 devUrl 固定为 5173，端口被占用时直接报错而不是换端口
       strictPort: Boolean(process.env.TAURI_ENV_PLATFORM),
-      watch: { ignored: ['**/src-tauri/**', '**/cli/**'] },
+      watch: { ignored: ['**/src-tauri/**'] },
       proxy:
         devProxyConfig?.enabled
           ? {

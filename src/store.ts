@@ -80,7 +80,6 @@ import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage } from './lib/postTemplate'
 import { saveFinishedCopy } from './lib/openImagesFolder'
 import { useClipStore } from './lib/clipSimilarity'
-import { backupTaskToClient } from './lib/clientBackup'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
 import { pickSaveDir, saveFile, saveFileToDir, type SaveOptions } from './lib/saveFile'
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
@@ -3882,18 +3881,6 @@ async function executeTask(taskId: string) {
     })
     void deleteUnreferencedImageIds(partialImageIdsToClean)
 
-    // 同时落一份到客户端 data.db，浏览器存储丢了还能找回
-    if (outputDataUrls.length) {
-      void backupTaskToClient({
-        prompt: task.prompt,
-        size: task.params.size,
-        model: task.apiModel,
-        quality: task.params.quality,
-        title: task.prompt.slice(0, 24),
-        images: outputDataUrls,
-      })
-    }
-
     // 出完图立刻排进后台：先质检、再算重复度，不阻塞下一个任务
     if (outputIds.length) {
       const doneTask = useStore.getState().tasks.find((item) => item.id === taskId)
@@ -5084,66 +5071,4 @@ export function updateSopText(sopJobId: string, sopName: string, sopText: string
     task.sopJobId === sopJobId ? { ...task, sopName, sopText } : task
   )))
   for (const task of targets) void putTask({ ...task, sopName, sopText })
-}
-
-/**
- * 从桌面客户端的 data.db（走本地服务 7799）把历史任务拉进当前浏览器的库。
- * localhost 与 127.0.0.1 是两个不同的存储，切换地址后用它补齐数据。
- */
-export async function importClientTasks(): Promise<{ imported: number; skipped: number; total: number }> {
-  const SIDECAR = 'http://127.0.0.1:7799'
-  const res = await fetch(`${SIDECAR}/api/library`, { signal: AbortSignal.timeout(8000) })
-  const json = await res.json() as {
-    ok?: boolean
-    error?: string
-    items?: Array<{ id: string; prompt: string; model?: string; cover?: string; createdAt?: number }>
-  }
-  if (!json?.ok) throw new Error(json?.error || '读不到桌面客户端的数据库')
-  const items = json.items ?? []
-  const existing = new Set(useStore.getState().tasks.map((task) => task.id))
-  const created: TaskRecord[] = []
-  let skipped = 0
-
-  for (const item of items) {
-    const id = `client-${item.id}`
-    if (!item.cover || existing.has(id)) {
-      skipped += 1
-      continue
-    }
-    try {
-      const imageRes = await fetch(`${SIDECAR}/clientimg?p=${encodeURIComponent(item.cover)}`, { signal: AbortSignal.timeout(15000) })
-      if (!imageRes.ok) {
-        skipped += 1
-        continue
-      }
-      const dataUrl = await blobToDataUrl(await imageRes.blob())
-      const imageId = await storeImage(dataUrl, 'generated')
-      const size = imageSizeFromDataUrl(dataUrl)
-      const createdAt = item.createdAt || Date.now()
-      const task: TaskRecord = {
-        id,
-        prompt: item.prompt,
-        params: { ...DEFAULT_PARAMS, size: size ? `${size.width}x${size.height}` : 'auto', n: 1 },
-        inputImageIds: [],
-        outputImages: [imageId],
-        status: 'done',
-        error: null,
-        createdAt,
-        finishedAt: createdAt,
-        elapsed: 0,
-        sourceMode: 'gallery',
-        apiModel: item.model,
-      }
-      created.push(task)
-    } catch {
-      skipped += 1
-    }
-  }
-
-  if (created.length) {
-    const state = useStore.getState()
-    state.setTasks([...created, ...state.tasks])
-    for (const task of created) await putTask(task)
-  }
-  return { imported: created.length, skipped, total: items.length }
 }
