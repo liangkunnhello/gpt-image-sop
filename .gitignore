@@ -18,3 +18,5 @@ cli/.env.*.local
 cli/out/
 cli/batches/
 cli/node_modules/
+# 构建用的本地临时目录
+.tmp-build/
