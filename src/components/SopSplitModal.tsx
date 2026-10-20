@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import { NO_PRESET, useSopStore } from '../lib/sopStore'
-import AiRewriteBar from './AiRewriteBar'
+import { useSopStore } from '../lib/sopStore'
 import { splitEven } from '../lib/sopPipeline'
+import { resolveSystemPrompt } from './SopSystemPromptPicker'
 
 export interface SopRunOptions {
   directionId: string
@@ -23,8 +23,6 @@ type SplitMode = 'one' | 'perImage' | 'custom'
 export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props) {
   const directions = useSopStore((s) => s.directions)
   const systemPrompts = useSopStore((s) => s.systemPrompts)
-  const addSystemPrompt = useSopStore((s) => s.addSystemPrompt)
-  const updateSystemPrompt = useSopStore((s) => s.updateSystemPrompt)
   const ignoreCompliance = useSopStore((s) => s.ignoreCompliance)
   const setIgnoreCompliance = useSopStore((s) => s.setIgnoreCompliance)
   const useImageSellingPoints = useSopStore((s) => s.useImageSellingPoints)
@@ -45,23 +43,11 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
     ? directionId
     : productChildren.find((n) => n.kind === 'direction')?.id || ''
 
-  const options = useMemo(
-    () => systemPrompts.filter((item) => item.directionId === currentDirectionId),
-    [systemPrompts, currentDirectionId],
-  )
-  const [promptId, setPromptId] = useState('')
-  const [draft, setDraft] = useState('')
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
-  // 默认跟随输入框上方「系统提示词」的当前选择
-  const pickedPromptId = (defaultPick[currentDirectionId] ?? lastPick[currentDirectionId] ?? {}).promptId
-  const pickedPrompt = pickedPromptId === NO_PRESET
-    ? undefined
-    : pickedPromptId
-      ? options.find((item) => item.id === pickedPromptId)
-      : options[0]
-  const selectedPrompt = options.find((item) => item.id === promptId) || pickedPrompt
-  const systemPromptText = draft || selectedPrompt?.content || ''
+  // 系统提示词统一在输入框上方的选择器里维护，这里只负责取当前选中的那份
+  const selectedPrompt = resolveSystemPrompt(systemPrompts, currentDirectionId, lastPick, defaultPick)
+  const systemPromptText = selectedPrompt?.content || ''
 
   const [mode, setMode] = useState<SplitMode>('one')
   const [customCount, setCustomCount] = useState(String(Math.max(1, Math.min(4, imageCount))))
@@ -77,17 +63,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
     .map((group) => group.length)
     .join(' / ')
 
-  // 明确选了「不使用系统提示词」时允许空着跑，其余情况仍要求有内容
-  const canRun = Boolean(currentDirectionId && imageCount > 0 && (systemPromptText.trim() || pickedPromptId === NO_PRESET))
-
-  const savePrompt = () => {
-    const text = systemPromptText.trim()
-    if (!text || !currentDirectionId) return
-    const name = text.split('\n')[0].slice(0, 24) || '系统提示词'
-    if (selectedPrompt && draft) updateSystemPrompt(selectedPrompt.id, { content: text })
-    else addSystemPrompt(currentDirectionId, name, text)
-    setDraft('')
-  }
+  // 系统提示词在外面选，这里不再拦截；有方向有图就能跑
+  const canRun = Boolean(currentDirectionId && imageCount > 0)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-6" onClick={onClose}>
@@ -115,8 +92,6 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
                 onChange={(e) => {
                   setProductId(e.target.value)
                   setDirectionId('')
-                  setPromptId('')
-                  setDraft('')
                 }}
                 className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
               >
@@ -128,8 +103,6 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
                 value={currentDirectionId}
                 onChange={(e) => {
                   setDirectionId(e.target.value)
-                  setPromptId('')
-                  setDraft('')
                 }}
                 className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
               >
@@ -140,53 +113,12 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             </div>
           </div>
 
-          <div>
-            <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400">
-              <span>系统提示词</span>
-              {options.length > 0 && (
-                <select
-                  value={selectedPrompt?.id || ''}
-                  onChange={(e) => {
-                    setPromptId(e.target.value)
-                    setDraft('')
-                  }}
-                  className="max-w-[220px] rounded border border-gray-200 bg-white px-1.5 py-0.5 text-xs dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
-                >
-                  {options.map((item) => (
-                    <option key={item.id} value={item.id}>{item.name}</option>
-                  ))}
-                </select>
-              )}
-              <div className="flex-1" />
-              <button type="button" onClick={savePrompt} disabled={!systemPromptText.trim()} className="text-xs text-blue-600 hover:underline disabled:opacity-40 dark:text-blue-400">
-                {selectedPrompt ? '保存修改' : '保存为新提示词'}
-              </button>
-            </div>
-            <textarea
-              value={systemPromptText}
-              onChange={(e) => setDraft(e.target.value)}
-              rows={4}
-              placeholder="写这个方向通用的系统提示词，例如：你是京东保品牌视觉，主色墨绿，标题必须含「赔付总限额600万」…"
-              className="w-full resize-y rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-300 dark:border-white/10 dark:bg-gray-800 dark:text-gray-200 dark:placeholder:text-gray-600"
-            />
-            <div className="mt-1.5">
-              <AiRewriteBar
-                value={systemPromptText}
-                onDone={(next) => {
-                  const base = selectedPrompt?.name || '系统提示词'
-                  const existing = new Set(options.map((entry) => entry.name))
-                  let name = `${base}（AI）`
-                  let seq = 2
-                  while (existing.has(name)) {
-                    name = `${base}（AI）${seq}`
-                    seq += 1
-                  }
-                  const id = addSystemPrompt(currentDirectionId, name, next)
-                  setPromptId(id)
-                  setDraft('')
-                }}
-              />
-            </div>
+          <div className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:bg-white/[0.04] dark:text-gray-400">
+            <span className="shrink-0">系统提示词</span>
+            <span className="min-w-0 flex-1 truncate font-medium text-gray-700 dark:text-gray-200">
+              {selectedPrompt?.name ?? '未使用'}
+            </span>
+            <span className="shrink-0 text-[11px] text-gray-400">在输入框上方切换</span>
           </div>
 
           <div>
