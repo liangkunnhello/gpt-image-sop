@@ -31,6 +31,94 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
   const stageRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
 
+  // ===== 撤销 / 重做 =====
+  // 所有改动都走 commit，改动前的样子留在 past 里；拖动、连续输入按「一次操作」合并
+  const templatesRef = useRef(templates)
+  templatesRef.current = templates
+  const pastRef = useRef<PostTemplate[][]>([])
+  const futureRef = useRef<PostTemplate[][]>([])
+  /** 同一段连续操作的标记：600ms 内同 key 的改动只记一次历史 */
+  const coalesceRef = useRef<{ key: string; at: number } | null>(null)
+  const [, bumpHistory] = useState(0)
+  const refreshHistory = () => bumpHistory((value) => value + 1)
+
+  const HISTORY_LIMIT = 50
+
+  const pushHistory = (snapshot: PostTemplate[]) => {
+    pastRef.current = [...pastRef.current, snapshot].slice(-HISTORY_LIMIT)
+    futureRef.current = []
+    refreshHistory()
+  }
+
+  const commit = (next: PostTemplate[], options: { coalesceKey?: string; record?: boolean } = {}) => {
+    const prev = templatesRef.current
+    if (next === prev) return
+    if (options.record !== false) {
+      const now = Date.now()
+      const last = coalesceRef.current
+      const sameGesture = Boolean(options.coalesceKey && last && last.key === options.coalesceKey && now - last.at < 600)
+      if (!sameGesture) pushHistory(prev)
+      coalesceRef.current = options.coalesceKey ? { key: options.coalesceKey, at: now } : null
+    }
+    templatesRef.current = next
+    setTemplates(next)
+  }
+
+  const applyTemplates = (
+    updater: (prev: PostTemplate[]) => PostTemplate[],
+    options?: { coalesceKey?: string; record?: boolean },
+  ) => commit(updater(templatesRef.current), options)
+
+  const canUndo = pastRef.current.length > 0
+  const canRedo = futureRef.current.length > 0
+
+  const undo = () => {
+    const past = pastRef.current
+    if (!past.length) return
+    const snapshot = past[past.length - 1]
+    pastRef.current = past.slice(0, -1)
+    futureRef.current = [templatesRef.current, ...futureRef.current].slice(0, HISTORY_LIMIT)
+    coalesceRef.current = null
+    templatesRef.current = snapshot
+    setTemplates(snapshot)
+    // 撤销后原来选中的元素可能已经不存在
+    if (selectedId && !snapshot.some((item) => item.elements.some((element) => element.id === selectedId))) setSelectedId('')
+    refreshHistory()
+  }
+
+  const redo = () => {
+    const future = futureRef.current
+    if (!future.length) return
+    const snapshot = future[0]
+    futureRef.current = future.slice(1)
+    pastRef.current = [...pastRef.current, templatesRef.current].slice(-HISTORY_LIMIT)
+    coalesceRef.current = null
+    templatesRef.current = snapshot
+    setTemplates(snapshot)
+    if (selectedId && !snapshot.some((item) => item.elements.some((element) => element.id === selectedId))) setSelectedId('')
+    refreshHistory()
+  }
+
+  // Ctrl/⌘+Z 撤销，Ctrl/⌘+Shift+Z 或 Ctrl+Y 重做；输入框里保留浏览器自己的撤销
+  const undoRef = useRef(undo)
+  const redoRef = useRef(redo)
+  undoRef.current = undo
+  redoRef.current = redo
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+      const key = event.key.toLowerCase()
+      if (key !== 'z' && key !== 'y') return
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return
+      event.preventDefault()
+      if (key === 'y' || (key === 'z' && event.shiftKey)) redoRef.current()
+      else undoRef.current()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [])
+
   useEffect(() => {
     const el = stageRef.current
     if (!el) return
@@ -49,29 +137,37 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     [active, selectedId],
   )
 
-  const patchActive = (next: Partial<PostTemplate>) => setTemplates((prev) => prev.map((item) => (
-    item.id === active?.id ? { ...item, ...next } : item
-  )))
+  const patchActive = (next: Partial<PostTemplate>, options?: { coalesceKey?: string; record?: boolean }) => applyTemplates(
+    (prev) => prev.map((item) => (item.id === active?.id ? { ...item, ...next } : item)),
+    options,
+  )
 
-  const patchElement = (id: string, next: Partial<PostElement>) => setTemplates((prev) => prev.map((item) => (
-    item.id === active?.id
-      ? { ...item, elements: item.elements.map((element) => (element.id === id ? { ...element, ...next } : element)) }
-      : item
-  )))
+  const patchElement = (
+    id: string,
+    next: Partial<PostElement>,
+    options?: { coalesceKey?: string; record?: boolean },
+  ) => applyTemplates(
+    (prev) => prev.map((item) => (
+      item.id === active?.id
+        ? { ...item, elements: item.elements.map((element) => (element.id === id ? { ...element, ...next } : element)) }
+        : item
+    )),
+    options,
+  )
 
   const addTemplate = (width: number, height: number, label: string) => {
     const template = { ...createPostTemplate(width, height, label), enabled: true }
     // 同比例还没有默认的，就把新的一套设为默认
-    const hasDefault = templates.some((item) => item.isDefault && Math.abs(item.width / item.height - width / height) < 0.02)
+    const hasDefault = templatesRef.current.some((item) => item.isDefault && Math.abs(item.width / item.height - width / height) < 0.02)
     template.isDefault = !hasDefault
-    setTemplates((prev) => [...prev, template])
+    applyTemplates((prev) => [...prev, template])
     setActiveId(template.id)
     setSelectedId('')
   }
 
   const removeTemplate = (id: string) => {
-    setTemplates((prev) => prev.filter((item) => item.id !== id))
-    if (activeId === id) setActiveId('')
+    applyTemplates((prev) => prev.filter((item) => item.id !== id))
+    if (activeId === id) setActiveId(templatesRef.current.find((item) => item.id !== id)?.id ?? '')
   }
 
   const addElement = (kind: PostElement['kind']) => {
@@ -122,6 +218,8 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     event.preventDefault()
     event.stopPropagation()
     setSelectedId(element.id)
+    // 一次拖动只留一个历史点，中间每一帧不再单独记
+    pushHistory(templatesRef.current)
     dragRef.current = {
       id: element.id,
       startX: event.clientX,
@@ -140,7 +238,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     patchElement(drag.id, {
       x: clamp01(drag.originX + (event.clientX - drag.startX) / rect.width),
       y: clamp01(drag.originY + (event.clientY - drag.startY) / rect.height),
-    })
+    }, { record: false })
   }
 
   /** 读图片顺便记下高宽比，避让区域要靠它算预留高度 */
@@ -175,6 +273,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     onClose()
   }
 
+  const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
   const ratio = active ? active.width / active.height : 1
   // 预览按成品宽等比缩小，字号与描边都要跟着缩
   const scale = active && active.width > 0 && previewWidth > 0 ? previewWidth / active.width : 1
@@ -195,6 +294,34 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
             {enabledCount} 套启用 / 共 {templates.length} 套
           </span>
           <div className="flex-1" />
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!canUndo}
+              title={`撤销${isMac ? '（⌘Z）' : '（Ctrl+Z）'}`}
+              className="flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 text-[11px] text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 14L4 9l5-5" />
+                <path strokeLinecap="round" d="M4 9h9a6 6 0 110 12h-3" />
+              </svg>
+              撤销
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!canRedo}
+              title={`重做${isMac ? '（⌘⇧Z）' : '（Ctrl+Shift+Z）'}`}
+              className="flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 text-[11px] text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 14l5-5-5-5" />
+                <path strokeLinecap="round" d="M20 9h-9a6 6 0 100 12h3" />
+              </svg>
+              重做
+            </button>
+          </div>
           <button type="button" onClick={onClose} className="rounded-lg px-3 py-1 text-sm text-gray-500 hover:bg-gray-100 dark:hover:bg-white/[0.06]">取消</button>
           <button type="button" onClick={save} className="rounded-lg bg-blue-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-600">保存</button>
         </div>
@@ -262,8 +389,12 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                           <div
                             contentEditable
                             suppressContentEditableWarning
-                            onInput={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' })}
-                            onBlur={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' })}
+                            onInput={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' }, { coalesceKey: `text:${element.id}` })}
+                            onBlur={(e) => {
+                              // 失焦只做兜底同步，不额外记一步历史
+                              const text = e.currentTarget.textContent || ''
+                              if (text !== element.text) patchElement(element.id, { text }, { record: false })
+                            }}
                             style={{
                               position: 'relative',
                               fontFamily: POST_FONT_STACK,
@@ -313,7 +444,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                     <input
                       type="checkbox"
                       checked={item.enabled}
-                      onChange={(e) => setTemplates((prev) => prev.map((t) => (t.id === item.id ? { ...t, enabled: e.target.checked } : t)))}
+                      onChange={(e) => applyTemplates((prev) => prev.map((t) => (t.id === item.id ? { ...t, enabled: e.target.checked } : t)))}
                       className="h-3 w-3 accent-blue-500"
                     />
                     启用
@@ -321,7 +452,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                   <button
                     type="button"
                     title="设为默认"
-                    onClick={() => setTemplates((prev) => prev.map((t) => {
+                    onClick={() => applyTemplates((prev) => prev.map((t) => {
                       if (t.id === item.id) return { ...t, isDefault: true }
                       return Math.abs(t.width / t.height - item.width / item.height) < 0.02 ? { ...t, isDefault: false } : t
                     }))}
@@ -357,21 +488,21 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                   <div className="mb-1 text-[11px] font-medium text-gray-500 dark:text-gray-400">模板名称 / 尺寸</div>
                   <input
                     value={active.label}
-                    onChange={(e) => patchActive({ label: e.target.value })}
+                    onChange={(e) => patchActive({ label: e.target.value }, { coalesceKey: 'template:label' })}
                     className="mb-1 w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                   />
                   <div className="flex items-center gap-1">
                     <input
                       type="number"
                       value={active.width}
-                      onChange={(e) => patchActive({ width: Math.max(64, Number(e.target.value) || 0) })}
+                      onChange={(e) => patchActive({ width: Math.max(64, Number(e.target.value) || 0) }, { coalesceKey: 'template:width' })}
                       className="w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                     />
                     <span className="text-gray-400">×</span>
                     <input
                       type="number"
                       value={active.height}
-                      onChange={(e) => patchActive({ height: Math.max(64, Number(e.target.value) || 0) })}
+                      onChange={(e) => patchActive({ height: Math.max(64, Number(e.target.value) || 0) }, { coalesceKey: 'template:height' })}
                       className="w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                     />
                   </div>
@@ -470,7 +601,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                       <input
                         value={selected.label ?? ''}
                         placeholder={selected.kind === 'logo' ? 'Logo' : '警示语'}
-                        onChange={(e) => patchElement(selected.id, { label: e.target.value })}
+                        onChange={(e) => patchElement(selected.id, { label: e.target.value }, { coalesceKey: `label:${selected.id}` })}
                         className="min-w-0 flex-1 rounded border border-gray-200 px-1.5 py-0.5 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                       />
                     </label>
@@ -489,7 +620,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                       <>
                         <textarea
                           value={selected.text}
-                          onChange={(e) => patchElement(selected.id, { text: e.target.value })}
+                          onChange={(e) => patchElement(selected.id, { text: e.target.value }, { coalesceKey: `text:${selected.id}` })}
                           rows={3}
                           className="w-full resize-y rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                         />
@@ -501,7 +632,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                             max={Math.max(48, Math.round(active.height * 0.3))}
                             step={1}
                             value={selected.fontSize}
-                            onChange={(e) => patchElement(selected.id, { fontSize: Number(e.target.value) })}
+                            onChange={(e) => patchElement(selected.id, { fontSize: Number(e.target.value) }, { coalesceKey: `fontSize:${selected.id}` })}
                             className="flex-1 accent-blue-500"
                           />
                           <span className="flex items-center gap-0.5">
@@ -509,7 +640,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                               type="number"
                               min={8}
                               value={selected.fontSize}
-                              onChange={(e) => patchElement(selected.id, { fontSize: Math.max(1, Number(e.target.value) || 1) })}
+                              onChange={(e) => patchElement(selected.id, { fontSize: Math.max(1, Number(e.target.value) || 1) }, { coalesceKey: `fontSize:${selected.id}` })}
                               className="w-12 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                             />
                             px
@@ -520,7 +651,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                           <input
                             type="color"
                             value={selected.color}
-                            onChange={(e) => patchElement(selected.id, { color: e.target.value })}
+                            onChange={(e) => patchElement(selected.id, { color: e.target.value }, { coalesceKey: `color:${selected.id}` })}
                             className="h-6 w-10 cursor-pointer rounded border border-gray-200 dark:border-white/10"
                           />
                           <select
@@ -538,7 +669,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                           <input
                             type="color"
                             value={selected.strokeColor}
-                            onChange={(e) => patchElement(selected.id, { strokeColor: e.target.value })}
+                            onChange={(e) => patchElement(selected.id, { strokeColor: e.target.value }, { coalesceKey: `strokeColor:${selected.id}` })}
                             className="h-6 w-8 cursor-pointer rounded border border-gray-200 dark:border-white/10"
                           />
                           <input
@@ -547,7 +678,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                             max={24}
                             step={0.5}
                             value={selected.strokeWidth}
-                            onChange={(e) => patchElement(selected.id, { strokeWidth: Number(e.target.value) })}
+                            onChange={(e) => patchElement(selected.id, { strokeWidth: Number(e.target.value) }, { coalesceKey: `strokeWidth:${selected.id}` })}
                             className="flex-1 accent-blue-500"
                           />
                           <span className="flex items-center gap-0.5">
@@ -556,7 +687,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                               min={0}
                               step={0.5}
                               value={selected.strokeWidth}
-                              onChange={(e) => patchElement(selected.id, { strokeWidth: Math.max(0, Number(e.target.value) || 0) })}
+                              onChange={(e) => patchElement(selected.id, { strokeWidth: Math.max(0, Number(e.target.value) || 0) }, { coalesceKey: `strokeWidth:${selected.id}` })}
                               className="w-11 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                             />
                             px
@@ -591,7 +722,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                           max={0.6}
                           step={0.005}
                           value={selected.width}
-                          onChange={(e) => patchElement(selected.id, { width: Number(e.target.value) })}
+                          onChange={(e) => patchElement(selected.id, { width: Number(e.target.value) }, { coalesceKey: `logoWidth:${selected.id}` })}
                           className="flex-1 accent-blue-500"
                         />
                         <span className="w-8 tabular-nums">{Math.round(selected.width * 100)}%</span>
@@ -606,7 +737,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                         max={1}
                         step={0.05}
                         value={selected.opacity}
-                        onChange={(e) => patchElement(selected.id, { opacity: Number(e.target.value) })}
+                        onChange={(e) => patchElement(selected.id, { opacity: Number(e.target.value) }, { coalesceKey: `opacity:${selected.id}` })}
                         className="flex-1 accent-blue-500"
                       />
                       <span className="w-8 tabular-nums">{Math.round(selected.opacity * 100)}%</span>
