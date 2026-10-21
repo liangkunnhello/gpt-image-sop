@@ -23,11 +23,14 @@ import { isTauri } from '../lib/platform'
 import SizePickerModal from './SizePickerModal'
 import AssignDirectionModal from './AssignDirectionModal'
 import SopSplitModal, { type SopRunOptions } from './SopSplitModal'
+import VariableRunModal, { type VariableRunOptions } from './VariableRunModal'
 import SopPresetPicker, { resolvePickedPreset } from './SopPresetPicker'
 import SopSystemPromptPicker from './SopSystemPromptPicker'
+import VariablePromptPicker from './VariablePromptPicker'
 import { useSopStore } from '../lib/sopStore'
 import { buildPromptBundle } from '../lib/promptBundle'
 import { enqueueSopJobs, splitEven } from '../lib/sopPipeline'
+import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import { CommentBadge } from './CommentMarks'
 import ButtonTooltip from './input/buttonTooltip'
@@ -503,11 +506,12 @@ export default function InputBar() {
   ), [activeProfile.id, settingsActiveProfile.id, settings])
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
   const sopMode = useSopStore((s) => s.sopMode)
+  const variableMode = useSopStore((s) => s.variableMode)
   // 批量进行中暂停画廊和 Agent 的提交，需等待完成或停止后再提交
   const batchRunning = Boolean(batchProgress)
-  // SOP 模式靠参考图与系统提示词驱动，输入框可以为空，发送按钮常亮（缺图时点一下会提示）
+  // SOP / 变量模式靠参考图与提示词驱动，输入框可以为空，发送按钮常亮（缺图时点一下会提示）
   const canSubmit = Boolean(
-    (sopMode || prompt.trim()) && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning,
+    (sopMode || variableMode || prompt.trim()) && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning,
   )
   const batchEnabled = appMode === 'gallery' && settings.showBatchPrompt && settings.batchPromptEnabled
   // 批量进行中始终在画廊显示入口，以便查看进度和停止
@@ -525,12 +529,15 @@ export default function InputBar() {
     : appMode === 'agent'
     ? '画廊批量任务进行中，请等待完成或回到画廊停止后再提交'
     : '批量任务进行中，请等待完成或停止后再提交'
-  const promptPlaceholder = sopMode
+  const promptPlaceholder = variableMode
+    ? '变量模式：可留空，拖入参考图后直接发送...'
+    : sopMode
     ? 'SOP 模式：可留空，拖入参考图后直接发送...'
     : batchEnabled
     ? '每条提示词之间空两行分隔，可输入 @ 来指定参考图...'
     : '描述你想生成的图片，可输入 @ 来指定参考图...'
   const setSopMode = useSopStore((s) => s.setSopMode)
+  const setVariableMode = useSopStore((s) => s.setVariableMode)
   const sopProgress = useSopStore((s) => s.progress)
   const sopDirections = useSopStore((s) => s.directions)
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
@@ -538,6 +545,7 @@ export default function InputBar() {
   const sopLastPick = useSopStore((s) => s.lastPick)
   const sopDefaultPick = useSopStore((s) => s.defaultPick)
   const [sopSplitOpen, setSopSplitOpen] = useState(false)
+  const [variableRunOpen, setVariableRunOpen] = useState(false)
 
   const currentDirection = sopDirections.find((node) => node.id === activeDirectionId)
   const currentProduct = currentDirection?.kind === 'direction'
@@ -575,9 +583,37 @@ export default function InputBar() {
     })))
   }, [inputImages, pickedPoint, pickedStyle])
 
+  /** 变量模式：把任务卡推进后台队列，立即返回；参考图只用于提取策略，不参与生图 */
+  const runVariable = useCallback((options: VariableRunOptions) => {
+    setVariableRunOpen(false)
+    if (!inputImages.length) return
+    const groups = splitEven(inputImages, options.groupCount)
+    enqueueVariableJobs(groups.map((group, index) => ({
+      label: `第 ${index + 1}/${groups.length} 张卡`,
+      imageDataUrls: group.map((img) => img.dataUrl),
+      imageIds: group.map((img) => img.id),
+      variablePromptText: options.variablePromptText,
+      variablePromptName: options.variablePromptName,
+      copyText: options.copyText,
+      styleText: options.styleText,
+      fillsPerCard: options.fillsPerCard,
+      directionId: options.directionId,
+      ignoreCompliance: options.ignoreCompliance,
+      avoidCta: options.avoidCta,
+    })))
+  }, [inputImages])
+
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {
       void submitAgentMessage()
+      return
+    }
+    if (variableMode) {
+      if (!inputImages.length) {
+        useStore.getState().showToast('变量模式需要先拖入参考图', 'error')
+        return
+      }
+      setVariableRunOpen(true)
       return
     }
     if (sopMode) {
@@ -589,7 +625,7 @@ export default function InputBar() {
       return
     }
     void submitTask()
-  }, [appMode, sopMode, inputImages.length])
+  }, [appMode, sopMode, variableMode, inputImages.length])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -1788,7 +1824,7 @@ export default function InputBar() {
       moderationHint={moderationHint}
       moderationDisabled={moderationDisabled}
       agentAutoImageCount={agentAutoImageCount}
-      hideCount={sopMode}
+      hideCount={sopMode || variableMode}
       outputImageLimit={outputImageLimit}
       nInput={nInput}
       setNInputFocused={setNInputFocused}
@@ -1900,6 +1936,14 @@ export default function InputBar() {
           {sopMode && currentDirection && currentProduct && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <SopSystemPromptPicker productId={currentProduct.id} directionId={currentDirection.id} />
+              <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} productId={currentProduct.id} />
+              <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} productId={currentProduct.id} />
+            </div>
+          )}
+          {/* 变量模式：变量提示词与系统提示词并行，卖点/风格两个模式通用 */}
+          {variableMode && currentDirection && currentProduct && (
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <VariablePromptPicker productId={currentProduct.id} directionId={currentDirection.id} />
               <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} productId={currentProduct.id} />
               <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} productId={currentProduct.id} />
             </div>
@@ -2050,6 +2094,14 @@ export default function InputBar() {
               />,
               document.body,
             )}
+            {variableRunOpen && createPortal(
+              <VariableRunModal
+                imageCount={inputImages.length}
+                onClose={() => setVariableRunOpen(false)}
+                onConfirm={(options) => void runVariable(options)}
+              />,
+              document.body,
+            )}
             {assignOpen && createPortal(
               <AssignDirectionModal
                 count={selectedTaskIds.length}
@@ -2074,6 +2126,18 @@ export default function InputBar() {
                   }`}
                 >
                   {sopProgress ? `${sopProgress.done}/${sopProgress.total}` : 'SOP'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVariableMode(!variableMode)}
+                  title="变量模式：拖入参考图 → 提取「骨架 + 变量」→ 最远点采样选组合填词出图"
+                  className={`h-10 px-3 rounded-xl text-xs font-medium transition-all shadow-sm ${
+                    variableMode
+                      ? 'bg-violet-500 text-white hover:bg-violet-600'
+                      : 'bg-gray-200 dark:bg-white/[0.06] text-gray-500 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-white/[0.1]'
+                  }`}
+                >
+                  {sopProgress && variableMode ? `${sopProgress.done}/${sopProgress.total}` : '变量'}
                 </button>
                 {renderAddImageButton(false)}
                 <div
@@ -2128,6 +2192,17 @@ export default function InputBar() {
                   }`}
                 >
                   {sopProgress ? `${sopProgress.done}/${sopProgress.total}` : 'SOP'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVariableMode(!variableMode)}
+                  className={`h-10 px-3 rounded-xl text-xs font-medium transition-all ${
+                    variableMode
+                      ? 'bg-violet-500 text-white'
+                      : 'bg-gray-200 dark:bg-white/[0.06] text-gray-500 dark:text-gray-300'
+                  }`}
+                >
+                  {sopProgress && variableMode ? `${sopProgress.done}/${sopProgress.total}` : '变量'}
                 </button>
                 {renderAddImageButton(true)}
                 <div

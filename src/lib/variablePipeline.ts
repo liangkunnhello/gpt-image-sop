@@ -1,0 +1,394 @@
+/**
+ * 变量模式流水线：与 SOP 模式并行的一条链路，区别只在「怎么拿到提示词」。
+ *
+ * SOP 模式：参考图 + 系统提示词 → 一整份 SOP → 让模型按 SOP 写 N 条提示词。
+ * 变量模式：参考图 + 变量提示词 → 提示词骨架 + 多组变量选项
+ *          → 后端按最远点采样选变量组合 → 逐个填词成具体提示词。
+ *
+ * 后半段（占位卡、出图、任务落库）与 SOP 完全复用 submitSopTasks，
+ * 所以任务卡、详情页、筛选、下载都不用另做一套。
+ */
+
+import type { ApiProfile, VariableDimension, VariablePrompt, VariableStrategy } from '../types'
+import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, useStore } from '../store'
+import { useSopStore } from './sopStore'
+import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
+import { getApiErrorMessage } from './imageApiShared'
+import { apiFetch } from './platform'
+import { productIdForDirection } from './applyPostTemplate'
+import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
+import { dedupePrompts } from './copyDedupe'
+import { planStrategyFills } from './variableSample'
+import { shrinkToDataUrl, SOP_TEXT_MODEL } from './sopPipeline'
+
+/** 与 SOP 反推用同一个文本模型 */
+const MODEL_MAX_SIDE = 1024
+const MANY_IMAGE_THRESHOLD = 16
+
+/** 一轮纯文本/多模态对话，与 sopPipeline 的 chat 保持同样的调用约定 */
+async function chat(profile: ApiProfile, messages: unknown[], timeoutSeconds = 300): Promise<string> {
+  const proxyConfig = readClientDevProxyConfig()
+  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const url = buildApiUrl(profile.baseUrl, 'chat/completions', proxyConfig, useApiProxy)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000)
+  try {
+    const res = await apiFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${profile.apiKey}` },
+      cache: 'no-store',
+      body: JSON.stringify({
+        model: profile.sopTextModel || SOP_TEXT_MODEL,
+        messages,
+        // 提取策略要求结构稳定、可复现，温度压低
+        temperature: 0.2,
+        max_tokens: 4000,
+        stream: false,
+        // 质检/提取类模型默认走思考模式会吃掉 token，这里显式关掉
+        thinking: { type: 'disabled' },
+      }),
+      signal: controller.signal,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}：${await getApiErrorMessage(res)}`)
+    const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
+    const content = String(json.choices?.[0]?.message?.content ?? '').trim()
+    if (!content) throw new Error('模型返回了空内容')
+    return content
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 变量提示词为空时的兜底：直接用内置的提取策略。
+ * 用户没建变量提示词也能跑，界面上的「变量提示词」选择器会显示「内置策略」。
+ */
+export const BUILTIN_VARIABLE_PROMPT: VariablePrompt = {
+  id: '__builtin_variable__',
+  productId: '',
+  name: '内置提取策略',
+  content: [
+    '从参考图片中提炼可迁移的视觉生成方法。回答“为什么这样构图、可以如何复用和变化”，不要只复述画面内容。',
+    '始终使用简体中文。提示词、变量名和必要的英文模型关键词保持原样。',
+    '',
+    '## 分析流程',
+    '- 逐图识别主体、语义符号、承载结构、融合关系、构图、材质、光影、背景和重复元素。',
+    '- 将共享同一视觉机制的图片归为一个策略；不要机械一图对应一个策略。',
+    '- 区分“核心策略”和“可变项”：策略描述稳定的生成逻辑，可变项提供可批量替换的内容。',
+    '- 优先提炼结构关系，例如负形融合、嵌套防护、中心核心与外围阵列、符号叠加、状态环和材质隐喻。',
+    '- 为每个策略编写一段可直接用于图生图或参考图生图的通用提示词。',
+    '- 不预设参考图之外的固定颜色。默认要求颜色、材质、明暗和氛围参考输入图。',
+    '- 默认排除文字、水印、免责声明和无关内容，除非用户明确要求保留。',
+    '- 策略数量以“视觉机制是否真正不同”为准。单图通常提炼 1-3 个策略；多图可以合并同类项，也可以从共性中扩展新方向，但必须明确哪些是直接观察、哪些是合理扩展。',
+    '',
+    '## 提示词要求',
+    '- 使用 {{变量名}} 表示可替换内容。',
+    '- 可变项中的变量名也必须使用双大括号，例如 {{核心圆盘}}，不得写成“核心圆盘”。',
+    '- 提示词中出现的每个变量，都必须在“可变项”中以完全相同的名称出现，并提供可替换选项。',
+    '- 可变项中不得出现提示词未使用的变量；需要增加变量时，先在提示词正文中使用同名变量。',
+    '- 将视觉关系写成动作：包围、嵌套、镂空、融合、承托、阵列、连接、映射。',
+    '- 避免只有风格形容词而没有空间和结构约束。',
+    '- 参考图已有颜色时，写“参考输入图的配色体系”，不要擅自限定蓝色、绿色等具体颜色。',
+    '- 需要完整外围结构时，明确“完整闭合、连续可见、不能开口或裁切”。',
+    '- 需要避免内容重复时，提供对象池、策略池或近期去重变量，而不是要求模型自行随机。',
+    '- 不把广告文案、免责声明或投保条件当成视觉策略。',
+    '- 每个策略至少给三组可变项，每组至少三个可替换选项。',
+  ].join('\n'),
+  updatedAt: 0,
+}
+
+/** 输出格式约定：模型必须吐 JSON，避免 Markdown 解析歧义 */
+const OUTPUT_RULES = [
+  '',
+  '## 输出格式',
+  '只输出一个 JSON 数组，不要任何解释、不要 Markdown 代码块、不要前后缀文字。',
+  '数组每一项是一个策略对象，字段固定为：',
+  '{"name":"策略名称","evidence":"对应图1、图3","skeleton":"含 {{变量名}} 的完整提示词","dimensions":[{"name":"变量名","options":["选项A","选项B","选项C"]}],"value":"一句话说明适用价值"}',
+  '所有 dimensions 里的 name 必须在 skeleton 里以完全相同的 {{name}} 出现，且 skeleton 里出现的每个变量都要在 dimensions 里出现。',
+].join('\n')
+
+/** 拼「参考图 + 变量提示词」这一轮的提示词；单独抽出来便于测试 */
+export function buildVariableExtractMessages({
+  variablePromptText,
+  copyText = '',
+  styleText = '',
+  ignoreCompliance = true,
+  avoidCta = true,
+  imageCount = 1,
+}: {
+  variablePromptText: string
+  copyText?: string
+  styleText?: string
+  ignoreCompliance?: boolean
+  avoidCta?: boolean
+  imageCount?: number
+}): { system: string; user: string } {
+  const system = [
+    variablePromptText.trim() || BUILTIN_VARIABLE_PROMPT.content,
+    ignoreCompliance
+      ? '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要提取，也不要写进任何变量选项。'
+      : '',
+    avoidCta
+      ? '参考图里的按钮、悬浮球、进度条、返回箭头、开关等「仿系统界面 / 可点击」的设计元素，一律不要写进策略；提示词里要明确列为禁忌：不画按钮、不画手指点击示意、不加指向性箭头，也不写「立即领取」「点击查看」「滑动解锁」这类引导点击的文案。'
+      : '',
+    OUTPUT_RULES,
+  ].filter(Boolean).join('\n')
+
+  const copy = copyText.trim()
+  const user = [
+    `根据下面 ${imageCount} 张参考图，按上面的提取策略产出策略与可变项。`,
+    copy ? `\n【卖点文案（图上文字必须逐字照抄，不得改写）】\n${copy}` : '',
+    copy ? '注意：卖点只决定图上文字，不要把卖点当成视觉策略；变量选项里也不要复述卖点原文。' : '',
+    styleText.trim() ? `\n【风格】\n${styleText.trim()}` : '',
+    '\n现在只输出 JSON 数组。',
+  ].filter(Boolean).join('\n')
+
+  return { system, user }
+}
+
+/**
+ * 一轮「参考图 + 变量提示词」调用：返回策略列表。
+ * 模型可能带 ```json 包裹或前后废话，这里统一剥到第一个 [ 到最后一个 ]。
+ */
+export async function extractStrategies(
+  profile: ApiProfile,
+  params: {
+    variablePromptText: string
+    imageDataUrls: string[]
+    copyText?: string
+    styleText?: string
+    ignoreCompliance?: boolean
+    avoidCta?: boolean
+  },
+): Promise<{ strategies: VariableStrategy[]; raw: string }> {
+  const maxSide = params.imageDataUrls.length > MANY_IMAGE_THRESHOLD ? 768 : MODEL_MAX_SIDE
+  const images = await Promise.all(params.imageDataUrls.map((url) => shrinkToDataUrl(url, maxSide)))
+  const messages = buildVariableExtractMessages({
+    variablePromptText: params.variablePromptText,
+    copyText: params.copyText,
+    styleText: params.styleText,
+    ignoreCompliance: params.ignoreCompliance,
+    avoidCta: params.avoidCta,
+    imageCount: images.length,
+  })
+  const content: Array<Record<string, unknown>> = [{ type: 'text', text: messages.user }]
+  for (const url of images) content.push({ type: 'image_url', image_url: { url } })
+
+  const raw = await chat(profile, [
+    { role: 'system', content: messages.system },
+    { role: 'user', content },
+  ])
+  const strategies = parseStrategies(raw)
+  if (!strategies.length) throw new Error('模型没有返回可用的策略')
+  return { strategies, raw }
+}
+
+/** 解析策略 JSON；字段缺失或变量名对不上时按骨架里的变量名补齐/裁剪 */
+export function parseStrategies(raw: string): VariableStrategy[] {
+  const start = raw.indexOf('[')
+  const end = raw.lastIndexOf(']')
+  if (start < 0 || end <= start) return []
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1))
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+
+  const out: VariableStrategy[] = []
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as Record<string, unknown>
+    const skeleton = String(row.skeleton ?? '').trim()
+    if (!skeleton) continue
+
+    const used = new Set<string>()
+    for (const match of skeleton.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+      const name = match[1].trim()
+      if (name) used.add(name)
+    }
+    // 骨架里没有的变量丢掉，骨架里有但模型漏给的补空，后面采样会自动跳过
+    const dimensions: VariableDimension[] = []
+    for (const entry of Array.isArray(row.dimensions) ? row.dimensions : []) {
+      if (!entry || typeof entry !== 'object') continue
+      const dim = entry as Record<string, unknown>
+      const name = String(dim.name ?? '').trim()
+      if (!name || !used.has(name)) continue
+      const options = (Array.isArray(dim.options) ? dim.options : [])
+        .map((option) => String(option ?? '').trim())
+        .filter(Boolean)
+      if (!options.length) continue
+      dimensions.push({ name, options: Array.from(new Set(options)) })
+    }
+
+    out.push({
+      name: String(row.name ?? '').trim() || `策略 ${out.length + 1}`,
+      evidence: String(row.evidence ?? '').trim(),
+      skeleton,
+      dimensions,
+      value: String(row.value ?? '').trim(),
+    })
+  }
+  return out
+}
+
+/** 把策略列表回写成 Markdown，存进任务里供详情页回看 */
+export function strategiesToText(strategies: VariableStrategy[]): string {
+  return strategies.map((strategy, index) => [
+    `## ${index + 1}. ${strategy.name}`,
+    strategy.evidence ? `对应${strategy.evidence}。` : '',
+    '',
+    strategy.skeleton,
+    '',
+    '可变项：',
+    ...strategy.dimensions.map((dim) => `- {{${dim.name}}}：${dim.options.join(' / ')}`),
+    strategy.value ? `\n${strategy.value}` : '',
+  ].filter(Boolean).join('\n')).join('\n\n---\n\n')
+}
+
+// ===== 后台队列：与 SOP 并行，互不占位 =====
+
+export interface VariableJobRequest {
+  label: string
+  imageDataUrls: string[]
+  imageIds?: string[]
+  /** 变量提示词正文（提取策略）；空则用内置策略 */
+  variablePromptText: string
+  /** 变量提示词名称，详情页展示用 */
+  variablePromptName: string
+  /** 卖点原文：图上文字的唯一来源，同时写进提示词阶段 */
+  copyText?: string
+  /** 风格正文 */
+  styleText?: string
+  /** 每张卡要几条提示词 */
+  fillsPerCard: number
+  directionId?: string
+  ignoreCompliance?: boolean
+  avoidCta?: boolean
+}
+
+const QUEUE_LIMIT = 10
+
+const queue: VariableJobRequest[] = []
+let runningCount = 0
+let totalCount = 0
+let doneCount = 0
+
+function refreshProgress(label: string) {
+  useSopStore.getState().setProgress({
+    queued: queue.length,
+    running: runningCount,
+    done: doneCount,
+    total: totalCount,
+    label,
+  })
+}
+
+async function runJob(job: VariableJobRequest) {
+  const state = useStore.getState()
+  const settings = state.settings
+  const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
+  if (!profile) throw new Error('没有可用的接口配置')
+
+  const sopState = useSopStore.getState()
+  const avoidHint = sopState.avoidOverlay === false
+    ? ''
+    : buildAvoidHint(pickAvoidTemplate(
+      sopState.postTemplates[productIdForDirection(sopState.directions, job.directionId)] ?? [],
+      state.params.size,
+      job.imageDataUrls,
+    ))
+
+  const sopJobId = `var-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId)
+
+  try {
+    const { strategies } = await extractStrategies(profile, {
+      variablePromptText: job.variablePromptText,
+      imageDataUrls: job.imageDataUrls,
+      copyText: job.copyText,
+      styleText: job.styleText,
+      ignoreCompliance: job.ignoreCompliance !== false,
+      avoidCta: job.avoidCta !== false,
+    })
+
+    const { fills, notes } = planStrategyFills(strategies, job.fillsPerCard)
+    if (!fills.length) throw new Error(`${job.label} 没有得到可用的变量组合`)
+
+    // 采样只保证变量组合不同；清洗掉同图内重复文案后仍可能撞车，这里按最终文本再兜一层
+    const seen = new Set<string>()
+    const picked: Array<{ prompt: string; fill: typeof fills[number] }> = []
+    for (const fill of fills) {
+      const cleaned = dedupePrompts([fill.prompt]).prompts[0]
+      if (!cleaned || seen.has(cleaned)) continue
+      seen.add(cleaned)
+      picked.push({ prompt: cleaned, fill })
+    }
+    if (!picked.length) throw new Error(`${job.label} 填词后没有剩余内容`)
+
+    const specText = [
+      strategiesToText(strategies),
+      avoidHint ? `\n---\n\n${avoidHint}` : '',
+      notes.length ? `\n---\n\n${notes.join('\n')}` : '',
+    ].filter(Boolean).join('\n')
+
+    await removeSopPlaceholder(placeholderId)
+    void submitSopTasks({
+      sopJobId,
+      sopName: strategies[0]?.name || job.label,
+      systemPromptName: job.variablePromptName,
+      sopText: specText,
+      directionId: job.directionId,
+      referenceImageIds: job.imageIds,
+      prompts: picked.map((item) => item.prompt),
+      variable: {
+        promptName: job.variablePromptName,
+        specText,
+        fills: picked.map((item) => ({
+          skeleton: item.fill.strategyName,
+          assignments: item.fill.assignments,
+        })),
+      },
+    })
+  } catch (err) {
+    await removeSopPlaceholder(placeholderId)
+    throw err
+  }
+}
+
+function pump() {
+  while (runningCount < QUEUE_LIMIT && queue.length) {
+    const job = queue.shift()
+    if (!job) return
+    runningCount += 1
+    refreshProgress(job.label)
+    void runJob(job)
+      .catch((err) => {
+        useStore.getState().showToast(`${job.label}：${err instanceof Error ? err.message : String(err)}`, 'error')
+      })
+      .finally(() => {
+        runningCount -= 1
+        doneCount += 1
+        if (!queue.length && runningCount === 0) {
+          totalCount = 0
+          doneCount = 0
+          useSopStore.getState().setProgress(null)
+          useStore.getState().showToast('变量模式生图已全部提交', 'success')
+          return
+        }
+        refreshProgress(job.label)
+        pump()
+      })
+  }
+}
+
+/** 把变量模式任务卡推入后台队列，立即返回 */
+export function enqueueVariableJobs(jobs: VariableJobRequest[]) {
+  if (!jobs.length) return
+  totalCount += jobs.length
+  queue.push(...jobs)
+  refreshProgress(jobs[0].label)
+  pump()
+}

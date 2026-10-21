@@ -41,9 +41,9 @@ const TrashIcon = () => (
 )
 
 /**
- * 提示词库：系统提示词 / 卖点 / 风格 三合一的弹窗。
- * 原来三者各自是输入框上方的窄下拉（w-72~80、编辑框 3~4 行），正文根本写不开；
- * 这里换成左列表 + 右大编辑区，正文可以按需铺满。
+ * 提示词库：系统提示词 / 变量提示词 / 卖点 / 风格 四合一弹窗。
+ * 系统提示词与变量提示词是两套并行的库，都按产品共享，只是生成提示词的方法不同；
+ * 卖点与风格两个模式通用。
  */
 export default function SopLibraryModal() {
   const libraryTab = useSopStore((s) => s.libraryTab)
@@ -51,6 +51,7 @@ export default function SopLibraryModal() {
   const directions = useSopStore((s) => s.directions)
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
   const systemPrompts = useSopStore((s) => s.systemPrompts)
+  const variablePrompts = useSopStore((s) => s.variablePrompts)
   const presets = useSopStore((s) => s.presets)
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
@@ -59,6 +60,9 @@ export default function SopLibraryModal() {
   const addSystemPrompt = useSopStore((s) => s.addSystemPrompt)
   const updateSystemPrompt = useSopStore((s) => s.updateSystemPrompt)
   const removeSystemPrompt = useSopStore((s) => s.removeSystemPrompt)
+  const addVariablePrompt = useSopStore((s) => s.addVariablePrompt)
+  const updateVariablePrompt = useSopStore((s) => s.updateVariablePrompt)
+  const removeVariablePrompt = useSopStore((s) => s.removeVariablePrompt)
   const addPreset = useSopStore((s) => s.addPreset)
   const updatePreset = useSopStore((s) => s.updatePreset)
   const removePreset = useSopStore((s) => s.removePreset)
@@ -70,8 +74,12 @@ export default function SopLibraryModal() {
   const productName = directions.find((node) => node.id === productId)?.name ?? ''
   const path = activeDirectionId ? directionPath(directions, activeDirectionId) : ''
 
-  /** pick 里三类各自对应的字段名 */
-  const pickKey = tab === 'prompt' ? 'promptId' : tab === 'point' ? 'pointId' : 'styleId'
+  /** pick 里各类各自对应的字段名 */
+  const pickKey = tab === 'prompt'
+    ? 'promptId'
+    : tab === 'variable'
+      ? 'variablePromptId'
+      : tab === 'point' ? 'pointId' : 'styleId'
   const pick = defaultPick[activeDirectionId] ?? lastPick[activeDirectionId] ?? {}
 
   const items: LibraryItem[] = useMemo(() => {
@@ -80,16 +88,22 @@ export default function SopLibraryModal() {
         .filter((item) => item.productId === productId)
         .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
     }
+    if (tab === 'variable') {
+      return variablePrompts
+        .filter((item) => item.productId === productId)
+        .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
+    }
     return presets
       .filter((item) => item.productId === productId && item.kind === tab)
       .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
-  }, [tab, systemPrompts, presets, productId])
+  }, [tab, systemPrompts, variablePrompts, presets, productId])
 
   const counts = useMemo(() => ({
     prompt: systemPrompts.filter((item) => item.productId === productId).length,
+    variable: variablePrompts.filter((item) => item.productId === productId).length,
     point: presets.filter((item) => item.productId === productId && item.kind === 'point').length,
     style: presets.filter((item) => item.productId === productId && item.kind === 'style').length,
-  }), [systemPrompts, presets, productId])
+  }), [systemPrompts, variablePrompts, presets, productId])
 
   // 当前生效的那条：显式「不使用」优先，其次是指定项，最后退回第一条
   const rawPickId = pick[pickKey]
@@ -143,17 +157,23 @@ export default function SopLibraryModal() {
     setPick(activeDirectionId, { ...lastPick[activeDirectionId], [pickKey]: id })
   }
 
+  /** 按当前分组落到对应的 store 方法，四类都走这一组分发 */
+  const addItem = (name: string, content: string) => {
+    if (tab === 'prompt') return addSystemPrompt(productId, name, content)
+    if (tab === 'variable') return addVariablePrompt(productId, name, content)
+    return addPreset(productId, tab, name, content)
+  }
+
   const updateItem = (id: string, patch: { name?: string; content?: string }) => {
     if (tab === 'prompt') updateSystemPrompt(id, patch)
+    else if (tab === 'variable') updateVariablePrompt(id, patch)
     else updatePreset(id, patch)
   }
 
   const createItem = () => {
     const name = newName.trim()
     if (!name) return
-    const id = tab === 'prompt'
-      ? addSystemPrompt(productId, name, name)
-      : addPreset(productId, tab, name, name)
+    const id = addItem(name, name)
     applyItem(id)
     loadDraft({ id, name, content: name, updatedAt: Date.now() })
     setNewName('')
@@ -167,15 +187,14 @@ export default function SopLibraryModal() {
       name = `${item.name} 副本 ${seq}`
       seq += 1
     }
-    const id = tab === 'prompt'
-      ? addSystemPrompt(productId, name, item.content)
-      : addPreset(productId, tab, name, item.content)
+    const id = addItem(name, item.content)
     applyItem(id)
     showToast(`已复制为「${name}」`, 'success')
   }
 
   const removeItem = (item: LibraryItem) => {
     if (tab === 'prompt') removeSystemPrompt(item.id)
+    else if (tab === 'variable') removeVariablePrompt(item.id)
     else removePreset(item.id)
     if (editingId === item.id) setEditingId('')
   }
@@ -207,9 +226,7 @@ export default function SopLibraryModal() {
       return
     }
     const name = nameFromFile(fileName)
-    const id = tab === 'prompt'
-      ? addSystemPrompt(productId, name, text)
-      : addPreset(productId, tab, name, text)
+    const id = addItem(name, text)
     applyItem(id)
     loadDraft({ id, name, content: text, updatedAt: Date.now() })
     showToast(`已导入并保存为「${name}」`, 'success')
@@ -294,7 +311,7 @@ export default function SopLibraryModal() {
 
         {/* 分组 tab */}
         <div className="flex shrink-0 items-center gap-1 border-b border-gray-100 px-4 dark:border-white/[0.06]">
-          {(['prompt', 'point', 'style'] as const).map((key) => (
+          {(['prompt', 'variable', 'point', 'style'] as const).map((key) => (
             <button
               key={key}
               type="button"
@@ -327,7 +344,7 @@ export default function SopLibraryModal() {
                     : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]'
                 }`}
               >
-                <span className="min-w-0 flex-1 truncate">不使用{tab === 'prompt' ? '系统提示词' : label}</span>
+                <span className="min-w-0 flex-1 truncate">不使用{label}</span>
                 {isNone && <span className="shrink-0 text-[10px]">当前</span>}
               </button>
               <div className="my-1 h-px bg-gray-100 dark:bg-white/[0.06]" />
@@ -496,9 +513,7 @@ export default function SopLibraryModal() {
                         name = `${base} ${seq}`
                         seq += 1
                       }
-                      const id = tab === 'prompt'
-                        ? addSystemPrompt(productId, name, result.content)
-                        : addPreset(productId, tab, name, result.content)
+                      const id = addItem(name, result.content)
                       applyItem(id)
                       loadDraft({ id, name, content: result.content, updatedAt: Date.now() })
                       showToast(`已另存为新版本「${name}」，原内容未改动`, 'success')
@@ -544,7 +559,7 @@ export default function SopLibraryModal() {
       <SopLibraryImportModal
         targetProductId={productId}
         targetProductName={productName}
-        defaultTab={tab}
+        defaultTab={tab === 'variable' ? 'variable' : tab}
         onClose={() => setImportOpen(false)}
       />
     )}

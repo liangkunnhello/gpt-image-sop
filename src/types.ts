@@ -347,6 +347,16 @@ export interface TaskRecord {
   sopPlaceholder?: boolean
   /** SOP 模式：本轮使用的参考图 id，复用配置时回填输入框 */
   sopReferenceImageIds?: string[]
+  /** 变量模式：本条提示词由「骨架 + 变量」填词产出，分组仍复用 sopJobId */
+  variableMode?: boolean
+  /** 变量模式：填词用的骨架，保留 {{变量}} 原文便于回看差异 */
+  variableSkeleton?: string
+  /** 变量模式：本次填入的「变量名 → 选项」 */
+  variableAssignments?: Record<string, string>
+  /** 变量模式：使用的变量提示词名称，详情页展示用 */
+  variablePromptName?: string
+  /** 变量模式：该策略的完整提取结果（Markdown），详情页回看策略用 */
+  variableSpecText?: string
 }
 
 // ===== SOP 模式 =====
@@ -380,6 +390,49 @@ export interface SopJobMeta {
   sopText: string
   promptCount: number
   createdAt: number
+}
+
+// ===== 变量模式 =====
+
+/** 一条变量提示词：只描述「提取策略」，不含具体卖点与风格 */
+export interface VariablePrompt {
+  id: string
+  /** 所属产品：与系统提示词同粒度，同一产品下所有方向共用 */
+  productId: string
+  name: string
+  content: string
+  updatedAt: number
+}
+
+/** 骨架里的一个变量维度，与选项一一对应 */
+export interface VariableDimension {
+  /** 变量名，去掉 {{}} 后的原文，例如「承载结构」 */
+  name: string
+  /** 该维度可替换的选项，至少 2 个才有采样意义 */
+  options: string[]
+}
+
+/** 从参考图提取出的一条策略：骨架 + 变量维度 */
+export interface VariableStrategy {
+  /** 策略名称 */
+  name: string
+  /** 证据来源，例如「图1、图3」 */
+  evidence: string
+  /** 一段完整可用提示词，变量处写成 {{变量名}} */
+  skeleton: string
+  /** 与骨架里出现的变量逐字对应 */
+  dimensions: VariableDimension[]
+  /** 适用价值 / 差异化说明 */
+  value: string
+}
+
+/** 一轮填词的结果 */
+export interface VariableFill {
+  strategyName: string
+  /** 逐维度取值 */
+  assignments: Record<string, string>
+  /** 填词后的完整提示词 */
+  prompt: string
 }
 
 export interface FavoriteCollection {

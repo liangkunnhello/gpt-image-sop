@@ -5008,6 +5008,13 @@ export async function submitSopTasks(input: {
   directionId?: string
   referenceImageIds?: string[]
   prompts: string[]
+  /** 变量模式：附带骨架与逐维取值，SOP 模式不传 */
+  variable?: {
+    promptName: string
+    specText: string
+    /** 与 prompts 一一对应：填词用的策略名 + 各变量取值 */
+    fills: Array<{ skeleton: string; assignments: Record<string, string> }>
+  }
 }): Promise<string[]> {
   const state = useStore.getState()
   const settings = state.settings
@@ -5017,30 +5024,38 @@ export async function submitSopTasks(input: {
     return []
   }
 
-  const tasks: TaskRecord[] = input.prompts.map((prompt, index) => ({
-    id: genId(),
-    prompt,
-    params: { ...state.params, n: 1 },
-    apiProvider: profile.provider,
-    apiProfileId: profile.id,
-    apiProfileName: profile.name,
-    apiMode: profile.apiMode,
-    apiModel: profile.model,
-    inputImageIds: [],
-    outputImages: [],
-    status: 'running',
-    error: null,
-    createdAt: Date.now(),
-    finishedAt: null,
-    elapsed: null,
-    sopJobId: input.sopJobId,
-    sopName: input.sopName,
-    sopPromptIndex: index + 1,
-    sopSystemPrompt: input.systemPromptName,
-    sopText: input.sopText,
-    sopDirectionId: input.directionId,
-    sopReferenceImageIds: input.referenceImageIds,
-  }))
+  const tasks: TaskRecord[] = input.prompts.map((prompt, index) => {
+    const fill = input.variable?.fills[index]
+    return {
+      id: genId(),
+      prompt,
+      params: { ...state.params, n: 1 },
+      apiProvider: profile.provider,
+      apiProfileId: profile.id,
+      apiProfileName: profile.name,
+      apiMode: profile.apiMode,
+      apiModel: profile.model,
+      inputImageIds: [],
+      outputImages: [],
+      status: 'running',
+      error: null,
+      createdAt: Date.now(),
+      finishedAt: null,
+      elapsed: null,
+      sopJobId: input.sopJobId,
+      sopName: input.sopName,
+      sopPromptIndex: index + 1,
+      sopSystemPrompt: input.systemPromptName,
+      sopText: input.sopText,
+      sopDirectionId: input.directionId,
+      sopReferenceImageIds: input.referenceImageIds,
+      variableMode: input.variable ? true : undefined,
+      variablePromptName: input.variable?.promptName,
+      variableSpecText: input.variable?.specText,
+      variableSkeleton: fill?.skeleton,
+      variableAssignments: fill?.assignments,
+    }
+  })
 
   useStore.getState().setTasks([...tasks, ...useStore.getState().tasks])
   for (const task of tasks) void putTask(task)
@@ -5058,7 +5073,10 @@ export async function submitSopTasks(input: {
   })
   await Promise.all(workers)
 
-  useStore.getState().showToast(`SOP 已提交 ${tasks.length} 条提示词`, 'success')
+  useStore.getState().showToast(
+    `${input.variable ? '变量模式' : 'SOP'} 已提交 ${tasks.length} 条提示词`,
+    'success',
+  )
   return tasks.map((task) => task.id)
 }
 

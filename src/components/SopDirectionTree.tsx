@@ -27,6 +27,9 @@ export default function SopDirectionTree() {
   const setActiveFilter = useSopStore((s) => s.setActiveFilter)
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
   const sopMode = useSopStore((s) => s.sopMode)
+  const variableMode = useSopStore((s) => s.variableMode)
+  // 两个模式都会把任务挂到当前方向，侧栏提示统一处理
+  const sopStyleMode = sopMode || variableMode
   const collapsed = useSopStore((s) => s.sidebarCollapsed)
   const setCollapsed = useSopStore((s) => s.setSidebarCollapsed)
   const addNode = useSopStore((s) => s.addNode)
@@ -286,12 +289,12 @@ export default function SopDirectionTree() {
             <button
               type="button"
               onClick={() => setActiveFilter(activeDirectionId)}
-              title={`${sopMode ? '当前归属' : '默认归属'}：${currentPath}（点击只看这个方向）`}
+              title={`${sopStyleMode ? '当前归属' : '默认归属'}：${currentPath}（点击只看这个方向）`}
               className="mb-2 flex w-full min-w-0 flex-col gap-0.5 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-left transition-colors hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/[0.14] dark:hover:bg-blue-500/20"
             >
               <span className="flex items-center gap-1 text-[10px] font-medium text-blue-600 dark:text-blue-300">
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500 dark:bg-blue-400" />
-                {sopMode ? '当前归属' : '默认归属'}
+                {sopStyleMode ? '当前归属' : '默认归属'}
               </span>
               <span className="min-w-0 truncate text-[12px] font-semibold text-blue-800 dark:text-blue-100">{currentPath}</span>
             </button>

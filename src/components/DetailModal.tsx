@@ -1107,7 +1107,9 @@ export default function DetailModal() {
             {task.sopText && (
               <div className="mb-4 overflow-hidden rounded-lg border border-gray-200 dark:border-white/[0.08]">
                 <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 dark:bg-white/[0.04]">
-                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">生图 SOP</span>
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+                    {task.variableMode ? '变量策略' : '生图 SOP'}
+                  </span>
                   <span className="min-w-0 flex-1 truncate text-xs text-gray-700 dark:text-gray-300">{task.sopName || ''}</span>
                   <button
                     type="button"
@@ -1117,6 +1119,28 @@ export default function DetailModal() {
                     编辑
                   </button>
                 </div>
+                {/* 变量模式：先亮出这一条填进去的具体取值，再看整份策略 */}
+                {task.variableMode && task.variableAssignments && (
+                  <div className="border-b border-gray-100 px-3 py-2 dark:border-white/[0.06]">
+                    <div className="mb-1 text-[11px] font-medium text-violet-600 dark:text-violet-300">
+                      本次填入的变量
+                      {task.variableSkeleton ? ` · ${task.variableSkeleton}` : ''}
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {Object.entries(task.variableAssignments).map(([name, value]) => (
+                        <span
+                          key={name}
+                          className="rounded bg-violet-50 px-1.5 py-0.5 text-[11px] text-violet-700 dark:bg-violet-500/15 dark:text-violet-200"
+                        >
+                          {name}：{value}
+                        </span>
+                      ))}
+                    </div>
+                    {task.variableAssignments && Object.keys(task.variableAssignments).length === 0 && (
+                      <span className="text-[11px] text-gray-400">这一条没有可替换变量</span>
+                    )}
+                  </div>
+                )}
                 <div
                   onDoubleClick={() => setSopEditing(true)}
                   title="双击编辑"
@@ -1125,7 +1149,7 @@ export default function DetailModal() {
                   {task.sopText}
                 </div>
                 <div className="border-t border-gray-100 px-3 py-1.5 text-[11px] text-gray-400 dark:border-white/[0.06]">
-                  系统提示词：{task.sopSystemPrompt || '(未记录)'} · 第 {task.sopPromptIndex ?? 1} 条提示词
+                  {task.variableMode ? '变量提示词' : '系统提示词'}：{task.sopSystemPrompt || '(未记录)'} · 第 {task.sopPromptIndex ?? 1} 条提示词
                   {task.sopDirectionId && ` · 归属：${directionPath(sopDirections, task.sopDirectionId) || '未归属'}`}
                 </div>
               </div>
