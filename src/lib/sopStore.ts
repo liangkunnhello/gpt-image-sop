@@ -135,8 +135,12 @@ interface SopState {
   setPick: (directionId: string, pick: SopPick) => void
   setDefaultPick: (directionId: string, pick: SopPick) => void
   addNode: (parentId: string | null, name: string, kind: SopDirectionNode['kind']) => string
-  /** 伪删除：连同全部子孙进回收站，返回本批次的 trashBatchId */
-  trashNode: (id: string) => string
+  /**
+   * 伪删除：连同全部子孙进回收站。
+   * 传入 batchId 可与任务卡回收站共用一个批次，便于「恢复方向时任务卡一起回来」；
+   * 不传则自动生成。
+   */
+  trashNode: (id: string, batchId?: string) => string
   /** 移动节点到新的父级；不合法时返回错误文案 */
   moveNode: (id: string, parentId: string | null) => string
   /** 重命名 */
@@ -236,8 +240,8 @@ export const useSopStore = create<SopState>()(
         set((state) => ({ directions: [...state.directions, { id, parentId, name, kind }] }))
         return id
       },
-      trashNode: (id) => {
-        const batchId = `trash-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+      trashNode: (id, batchId) => {
+        const finalBatchId = batchId ?? `trash-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
         set((state) => {
           // 连子孙一起进回收站：整棵子树共用同一个 batchId，恢复时一起回来
           const doomed = new Set([id])
@@ -255,7 +259,7 @@ export const useSopStore = create<SopState>()(
           return {
             directions: state.directions.map((node) => (
               doomed.has(node.id) && !node.deletedAt
-                ? { ...node, deletedAt, trashBatchId: batchId, trashParentId: node.parentId }
+                ? { ...node, deletedAt, trashBatchId: finalBatchId, trashParentId: node.parentId }
                 : node
             )),
             // 正在用的归属/筛选被删掉时，退回「全部」，否则界面会指向一个不存在的节点
@@ -266,7 +270,7 @@ export const useSopStore = create<SopState>()(
               : state.activeDirectionId,
           }
         })
-        return batchId
+        return finalBatchId
       },
       moveNode: (id, parentId) => {
         const state = get()

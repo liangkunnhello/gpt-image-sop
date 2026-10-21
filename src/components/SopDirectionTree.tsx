@@ -183,7 +183,7 @@ export default function SopDirectionTree() {
     setAddingUnder(null)
   }
 
-  /** 删除：二次确认 → 连子孙进回收站 → 下属任务卡划为未归属 */
+  /** 删除：二次确认 → 节点连子孙 + 归属它的任务卡一起进回收站，可整批恢复 */
   const trashNode = (node: SopDirectionNode) => {
     const subs = (() => {
       const ids = new Set([node.id])
@@ -199,22 +199,22 @@ export default function SopDirectionTree() {
       }
       return ids
     })()
-    const cardCount = cards.filter((card) => card.sopDirectionId && subs.has(card.sopDirectionId)).length
-    const kindLabel = node.kind === 'category' ? '类目' : node.kind === 'product' ? '产品' : '方向'
+    const affected = cards.filter((card) => card.sopDirectionId && subs.has(card.sopDirectionId))
+    const cardCount = affected.length
     const subCount = subs.size - 1
     setConfirmDialog({
-      title: `删除${kindLabel}`,
+      title: `移入回收站`,
       message: [
         `确定删除「${node.name}」吗？`,
         subCount > 0 ? `它下面的 ${subCount} 个下级节点会一起进回收站。` : '',
-        cardCount > 0 ? `${cardCount} 张任务卡会变为「未归属」。` : '',
-        '删除后可以在「回收站」里恢复，不会立即丢失。',
+        cardCount > 0 ? `归属这些方向的 ${cardCount} 张任务卡也会一起进回收站。` : '',
+        '可以在「回收站」里整批恢复，任务卡的归属会原样回来。',
       ].filter(Boolean).join('\n'),
       action: () => {
-        void trashNodeWithTasks(node.id).then(({ clearedCards }) => {
+        void trashNodeWithTasks(node.id).then(({ trashedCards }) => {
           showToast(
-            clearedCards > 0
-              ? `已移入回收站，${clearedCards} 张任务卡已划为未归属`
+            trashedCards > 0
+              ? `已移入回收站，连同 ${trashedCards} 张任务卡`
               : '已移入回收站',
             'success',
           )
