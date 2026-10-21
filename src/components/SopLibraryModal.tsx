@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { SopLibraryTab } from '../lib/sopStore'
 import { NO_PRESET, SOP_LIBRARY_LABEL, directionPath, useSopStore } from '../lib/sopStore'
 import { useStore } from '../store'
+import { firstTextFile, isFileDrag } from '../lib/fileDrop'
 import AiRewriteBar from './AiRewriteBar'
 import MarkdownEditor from './MarkdownEditor'
 import SopLibraryImportModal from './SopLibraryImportModal'
@@ -100,6 +101,8 @@ export default function SopLibraryModal() {
   const [draftContent, setDraftContent] = useState('')
   const [newName, setNewName] = useState('')
   const [importOpen, setImportOpen] = useState(false)
+  /** md 文件拖到右侧空白区（比如「不使用系统提示词」时）也能导入 */
+  const [paneFileOver, setPaneFileOver] = useState(false)
 
   const loadDraft = (item: LibraryItem) => {
     setEditingId(item.id)
@@ -210,6 +213,43 @@ export default function SopLibraryModal() {
     applyItem(id)
     loadDraft({ id, name, content: text, updatedAt: Date.now() })
     showToast(`已导入并保存为「${name}」`, 'success')
+  }
+
+  // 右侧面板整体也接住 md 拖放：没有选中条目（含「不使用」）时直接新建一条
+  const handlePaneDragOver = (event: React.DragEvent) => {
+    if (!isFileDrag(event.dataTransfer)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    if (!paneFileOver) setPaneFileOver(true)
+  }
+
+  const handlePaneDragLeave = (event: React.DragEvent) => {
+    if (!isFileDrag(event.dataTransfer)) return
+    const next = event.relatedTarget as Node | null
+    if (!next || !event.currentTarget.contains(next)) setPaneFileOver(false)
+  }
+
+  const handlePaneDrop = async (event: React.DragEvent) => {
+    if (!isFileDrag(event.dataTransfer)) return
+    event.preventDefault()
+    event.stopPropagation()
+    setPaneFileOver(false)
+    const file = firstTextFile(event.dataTransfer.files)
+    if (!file) {
+      showToast('只支持 .md / .markdown / .txt 文件', 'error')
+      return
+    }
+    try {
+      const text = await file.text()
+      if (!text.trim()) {
+        showToast(`${file.name} 是空文件`, 'error')
+        return
+      }
+      importMarkdownFile(text, file.name)
+    } catch {
+      showToast(`读取 ${file.name} 失败`, 'error')
+    }
   }
 
   const saveDraft = () => {
@@ -396,8 +436,16 @@ export default function SopLibraryModal() {
             </div>
           </div>
 
-          {/* 右：编辑区，正文可以铺满剩余高度 */}
-          <div className="flex min-w-0 flex-1 flex-col p-4">
+          {/* 右：编辑区，正文可以铺满剩余高度；没有选中条目时整块也接住 md 拖放 */}
+          <div
+            onDragEnter={handlePaneDragOver}
+            onDragOver={handlePaneDragOver}
+            onDragLeave={handlePaneDragLeave}
+            onDrop={handlePaneDrop}
+            className={`flex min-w-0 flex-1 flex-col p-4 transition-colors ${
+              paneFileOver ? 'bg-blue-50/60 ring-2 ring-inset ring-blue-300/60 dark:bg-blue-500/10 dark:ring-blue-500/30' : ''
+            }`}
+          >
             {editingItem ? (
               <>
                 <div className="flex shrink-0 items-center gap-2">

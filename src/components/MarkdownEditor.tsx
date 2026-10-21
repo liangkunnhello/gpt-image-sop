@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { firstTextFile, isFileDrag } from '../lib/fileDrop'
 import { useStore } from '../store'
 import MarkdownRenderer from './MarkdownRenderer'
 
@@ -24,8 +25,6 @@ interface Props {
   onImportFile?: (text: string, fileName: string) => void
 }
 
-/** 允许直接拖进来导入的文本文件 */
-const IMPORTABLE_FILE = /\.(md|markdown|txt)$/i
 
 /** 工具栏按钮：把选区包起来，或给每一行加前缀 */
 type Action = {
@@ -196,10 +195,8 @@ export default function MarkdownEditor({
   }
 
   // ===== 拖入 .md 文件直接导入 =====
-  const isFileDrag = (event: React.DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
-
   const handleDragOver = (event: React.DragEvent) => {
-    if (!isFileDrag(event)) return
+    if (!isFileDrag(event.dataTransfer)) return
     // 必须拦下来，否则会被全局的「拖入图片」处理和浏览器的默认打开文件接管
     event.preventDefault()
     event.stopPropagation()
@@ -208,18 +205,18 @@ export default function MarkdownEditor({
   }
 
   const handleDragLeave = (event: React.DragEvent) => {
-    if (!isFileDrag(event)) return
+    if (!isFileDrag(event.dataTransfer)) return
     event.stopPropagation()
     const next = event.relatedTarget as Node | null
     if (!next || !event.currentTarget.contains(next)) setFileOver(false)
   }
 
   const handleDrop = async (event: React.DragEvent) => {
-    if (!isFileDrag(event)) return
+    if (!isFileDrag(event.dataTransfer)) return
     event.preventDefault()
     event.stopPropagation()
     setFileOver(false)
-    const file = Array.from(event.dataTransfer.files).find((item) => IMPORTABLE_FILE.test(item.name))
+    const file = firstTextFile(event.dataTransfer.files)
     if (!file) {
       useStore.getState().showToast('只支持 .md / .markdown / .txt 文件', 'error')
       return
