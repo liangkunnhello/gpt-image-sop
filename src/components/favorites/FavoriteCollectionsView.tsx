@@ -6,6 +6,7 @@ import {
   useStore,
 } from '../../store'
 import { ALL_FAVORITES_COLLECTION_ID } from '../../lib/favoriteState'
+import { scrollOffsetInRoot, scrollRootOf } from '../../lib/scrollRoot'
 import { useDragSelect } from '../../hooks/useDragSelect'
 import { FavoriteIcon } from '../icons'
 import { FavoriteCollectionOverviewCard } from './FavoriteCollectionOverviewCard'
@@ -119,6 +120,9 @@ export function FavoriteCollectionsView() {
     })
   }
 
+  // 框选遮罩是 fixed，绘制时要把内容坐标减回视口坐标（画廊模式滚的是外面那层容器）
+  const contentScroll = scrollOffsetInRoot(scrollRootOf(document.querySelector('.favorite-collection-card-wrapper')))
+
   return (
     <div data-favorite-collections-root className="relative min-h-[50vh]">
       {filteredCards.length === 0 ? (
@@ -167,8 +171,8 @@ export function FavoriteCollectionsView() {
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
           style={{
-            left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
-            top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,
+            left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - contentScroll.x,
+            top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - contentScroll.y,
             width: Math.abs(selectionBox.currentPageX - selectionBox.startPageX),
             height: Math.abs(selectionBox.currentPageY - selectionBox.startPageY),
           }}

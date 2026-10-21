@@ -250,9 +250,9 @@ export default function SopDirectionTree() {
   )
 
   return (
-    <aside className="hidden w-56 shrink-0 lg:block">
-      {/* 外层只负责限高：搜索、当前归属、全部任务这几块固定，滚动条只管下面的方向树 */}
-      <div className="sticky top-20 flex max-h-[calc(100vh-11rem)] flex-col">
+    <aside className="hidden w-56 shrink-0 lg:flex lg:flex-col lg:pb-28 lg:pt-6">
+      {/* 外层只负责占满可用高度：搜索、当前归属、全部任务这几块固定，滚动条只管下面的方向树 */}
+      <div className="flex min-h-0 flex-1 flex-col">
         <div className="shrink-0">
           <div className="relative mb-3">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400">

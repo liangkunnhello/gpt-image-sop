@@ -3,6 +3,7 @@ import { useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { isTauri } from '../lib/platform'
 import { getIndexesInRect } from '../lib/virtualGrid'
+import { scrollOffsetInRoot, scrollRootBy, scrollRootOf, scrollRootRect } from '../lib/scrollRoot'
 import { groupSopTasks } from '../lib/sopGroup'
 import { collectSubtreeIds, UNASSIGNED_FILTER, useSopStore } from '../lib/sopStore'
 import { useVirtualGrid } from '../hooks/useVirtualGrid'
@@ -85,10 +86,16 @@ export default function TaskGrid() {
     })
   }
 
-  const getPagePoint = (clientX: number, clientY: number) => ({
-    pageX: clientX + window.scrollX,
-    pageY: clientY + window.scrollY,
-  })
+  // 框选用「内容坐标」：画廊模式的滚动量来自任务卡容器，Agent 模式来自整页
+  const scrollOffset = () => scrollOffsetInRoot(scrollRootOf(gridRef.current))
+
+  const getPagePoint = (clientX: number, clientY: number) => {
+    const offset = scrollOffset()
+    return { pageX: clientX + offset.x, pageY: clientY + offset.y }
+  }
+
+  // 框选遮罩是 fixed，绘制时要把内容坐标减回视口坐标
+  const contentScroll = scrollOffset()
 
   const beginSelection = (target: HTMLElement, clientX: number, clientY: number, isCtrl: boolean) => {
     const point = getPagePoint(clientX, clientY)
@@ -123,8 +130,9 @@ export default function TaskGrid() {
     // 虚拟列表只渲染了部分卡片，按布局计算框选范围内的全部卡片
     const list = filteredTasksRef.current
     const gridRect = gridRef.current.getBoundingClientRect()
-    const gridLeft = gridRect.left + window.scrollX
-    const gridTop = gridRect.top + window.scrollY
+    const offset = scrollOffset()
+    const gridLeft = gridRect.left + offset.x
+    const gridTop = gridRect.top + offset.y
     const hit = new Set(getIndexesInRect(list.length, metricsRef.current, {
       left: minX - gridLeft,
       right: maxX - gridLeft,
@@ -164,7 +172,8 @@ export default function TaskGrid() {
       stopDragScroll()
       dragScrollDirectionRef.current = direction
       dragScrollIntervalRef.current = window.setInterval(() => {
-        window.scrollBy({ top: direction * 15, behavior: 'instant' })
+        // 画廊模式滚任务卡容器，Agent 模式滚整页
+        scrollRootBy(scrollRootOf(gridRef.current), direction * 15)
       }, 16)
     }
 
@@ -224,10 +233,12 @@ export default function TaskGrid() {
       updateSelectionFromPoint(point.pageX, point.pageY)
       e.preventDefault()
 
+      // 拖到滚动容器上下边缘时自动滚
       const scrollThreshold = 40
-      if (e.clientY < scrollThreshold) {
+      const rootRect = scrollRootRect(scrollRootOf(gridRef.current))
+      if (e.clientY < rootRect.top + scrollThreshold) {
         startDragScroll(-1)
-      } else if (e.clientY > window.innerHeight - scrollThreshold) {
+      } else if (e.clientY > rootRect.bottom - scrollThreshold) {
         startDragScroll(1)
       } else {
         stopDragScroll()
@@ -361,8 +372,8 @@ export default function TaskGrid() {
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
           style={{
-            left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
-            top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,
+            left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - contentScroll.x,
+            top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - contentScroll.y,
             width: Math.abs(selectionBox.currentPageX - selectionBox.startPageX),
             height: Math.abs(selectionBox.currentPageY - selectionBox.startPageY),
           }}

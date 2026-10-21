@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { scrollOffsetInRoot, scrollRootBy, scrollRootOf, scrollRootRect } from '../lib/scrollRoot'
 
 interface UseDragSelectOptions {
   containerSelector: string
@@ -29,10 +30,13 @@ export function useDragSelect({
   const initialSelection = useRef<string[]>([])
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
-  const getPagePoint = useCallback((clientX: number, clientY: number) => ({
-    pageX: clientX + window.scrollX,
-    pageY: clientY + window.scrollY,
-  }), [])
+  // 框选用「内容坐标」：滚动量可能来自任务卡容器，也可能来自整页
+  const rootScroll = useCallback(() => scrollOffsetInRoot(scrollRootOf(document.querySelector(containerSelector))), [containerSelector])
+
+  const getPagePoint = useCallback((clientX: number, clientY: number) => {
+    const offset = rootScroll()
+    return { pageX: clientX + offset.x, pageY: clientY + offset.y }
+  }, [rootScroll])
 
   const beginSelection = useCallback((target: HTMLElement, clientX: number, clientY: number, isCtrl: boolean) => {
     const point = getPagePoint(clientX, clientY)
@@ -67,6 +71,7 @@ export function useDragSelect({
     const containers = document.querySelectorAll(containerSelector)
     const newSelected = new Set(initialSelection.current)
     const initialSelected = new Set(initialSelection.current)
+    const offset = rootScroll()
 
     containers.forEach((container) => {
       const items = container.querySelectorAll(itemSelector)
@@ -75,10 +80,10 @@ export function useDragSelect({
         const id = getItemId(item)
         if (!id) return
 
-        const itemLeft = rect.left + window.scrollX
-        const itemRight = rect.right + window.scrollX
-        const itemTop = rect.top + window.scrollY
-        const itemBottom = rect.bottom + window.scrollY
+        const itemLeft = rect.left + offset.x
+        const itemRight = rect.right + offset.x
+        const itemTop = rect.top + offset.y
+        const itemBottom = rect.bottom + offset.y
 
         const isIntersecting =
           minX < itemRight && maxX > itemLeft && minY < itemBottom && maxY > itemTop
@@ -96,7 +101,7 @@ export function useDragSelect({
     })
 
     onSelectionChange(Array.from(newSelected))
-  }, [containerSelector, getItemId, itemSelector, onSelectionChange])
+  }, [containerSelector, getItemId, itemSelector, onSelectionChange, rootScroll])
 
   useEffect(() => {
     const stopDragScroll = () => {
@@ -111,8 +116,10 @@ export function useDragSelect({
       if (dragScrollIntervalRef.current && dragScrollDirectionRef.current === direction) return
       stopDragScroll()
       dragScrollDirectionRef.current = direction
+      const container = document.querySelector(containerSelector)
       dragScrollIntervalRef.current = window.setInterval(() => {
-        window.scrollBy({ top: direction * 15, behavior: 'instant' })
+        // 滚动的可能是任务卡容器而不是整页
+        scrollRootBy(scrollRootOf(container), direction * 15)
       }, 16)
     }
 
@@ -183,10 +190,12 @@ export function useDragSelect({
       updateSelectionFromPoint(point.pageX, point.pageY)
       e.preventDefault()
 
+      // 拖到滚动容器上下边缘时自动滚
       const scrollThreshold = 40
-      if (e.clientY < scrollThreshold) {
+      const rootRect = scrollRootRect(scrollRootOf(document.querySelector(containerSelector)))
+      if (e.clientY < rootRect.top + scrollThreshold) {
         startDragScroll(-1)
-      } else if (e.clientY > window.innerHeight - scrollThreshold) {
+      } else if (e.clientY > rootRect.bottom - scrollThreshold) {
         startDragScroll(1)
       } else {
         stopDragScroll()

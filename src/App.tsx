@@ -185,6 +185,13 @@ export default function App() {
       })
   }, [])
 
+  // 画廊模式整页锁死，只有任务卡区域滚动；Agent 模式仍然整页滚
+  useEffect(() => {
+    const root = document.documentElement
+    root.classList.toggle('gallery-fixed-scroll', appMode === 'gallery')
+    return () => root.classList.remove('gallery-fixed-scroll')
+  }, [appMode])
+
   useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {
       if ((e.target as HTMLElement | null)?.closest('img')) {
@@ -202,13 +209,18 @@ export default function App() {
       {appMode === 'agent' ? (
         <AgentWorkspace />
       ) : (
-        <main data-home-main data-drag-select-surface className="pb-48">
-          <div className="safe-area-x max-w-[1600px] mx-auto">
-            <div className="lg:flex lg:gap-4">
+        <main data-home-main data-drag-select-surface className="flex min-h-0 flex-col">
+          <div className="safe-area-x mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col">
+            <div className="flex min-h-0 flex-1 lg:gap-4">
               <SopDirectionTree />
-              <div className="min-w-0 flex-1">
-                <SearchBar />
-                {filterFavorite && !activeFavoriteCollectionId ? <FavoriteCollectionsView /> : <TaskGrid />}
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <div className="shrink-0">
+                  <SearchBar />
+                </div>
+                {/* 整页只有这块滚动：任务卡 / 收藏夹列表 */}
+                <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-52 pr-1">
+                  {filterFavorite && !activeFavoriteCollectionId ? <FavoriteCollectionsView /> : <TaskGrid />}
+                </div>
               </div>
             </div>
           </div>

@@ -405,6 +405,28 @@ input[type="number"] {
   min-height: 3.5rem;
 }
 
+/*
+ * 画廊模式：整页不滚，只有任务卡区域滚动。
+ * #root 撑满一屏做纵向 flex，头部的占位块（Header 里的 invisible 占位）自然留在顶部，
+ * main 用 flex-1 吃掉剩下的高度，内部再分固定区 + 滚动区。
+ */
+html.gallery-fixed-scroll,
+html.gallery-fixed-scroll body {
+  height: 100%;
+  overflow: hidden;
+}
+
+html.gallery-fixed-scroll #root {
+  display: flex;
+  height: 100dvh;
+  flex-direction: column;
+}
+
+html.gallery-fixed-scroll #root > main {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 @media (max-width: 640px) {
   input,
   textarea,
