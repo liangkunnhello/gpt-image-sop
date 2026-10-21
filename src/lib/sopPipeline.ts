@@ -1,4 +1,5 @@
 import type { ApiProfile } from '../types'
+import { planCopyAssignment } from './copyPlan'
 import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, useStore } from '../store'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
@@ -100,6 +101,7 @@ export function buildSopSystemPrompt(ignoreCompliance: boolean, useImageSellingP
     avoidCta
       ? '参考图里的按钮、悬浮球、进度条、返回箭头、开关、卡片跳转等「仿系统界面 / 可点击」的设计元素，一律不要写进 SOP；SOP 里要明确列为禁忌：不画按钮、不画手指点击示意、不加指向性的箭头或手势，也不写「立即领取」「点击查看」「滑动解锁」「下载App」这类引导点击的文案。'
       : '',
+    '文字规范不要写死卖点条数：版式要能按 0 / 1 / 2 / 3 条卖点自适应——卖点少时把版面让给主视觉（人物、场景、产品特写），并写清卖点多时如何取舍与排序。',
     '输出 Markdown，包含以下小节：## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌。',
     '不要输出任何解释性开场白。',
   ].filter(Boolean).join('\n')
@@ -195,7 +197,10 @@ function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false
       ? '如果给出了【画面预留区】，每条提示词都要写清主体、主要文字和关键视觉安排在预留区之外，并明确说明这些区域留白或保持干净背景。'
       : '',
     hasCopy
-      ? '【文案唯一来源】用户会单独给出「卖点文案」。图上出现的所有文字必须逐字照抄这份卖点文案，不得改写、缩写、扩写、合并或新增；SOP、参考图里的文案与它冲突时一律以卖点文案为准。某条画面用不上某句卖点，就直接不写那句，但不要自己编新文案。'
+      ? '【文案唯一来源】用户会单独给出「卖点文案」，并按条分配好。图上出现的所有文字必须逐字照抄这份卖点文案，不得改写、缩写、扩写、合并或新增；SOP、参考图里的文案与它冲突时一律以卖点文案为准。'
+      : '',
+    hasCopy
+      ? '【卖点不得重复】每条提示词只准用分给自己的那几句卖点，同一句只能出现在一条提示词里。某条没分到卖点，就把版式改成不需要文字的构图（人物情绪、场景、产品特写），不要为了凑字重复别的条目的卖点，也不要自己编文案。'
       : '',
     ignoreCompliance
       ? '不要写品牌 logo、免责声明、风险提示、警示语、合规说明，也不要写「请见条款及投保须知」「本素材纯属广告创意」这类附加小字。'
@@ -235,10 +240,21 @@ export function buildPromptMessages({
     : ''
   const reserve = avoidHint.trim() ? `\n\n${avoidHint.trim()}` : ''
   const copyBlock = copy ? `\n\n【卖点文案（图上文字必须逐字照抄，不得改写）】\n${copy}` : ''
-  const copyTail = copy ? '\n每条提示词里的文字都必须来自上面这份卖点文案，直接原样引用，不要另写文案。' : ''
+  // 卖点按条分配，避免每张图都把整段卖点写一遍
+  const plan = copy ? planCopyAssignment(copy, count) : []
+  const planBlock = plan.length
+    ? `\n\n【卖点分配（同一句只能用一次）】\n${plan
+      .map((list, index) => `第 ${index + 1} 条：${list.length
+        ? list.map((item) => `「${item}」`).join('、')
+        : '不使用卖点文案（这张靠画面本身：人物情绪、场景、产品特写，不要自己编文字）'}`)
+      .join('\n')}`
+    : ''
+  const copyTail = copy
+    ? '\n严格按上面的卖点分配来写：没分给这条的卖点不要用，也不要把前一条用过的文案挪过来；分到较多卖点时可以把它们分层排布（主标题 + 副标题 + 角标），分不到卖点的条目就按不需要文字的版式写。'
+    : ''
   return {
     system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta),
-    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${reserve}`,
+    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}${planBlock}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${reserve}`,
   }
 }
 
