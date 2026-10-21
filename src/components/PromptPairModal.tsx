@@ -26,6 +26,8 @@ export interface PairRow {
   assignments?: Record<string, string>
   strategy?: string
   direction: string
+  /** 这一行属于变量模式时为 true，决定强调色（变量紫 / SOP 蓝） */
+  variableMode: boolean
 }
 
 /**
@@ -51,6 +53,7 @@ export function buildPairRows(tasks: TaskRecord[], directions: Array<{ id: strin
       direction: task.sopDirectionId
         ? directions.find((node) => node.id === task.sopDirectionId)?.name ?? ''
         : '',
+      variableMode: Boolean(task.variableMode),
     }))
 }
 
@@ -114,11 +117,17 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
               {/* 左：提示词全文，按原文换行，不做截断 */}
               <div className="min-w-0">
                 <div className="mb-1 flex items-center gap-2">
-                  <span className="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:bg-blue-500/15 dark:text-blue-300">
+                  <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                    row.variableMode
+                      ? 'bg-violet-50 text-violet-600 dark:bg-violet-500/15 dark:text-violet-300'
+                      : 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
+                  }`}>
                     第 {row.index} 条
                   </span>
                   {row.status === 'running' && (
-                    <span className="shrink-0 text-[11px] text-blue-500">生成中</span>
+                    <span className={`shrink-0 text-[11px] ${row.variableMode ? 'text-violet-500' : 'text-blue-500'}`}>
+                      生成中
+                    </span>
                   )}
                   {row.status === 'error' && (
                     <span className="shrink-0 text-[11px] text-red-500">失败</span>

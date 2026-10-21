@@ -318,15 +318,26 @@ export default function SopLibraryModal() {
               onClick={() => setLibraryTab(key)}
               className={`relative px-3 py-2.5 text-xs font-medium transition-colors ${
                 tab === key
-                  ? 'text-blue-600 dark:text-blue-400'
+                  ? key === 'variable'
+                    // 变量提示词是并行的一套库，用紫色和系统提示词区分开
+                    ? 'text-violet-600 dark:text-violet-400'
+                    : 'text-blue-600 dark:text-blue-400'
                   : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
               }`}
             >
               {SOP_LIBRARY_LABEL[key]}
-              <span className={`ml-1 text-[10px] tabular-nums ${tab === key ? 'text-blue-400' : 'text-gray-400'}`}>
+              <span className={`ml-1 text-[10px] tabular-nums ${
+                tab === key
+                  ? key === 'variable' ? 'text-violet-400' : 'text-blue-400'
+                  : 'text-gray-400'
+              }`}>
                 {counts[key]}
               </span>
-              {tab === key && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-blue-500" />}
+              {tab === key && (
+                <span className={`absolute inset-x-2 -bottom-px h-0.5 rounded-full ${
+                  key === 'variable' ? 'bg-violet-500' : 'bg-blue-500'
+                }`} />
+              )}
             </button>
           ))}
         </div>
@@ -340,7 +351,9 @@ export default function SopLibraryModal() {
                 onClick={() => applyItem(NO_PRESET)}
                 className={`mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors ${
                   isNone
-                    ? 'bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/[0.18] dark:text-blue-200'
+                    ? tab === 'variable'
+                      ? 'bg-violet-50 font-medium text-violet-700 dark:bg-violet-500/[0.18] dark:text-violet-200'
+                      : 'bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/[0.18] dark:text-blue-200'
                     : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]'
                 }`}
               >
@@ -387,13 +400,17 @@ export default function SopLibraryModal() {
                         <span
                           className={`min-w-0 flex-1 truncate text-xs ${
                             isCurrent
-                              ? 'font-semibold text-blue-700 dark:text-blue-300'
+                              ? tab === 'variable'
+                                ? 'font-semibold text-violet-700 dark:text-violet-300'
+                                : 'font-semibold text-blue-700 dark:text-blue-300'
                               : 'text-gray-700 dark:text-gray-200'
                           }`}
                         >
                           {item.name}
                         </span>
-                        {isCurrent && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />}
+                        {isCurrent && (
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${tab === 'variable' ? 'bg-violet-500' : 'bg-blue-500'}`} />
+                        )}
                       </div>
                       <div className="line-clamp-2 text-[10px] leading-relaxed text-gray-400">{item.content}</div>
                     </button>
@@ -473,14 +490,22 @@ export default function SopLibraryModal() {
                     className="min-w-0 flex-1 rounded-lg border border-transparent bg-gray-50 px-2.5 py-1.5 text-sm font-medium text-gray-900 transition-colors focus:border-blue-400 focus:bg-white focus:outline-none dark:bg-white/[0.06] dark:text-white dark:focus:bg-white/[0.09]"
                   />
                   {currentItem?.id === editingItem.id ? (
-                    <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-500/20 dark:text-blue-300">
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      tab === 'variable'
+                        ? 'bg-violet-50 text-violet-600 dark:bg-violet-500/20 dark:text-violet-300'
+                        : 'bg-blue-50 text-blue-600 dark:bg-blue-500/20 dark:text-blue-300'
+                    }`}>
                       使用中
                     </span>
                   ) : (
                     <button
                       type="button"
                       onClick={() => applyItem(editingItem.id)}
-                      className="shrink-0 rounded-full border border-gray-200 px-2 py-0.5 text-[10px] text-gray-500 transition-colors hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-400 dark:hover:text-blue-300"
+                      className={`shrink-0 rounded-full border border-gray-200 px-2 py-0.5 text-[10px] text-gray-500 transition-colors dark:border-white/10 dark:text-gray-400 ${
+                        tab === 'variable'
+                          ? 'hover:border-violet-300 hover:text-violet-600 dark:hover:text-violet-300'
+                          : 'hover:border-blue-300 hover:text-blue-600 dark:hover:text-blue-300'
+                      }`}
                     >
                       使用这条
                     </button>
@@ -536,7 +561,9 @@ export default function SopLibraryModal() {
                     type="button"
                     onClick={saveDraft}
                     disabled={!dirty}
-                    className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/10"
+                    className={`rounded-lg px-3 py-1 text-xs font-medium text-white transition-colors disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/10 ${
+                      tab === 'variable' ? 'bg-violet-500 hover:bg-violet-600' : 'bg-blue-500 hover:bg-blue-600'
+                    }`}
                   >
                     保存
                   </button>

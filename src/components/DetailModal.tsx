@@ -1134,7 +1134,11 @@ export default function DetailModal() {
                     <button
                       type="button"
                       onClick={() => setPairOpen(true)}
-                      className="shrink-0 rounded border border-gray-200 px-1.5 py-0.5 text-[11px] text-gray-600 transition-colors hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-300 dark:hover:border-blue-500/40 dark:hover:text-blue-300"
+                      className={`shrink-0 rounded border px-1.5 py-0.5 text-[11px] transition-colors ${
+                        task.variableMode
+                          ? 'border-gray-200 text-gray-600 hover:border-violet-300 hover:text-violet-600 dark:border-white/10 dark:text-gray-300 dark:hover:border-violet-500/40 dark:hover:text-violet-300'
+                          : 'border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-300 dark:hover:border-blue-500/40 dark:hover:text-blue-300'
+                      }`}
                     >
                       图 ↔ 提示词（{groupTasks.length}）
                     </button>
@@ -1142,7 +1146,11 @@ export default function DetailModal() {
                   <button
                     type="button"
                     onClick={() => setSopEditing(true)}
-                    className="text-xs text-blue-600 hover:underline dark:text-blue-400"
+                    className={`text-xs hover:underline ${
+                      task.variableMode
+                        ? 'text-violet-600 dark:text-violet-400'
+                        : 'text-blue-600 dark:text-blue-400'
+                    }`}
                   >
                     编辑
                   </button>

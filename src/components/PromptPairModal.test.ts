@@ -111,4 +111,12 @@ describe('buildPairRows（图片与提示词对照）', () => {
   it('空列表返回空数组', () => {
     expect(buildPairRows([])).toEqual([])
   })
+
+  it('按任务自身是否变量模式打标，决定强调色', () => {
+    const rows = buildPairRows([
+      makeTask({ id: 'a', sopPromptIndex: 1, variableMode: true }),
+      makeTask({ id: 'b', sopPromptIndex: 2 }),
+    ])
+    expect(rows.map((row) => row.variableMode)).toEqual([true, false])
+  })
 })
