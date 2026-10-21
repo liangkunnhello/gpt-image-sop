@@ -92,6 +92,8 @@ interface SopState {
   useImageSellingPoints: boolean
   /** 每张任务卡生成几条提示词（=几张图），SOP 模式下唯一的数量来源 */
   promptsPerGroup: number
+  /** 生成提示词时自动避让后处理预留区（Logo / 警示语），默认开启 */
+  avoidOverlay: boolean
   /** 按产品存的后处理模板，同一产品可以有多套（按比例匹配） */
   postTemplates: Record<string, PostTemplate[]>
   /** 提示词库弹窗当前打开的分组，null 表示关闭。运行时状态，不落盘 */
@@ -102,6 +104,7 @@ interface SopState {
   setSopMode: (value: boolean) => void
   setIgnoreCompliance: (value: boolean) => void
   setUseImageSellingPoints: (value: boolean) => void
+  setAvoidOverlay: (value: boolean) => void
   setProgress: (value: SopState['progress']) => void
   setActiveDirection: (id: string) => void
   setActiveFilter: (id: string | null) => void
@@ -134,6 +137,7 @@ export const useSopStore = create<SopState>()(
       ignoreCompliance: true,
       useImageSellingPoints: false,
       promptsPerGroup: 5,
+      avoidOverlay: true,
       postTemplates: {},
       libraryTab: null,
       setLibraryTab: (tab) => set({ libraryTab: tab }),
@@ -144,6 +148,7 @@ export const useSopStore = create<SopState>()(
       })),
       setIgnoreCompliance: (value) => set({ ignoreCompliance: value }),
       setUseImageSellingPoints: (value) => set({ useImageSellingPoints: value }),
+      setAvoidOverlay: (value) => set({ avoidOverlay: value }),
       setProgress: (value) => set({ progress: value }),
       setActiveDirection: (id) => set({ activeDirectionId: id }),
       setActiveFilter: (id) => set((state) => ({
@@ -279,7 +284,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, promptsPerGroup: state.promptsPerGroup, postTemplates: state.postTemplates }),
+      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, promptsPerGroup: state.promptsPerGroup, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates }),
     },
   ),
 )

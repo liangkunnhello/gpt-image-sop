@@ -4,6 +4,8 @@ import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage } from './imageApiShared'
 import { apiFetch } from './platform'
+import { productIdForDirection } from './applyPostTemplate'
+import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
 
 /** 生成 SOP 与提示词所用的文本模型 */
 export const SOP_TEXT_MODEL = 'deepseek-v4.1-flash'
@@ -173,10 +175,13 @@ export async function generateSop(
   ])
 }
 
-function promptSystem(ignoreCompliance: boolean) {
+function promptSystem(ignoreCompliance: boolean, avoidHint = '') {
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
     '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。',
+    avoidHint
+      ? '如果给出了【画面预留区】，每条提示词都要写清主体、主要文字和关键视觉安排在预留区之外，并明确说明这些区域留白或保持干净背景。'
+      : '',
     ignoreCompliance
       ? '图上文字只写主标题和卖点标签。不要写品牌 logo、免责声明、风险提示、警示语、合规说明，也不要写「请见条款及投保须知」「本素材纯属广告创意」这类附加小字。'
       : '',
@@ -191,15 +196,18 @@ export async function generatePrompts(
   sopText: string,
   count: number,
   ignoreCompliance = true,
+  /** 后处理预留区说明：Logo、警示语这些固定位置要避开 */
+  avoidHint = '',
 ): Promise<string[]> {
   const tail = ignoreCompliance
     ? '\n如果 SOP 里提到 logo、免责声明、警示语、合规小字，一律忽略，不要写进任何一条提示词。'
     : ''
+  const reserve = avoidHint.trim() ? `\n\n${avoidHint.trim()}` : ''
   const raw = await chat(profile, [
-    { role: 'system', content: promptSystem(ignoreCompliance) },
+    { role: 'system', content: promptSystem(ignoreCompliance, avoidHint) },
     {
       role: 'user',
-      content: `【生图 SOP】\n${sopText.trim()}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${tail}`,
+      content: `【生图 SOP】\n${sopText.trim()}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${tail}${reserve}`,
     },
   ])
   return parseNumberedList(raw)
@@ -260,6 +268,16 @@ async function runJob(job: SopJobRequest) {
   const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
   if (!profile) throw new Error('没有可用的接口配置')
 
+  // 后处理预留区：出图后要在固定位置叠 Logo / 警示语，写提示词时就让模型避开
+  const sopState = useSopStore.getState()
+  const avoidHint = sopState.avoidOverlay === false
+    ? ''
+    : buildAvoidHint(pickAvoidTemplate(
+      sopState.postTemplates[productIdForDirection(sopState.directions, job.directionId)] ?? [],
+      state.params.size,
+      job.imageDataUrls,
+    ))
+
   const sopJobId = `sop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
   // 先占位，用户点完发送立刻能看到这张卡
   const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId)
@@ -272,7 +290,7 @@ async function runJob(job: SopJobRequest) {
       job.ignoreCompliance !== false,
       job.useImageSellingPoints === true,
     )
-    const prompts = await generatePrompts(profile, sop, job.promptsPerGroup, job.ignoreCompliance !== false)
+    const prompts = await generatePrompts(profile, sop, job.promptsPerGroup, job.ignoreCompliance !== false, avoidHint)
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
 
     await removeSopPlaceholder(placeholderId)

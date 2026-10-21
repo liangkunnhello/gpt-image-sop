@@ -1,6 +1,6 @@
 import { imageSizeFromDataUrl } from './imageDimensions'
 
-const SIZE_PATTERN = /^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/
+export const SIZE_PATTERN = /^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/
 const RATIO_PATTERN = /^\s*(\d+(?:\.\d+)?)\s*[:xX×]\s*(\d+(?:\.\d+)?)\s*$/
 const SIZE_MULTIPLE = 16
 const MAX_EDGE = 3840

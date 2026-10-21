@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { buildAvoidHint, collectAvoidZones } from '../lib/postReserve'
 import {
   POST_FONT_STACK,
   POST_SIZE_PRESETS,
@@ -80,6 +81,36 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     setSelectedId(element.id)
   }
 
+  /** 常用固定位：Logo 一般在角上，警示语/免责声明贴在底部，一键摆好并记下名称 */
+  const addPresetSlot = (kind: 'logo-tl' | 'logo-tr' | 'notice') => {
+    if (!active) return
+    if (kind === 'notice') {
+      const element: PostElement = {
+        ...newPostElement('text', active.elements.length + 1),
+        text: '免赔额、赔付比例、费率等请见保险条款及投保须知',
+        label: '警示语',
+        x: 0.06,
+        y: 0.93,
+        fontSize: Math.max(12, Math.round(active.height * 0.011)),
+        fontWeight: 400,
+        color: '#9ca3af',
+      }
+      patchActive({ elements: [...active.elements, element] })
+      setSelectedId(element.id)
+      return
+    }
+    const left = kind === 'logo-tl'
+    const element: PostElement = {
+      ...newPostElement('logo', active.elements.length + 1),
+      label: 'Logo',
+      x: left ? 0.05 : 0.81,
+      y: 0.04,
+      width: 0.14,
+    }
+    patchActive({ elements: [...active.elements, element] })
+    setSelectedId(element.id)
+  }
+
   const removeElement = (id: string) => {
     if (!active) return
     patchActive({ elements: active.elements.filter((item) => item.id !== id) })
@@ -112,6 +143,16 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     })
   }
 
+  /** 读图片顺便记下高宽比，避让区域要靠它算预留高度 */
+  const logoAspect = (dataUrl: string): Promise<number | undefined> => new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => resolve(
+      image.naturalWidth > 0 ? image.naturalHeight / image.naturalWidth : undefined,
+    )
+    image.onerror = () => resolve(undefined)
+    image.src = dataUrl
+  })
+
   const uploadLogo = async (file: File) => {
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader()
@@ -119,10 +160,11 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
       reader.onerror = () => reject(new Error('读取失败'))
       reader.readAsDataURL(file)
     })
+    const aspect = await logoAspect(dataUrl)
     if (selected?.kind === 'logo') {
-      patchElement(selected.id, { text: dataUrl })
+      patchElement(selected.id, { text: dataUrl, ...(aspect ? { aspect } : {}) })
     } else if (active) {
-      const element = { ...newPostElement('logo', active.elements.length + 1), text: dataUrl }
+      const element = { ...newPostElement('logo', active.elements.length + 1), text: dataUrl, ...(aspect ? { aspect } : {}) }
       patchActive({ elements: [...active.elements, element] })
       setSelectedId(element.id)
     }
@@ -137,6 +179,9 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
   // 预览按成品宽等比缩小，字号与描边都要跟着缩
   const scale = active && active.width > 0 && previewWidth > 0 ? previewWidth / active.width : 1
   const enabledCount = templates.filter((item) => item.enabled).length
+  // 预留区：这套模板里参与避让的 Logo / 警示语位置，写提示词时会原样带进去
+  const avoidHint = useMemo(() => buildAvoidHint(active), [active])
+  const avoidZoneCount = useMemo(() => collectAvoidZones(active).length, [active])
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-3 sm:p-6" onClick={onClose}>
@@ -349,6 +394,46 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                   </label>
                 </div>
 
+                <div className="mb-1 text-[10px] text-gray-400">常用固定位（点了再上传 logo / 改文字）</div>
+                <div className="mb-2 flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    onClick={() => addPresetSlot('logo-tl')}
+                    className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-300"
+                  >
+                    Logo 左上
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addPresetSlot('logo-tr')}
+                    className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-300"
+                  >
+                    Logo 右上
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addPresetSlot('notice')}
+                    className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-300"
+                  >
+                    警示语 底部
+                  </button>
+                </div>
+
+                <label className="mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-2 py-1.5 dark:border-white/10" title="写提示词时自动带上「画面预留区」说明">
+                  <input
+                    type="checkbox"
+                    checked={active.avoidOverlay !== false}
+                    onChange={(e) => patchActive({ avoidOverlay: e.target.checked })}
+                    className="mt-0.5 h-3 w-3 accent-blue-500"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-medium text-gray-700 dark:text-gray-200">提示词自动避让预留区</span>
+                    <span className="block text-[10px] leading-relaxed text-gray-400">
+                      开启后生图前会把这套模板的 Logo / 警示语位置写进提示词，让主体和文字避开；当前 {avoidZoneCount} 处参与避让。
+                    </span>
+                  </span>
+                </label>
+
                 <div className="mb-3 space-y-1">
                   {active.elements.map((element, index) => (
                     <div
@@ -358,6 +443,15 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                       <button type="button" onClick={() => setSelectedId(element.id)} className="min-w-0 flex-1 truncate text-left">
                         {element.kind === 'text' ? `文字 ${index + 1}｜${element.text.slice(0, 10) || '空'}` : `Logo ${index + 1}`}
                       </button>
+                      <label className="flex shrink-0 items-center gap-0.5 text-[10px] text-gray-400" title="写提示词时避开这块位置">
+                        <input
+                          type="checkbox"
+                          checked={element.avoid !== false}
+                          onChange={(e) => patchElement(element.id, { avoid: e.target.checked })}
+                          className="h-3 w-3 accent-blue-500"
+                        />
+                        避让
+                      </label>
                       <button type="button" onClick={() => removeElement(element.id)} className="shrink-0 text-gray-400 hover:text-red-500">✕</button>
                     </div>
                   ))}
@@ -370,6 +464,26 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                       {selected.kind === 'text' ? '文字设置' : 'Logo 设置'}
                       <span className="ml-1 text-gray-400">拖蓝点移动</span>
                     </div>
+
+                    <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                      名称
+                      <input
+                        value={selected.label ?? ''}
+                        placeholder={selected.kind === 'logo' ? 'Logo' : '警示语'}
+                        onChange={(e) => patchElement(selected.id, { label: e.target.value })}
+                        className="min-w-0 flex-1 rounded border border-gray-200 px-1.5 py-0.5 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                      />
+                    </label>
+
+                    <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400" title="关闭表示这块是设计的一部分，生图时不用特意留白">
+                      <input
+                        type="checkbox"
+                        checked={selected.avoid !== false}
+                        onChange={(e) => patchElement(selected.id, { avoid: e.target.checked })}
+                        className="h-3 w-3 accent-blue-500"
+                      />
+                      写提示词时避开这块位置
+                    </label>
 
                     {selected.kind === 'text' ? (
                       <>
@@ -500,6 +614,18 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                   </div>
                 )}
               </>
+            )}
+
+            {avoidHint && (
+              <div className="mt-3 rounded-lg bg-blue-50 p-2 dark:bg-blue-500/10">
+                <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-blue-600 dark:text-blue-300">
+                  写进提示词的避让说明
+                  <span className="text-[10px] font-normal text-blue-500/70 dark:text-blue-300/70">{avoidZoneCount} 处预留区</span>
+                </div>
+                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all text-[10px] leading-relaxed text-blue-700 dark:text-blue-200">
+                  {avoidHint}
+                </pre>
+              </div>
             )}
 
             <p className="mt-3 text-[10px] leading-relaxed text-gray-400">

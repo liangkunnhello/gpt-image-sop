@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useSopStore } from '../lib/sopStore'
 import { splitEven } from '../lib/sopPipeline'
+import { collectAvoidZones, pickAvoidTemplate } from '../lib/postReserve'
 import { resolveSystemPrompt } from './SopSystemPromptPicker'
 
 export interface SopRunOptions {
@@ -27,6 +28,9 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const setIgnoreCompliance = useSopStore((s) => s.setIgnoreCompliance)
   const useImageSellingPoints = useSopStore((s) => s.useImageSellingPoints)
   const setUseImageSellingPoints = useSopStore((s) => s.setUseImageSellingPoints)
+  const avoidOverlay = useSopStore((s) => s.avoidOverlay)
+  const setAvoidOverlay = useSopStore((s) => s.setAvoidOverlay)
+  const postTemplates = useSopStore((s) => s.postTemplates)
 
   const products = useMemo(() => directions.filter((node) => node.kind !== 'direction'), [directions])
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
@@ -64,6 +68,16 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const preview = splitEven(Array.from({ length: imageCount }, (_, i) => i + 1), groupCount)
     .map((group) => group.length)
     .join(' / ')
+
+  // 后处理预留区：这个产品下启用的模板里有几处要避开
+  const overlayInfo = useMemo(() => {
+    const list = (postTemplates[productId] ?? []).filter((item) => item.enabled)
+    const withZones = list.map((item) => collectAvoidZones(item).length).filter((count) => count > 0)
+    return {
+      templates: withZones.length,
+      zones: withZones.length ? Math.max(...withZones) : 0,
+    }
+  }, [postTemplates, productId])
 
   // 系统提示词在外面选，这里不再拦截；有方向有图就能跑
   const canRun = Boolean(currentDirectionId && imageCount > 0)
@@ -199,6 +213,25 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">使用参考图上的卖点文案</span>
               <span className="block text-[11px] leading-relaxed text-gray-400">
                 默认关闭，卖点以上方选择器为准；打开后模型会从参考图文字里提炼卖点。
+              </span>
+            </span>
+          </label>
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <input
+              type="checkbox"
+              checked={avoidOverlay !== false}
+              onChange={(e) => setAvoidOverlay(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">提示词避开 Logo / 警示语位置</span>
+              <span className="block text-[11px] leading-relaxed text-gray-400">
+                开启后写提示词会带上后处理模板里的预留区（位置、大小），主体和文字会避开这些区域，出图后再叠 Logo 和警示语就不会压住画面内容。
+                {' '}
+                {overlayInfo.templates
+                  ? `当前产品 ${overlayInfo.templates} 套模板配了预留区，最多 ${overlayInfo.zones} 处。`
+                  : '当前产品还没配后处理模板，可在方向树里给产品打开后处理模板设置。'}
               </span>
             </span>
           </label>

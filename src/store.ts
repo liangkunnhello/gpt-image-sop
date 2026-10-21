@@ -76,6 +76,7 @@ import { createPersistedState, mergePersistedAgentConversations, migratePersiste
 import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
 import { stripInjectedCodexCliSizePrompt, withAspectRatioHint } from './lib/size'
 import { applyPostTemplate, productIdForDirection } from './lib/applyPostTemplate'
+import { buildAvoidHintForTask, withAvoidHint } from './lib/postReserve'
 import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage } from './lib/postTemplate'
 import { saveFinishedCopy } from './lib/openImagesFolder'
@@ -3726,6 +3727,7 @@ async function executeAgentRound(
 
 async function executeTask(taskId: string) {
   const { settings } = useStore.getState()
+  const sopState = useSopStore.getState()
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
   const execution = Symbol(taskId)
@@ -3785,13 +3787,25 @@ async function executeTask(taskId: string) {
       if (ref) ratioReferenceDataUrls = [ref]
     }
 
+    // 后处理预留区：这张图出图后会按模板叠 Logo / 警示语，提示词里先让模型避开这些位置
+    const avoidHint = sopState.avoidOverlay === false
+      ? ''
+      : buildAvoidHintForTask(
+        task,
+        sopState.postTemplates[productIdForDirection(sopState.directions, task.sopDirectionId)] ?? [],
+        ratioReferenceDataUrls,
+      )
+
     const result = await callImageApi({
       settings: requestSettings,
       // 有的渠道不严格遵守 size，画幅比例会乱跳，先把比例写进提示词；auto 时跟参考图一致
-      prompt: withAspectRatioHint(
-        replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
-        task.params.size,
-        ratioReferenceDataUrls,
+      prompt: withAvoidHint(
+        withAspectRatioHint(
+          replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
+          task.params.size,
+          ratioReferenceDataUrls,
+        ),
+        avoidHint,
       ),
       params: task.params,
       nativeTransparentBackground: task.params.transparent_output && !task.transparentOutput,
