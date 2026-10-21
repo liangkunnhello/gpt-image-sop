@@ -83,6 +83,18 @@ export default function TaskCard({
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const settings = useStore((s) => s.settings)
   const openFavoritePicker = useStore((s) => s.openFavoritePicker)
+
+  /**
+   * 单卡改归属。SOP / 变量卡片代表一整组任务，
+   * 只改代表任务会让同组其他提示词还挂在旧方向，所以整组一起交出去。
+   */
+  const openAssignForCard = (target: typeof task) => {
+    const all = useStore.getState().tasks
+    const ids = target.sopJobId
+      ? all.filter((item) => item.sopJobId === target.sopJobId && !item.deletedAt).map((item) => item.id)
+      : [target.id]
+    useStore.getState().openAssignPicker(ids.length ? ids : [target.id])
+  }
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
   const clipScores = useClipStore((s) => s.scores)
   const clipLimit = useClipStore((s) => s.limit)
@@ -775,6 +787,15 @@ export default function TaskCard({
                     strokeWidth={2}
                     d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"
                   />
+                </svg>
+              </TaskActionButton>
+              <TaskActionButton
+                tooltip={task.sopDirectionId ? '修改业务归属' : '设置业务归属'}
+                onClick={() => openAssignForCard(task)}
+                className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7.5A1.5 1.5 0 014.5 6h4l2 2h9A1.5 1.5 0 0121 9.5v8A1.5 1.5 0 0119.5 19h-15A1.5 1.5 0 013 17.5v-10z" />
                 </svg>
               </TaskActionButton>
               <TaskActionButton

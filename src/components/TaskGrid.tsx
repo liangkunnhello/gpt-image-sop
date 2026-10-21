@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashTask } from '../store'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { isTauri } from '../lib/platform'
 import { getIndexesInRect } from '../lib/virtualGrid'
@@ -80,9 +80,9 @@ export default function TaskGrid() {
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
-      title: '删除任务',
-      message: '确定要删除这个任务吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
-      action: () => removeTask(task),
+      title: '移入回收站',
+      message: '确定要删除这个任务吗？会先放进回收站，可以在「回收站」里恢复，清空回收站才真正删除图片。',
+      action: () => trashTask(task),
     })
   }
 

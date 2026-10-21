@@ -109,6 +109,12 @@ interface SopState {
   postTemplates: Record<string, PostTemplate[]>
   /** 提示词库弹窗当前打开的分组，null 表示关闭。运行时状态，不落盘 */
   libraryTab: SopLibraryTab | null
+  /** 回收站弹窗是否打开。运行时状态，不落盘 */
+  trashOpen: boolean
+  setTrashOpen: (value: boolean) => void
+  /** 有值表示该节点已进回收站；全量节点含已删除的，界面只渲染未删除的 */
+  activeNodes: () => SopDirectionNode[]
+  trashedNodes: () => SopDirectionNode[]
   setLibraryTab: (tab: SopLibraryTab | null) => void
   setPromptsPerGroup: (value: number) => void
   setVariablesPerCard: (value: number) => void
@@ -129,6 +135,18 @@ interface SopState {
   setPick: (directionId: string, pick: SopPick) => void
   setDefaultPick: (directionId: string, pick: SopPick) => void
   addNode: (parentId: string | null, name: string, kind: SopDirectionNode['kind']) => string
+  /** 伪删除：连同全部子孙进回收站，返回本批次的 trashBatchId */
+  trashNode: (id: string) => string
+  /** 移动节点到新的父级；不合法时返回错误文案 */
+  moveNode: (id: string, parentId: string | null) => string
+  /** 重命名 */
+  renameNode: (id: string, name: string) => void
+  /** 按批次恢复 */
+  restoreTrashBatch: (batchId: string) => void
+  /** 按批次永久删除（连提示词预设一起清） */
+  purgeTrashBatch: (batchId: string) => void
+  /** 清空回收站里的全部节点 */
+  purgeAllTrash: () => void
   removeNode: (id: string) => void
   addSystemPrompt: (productId: string, name: string, content: string) => string
   updateSystemPrompt: (id: string, patch: Partial<Pick<SopSystemPrompt, 'name' | 'content'>>) => void
@@ -140,7 +158,7 @@ interface SopState {
 
 export const useSopStore = create<SopState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       sopMode: false,
       variableMode: false,
       directions: SEED_DIRECTIONS,
@@ -161,6 +179,8 @@ export const useSopStore = create<SopState>()(
       avoidOverlay: true,
       postTemplates: {},
       libraryTab: null,
+      trashOpen: false,
+      setTrashOpen: (value) => set({ trashOpen: value }),
       setLibraryTab: (tab) => set({ libraryTab: tab }),
       // 两个模式互斥：开一个就把另一个关掉，避免提交时走错分支
       setSopMode: (value) => set({ sopMode: value, variableMode: false }),
@@ -216,9 +236,10 @@ export const useSopStore = create<SopState>()(
         set((state) => ({ directions: [...state.directions, { id, parentId, name, kind }] }))
         return id
       },
-      removeNode: (id) => {
+      trashNode: (id) => {
+        const batchId = `trash-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
         set((state) => {
-          // 连同子孙节点和挂在下面的系统提示词一起删掉
+          // 连子孙一起进回收站：整棵子树共用同一个 batchId，恢复时一起回来
           const doomed = new Set([id])
           let grew = true
           while (grew) {
@@ -230,14 +251,116 @@ export const useSopStore = create<SopState>()(
               }
             }
           }
+          const deletedAt = Date.now()
+          return {
+            directions: state.directions.map((node) => (
+              doomed.has(node.id) && !node.deletedAt
+                ? { ...node, deletedAt, trashBatchId: batchId, trashParentId: node.parentId }
+                : node
+            )),
+            // 正在用的归属/筛选被删掉时，退回「全部」，否则界面会指向一个不存在的节点
+            activeFilterId: state.activeFilterId && doomed.has(state.activeFilterId) ? null : state.activeFilterId,
+            activeDirectionId: doomed.has(state.activeDirectionId)
+              ? state.directions.find((node) => node.kind === 'direction' && !node.deletedAt && !doomed.has(node.id))?.id
+                ?? state.activeDirectionId
+              : state.activeDirectionId,
+          }
+        })
+        return batchId
+      },
+      moveNode: (id, parentId) => {
+        const state = get()
+        const node = state.directions.find((item) => item.id === id)
+        if (!node) return '找不到这个节点'
+        if (parentId === id) return '不能移动到自身下面'
+        const target = parentId ? state.directions.find((item) => item.id === parentId) : null
+        if (parentId && (!target || target.deletedAt)) return '目标节点不存在'
+
+        // 严格三级：类目挂顶层、产品挂类目、方向挂产品
+        const expectedParentKind = node.kind === 'category' ? null : node.kind === 'product' ? 'category' : 'product'
+        if (expectedParentKind === null && target) return '类目只能放在最顶层'
+        if (expectedParentKind && target?.kind !== expectedParentKind) {
+          return node.kind === 'product' ? '产品只能放在类目下' : '方向只能放在产品下'
+        }
+
+        // 不能挂到自己的子孙下面，否则子树会脱离整棵树
+        let cursor = target
+        while (cursor) {
+          if (cursor.id === id) return '不能移动到自身的子节点下'
+          const pid: string | null = cursor.parentId
+          cursor = pid ? state.directions.find((item) => item.id === pid) : null
+        }
+        if (node.parentId === parentId) return ''
+
+        set((prev) => ({
+          directions: prev.directions.map((item) => (item.id === id ? { ...item, parentId } : item)),
+        }))
+        return ''
+      },
+      renameNode: (id, name) => {
+        const trimmed = name.trim()
+        if (!trimmed) return
+        set((state) => ({
+          directions: state.directions.map((node) => (node.id === id ? { ...node, name: trimmed } : node)),
+        }))
+      },
+      restoreTrashBatch: (batchId) => {
+        set((state) => {
+          // 同一批里的节点会一起恢复，所以「父级可用」要把本批也算进去，
+          // 否则父级也在这批里时会被误判成已被彻底删掉，子节点被挂到顶层
+          const batchIds = new Set(
+            state.directions.filter((node) => node.trashBatchId === batchId).map((node) => node.id),
+          )
+          const alive = new Set(
+            state.directions
+              .filter((node) => !node.deletedAt || batchIds.has(node.id))
+              .map((node) => node.id),
+          )
+          return {
+            directions: state.directions.map((node) => {
+              if (node.trashBatchId !== batchId) return node
+              // 原父级已被彻底删掉时，退回顶层，避免恢复出一棵挂不上的子树
+              const parentOk = !node.trashParentId || alive.has(node.trashParentId)
+              return {
+                ...node,
+                parentId: parentOk ? (node.trashParentId ?? null) : null,
+                deletedAt: undefined,
+                trashBatchId: undefined,
+                trashParentId: undefined,
+              }
+            }),
+          }
+        })
+      },
+      purgeTrashBatch: (batchId) => {
+        set((state) => {
+          const doomed = new Set(
+            state.directions.filter((node) => node.trashBatchId === batchId).map((node) => node.id),
+          )
           return {
             directions: state.directions.filter((node) => !doomed.has(node.id)),
-            // 系统提示词与变量提示词都挂在产品上：删方向不动它，删产品/类目才跟着清
+            // 提示词与模板挂在产品上，真正删除时才跟着清
             systemPrompts: state.systemPrompts.filter((item) => !doomed.has(item.productId)),
             variablePrompts: state.variablePrompts.filter((item) => !doomed.has(item.productId)),
           }
         })
       },
+      purgeAllTrash: () => {
+        set((state) => {
+          const doomed = new Set(state.directions.filter((node) => node.deletedAt).map((node) => node.id))
+          return {
+            directions: state.directions.filter((node) => !node.deletedAt),
+            systemPrompts: state.systemPrompts.filter((item) => !doomed.has(item.productId)),
+            variablePrompts: state.variablePrompts.filter((item) => !doomed.has(item.productId)),
+          }
+        })
+      },
+      // 兼容旧调用：现在一律走伪删除，不再物理删
+      removeNode: (id) => {
+        get().trashNode(id)
+      },
+      activeNodes: () => get().directions.filter((node) => !node.deletedAt),
+      trashedNodes: () => get().directions.filter((node) => Boolean(node.deletedAt)),
       addSystemPrompt: (productId, name, content) => {
         const id = newId('sys')
         set((state) => ({
@@ -275,8 +398,8 @@ export const useSopStore = create<SopState>()(
     }),
     {
       name: 'gpt-image-sop-store',
-      // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边；v5：变量提示词库
-      version: 5,
+      // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边；v5：变量提示词库；v6：节点伪删除
+      version: 6,
       migrate: (persisted, version) => {
         const state = (persisted ?? {}) as Partial<SopState>
 

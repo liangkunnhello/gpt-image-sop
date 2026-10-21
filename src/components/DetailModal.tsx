@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask, updateSopText } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask, updateSopText, trashTask } from '../store'
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
@@ -422,9 +422,9 @@ export default function DetailModal() {
   const handleDelete = () => {
     setDetailTaskId(null)
     setConfirmDialog({
-      title: '删除任务',
-      message: '确定要删除这个任务吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
-      action: () => removeTask(task),
+      title: '移入回收站',
+      message: '确定要删除这个任务吗？会先放进回收站，可以在「回收站」里恢复，清空回收站才真正删除图片。',
+      action: () => trashTask(task),
     })
   }
 

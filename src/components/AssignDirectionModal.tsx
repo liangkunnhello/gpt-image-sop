@@ -16,8 +16,10 @@ export default function AssignDirectionModal({ count, onClose, onConfirm }: Prop
 
   const rows = useMemo(() => {
     const out: Array<{ node: SopDirectionNode; depth: number }> = []
+    // 已进回收站的节点不列出来，避免把任务指到一个看不见的方向
+    const alive = directions.filter((item) => !item.deletedAt)
     const walk = (parentId: string | null, depth: number) => {
-      for (const node of directions.filter((item) => item.parentId === parentId)) {
+      for (const node of alive.filter((item) => item.parentId === parentId)) {
         out.push({ node, depth })
         walk(node.id, depth + 1)
       }

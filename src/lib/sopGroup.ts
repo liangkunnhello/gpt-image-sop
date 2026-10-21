@@ -10,6 +10,8 @@ export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
   const groups = new Map<string, TaskRecord[]>()
 
   for (const task of tasks) {
+    // 回收站里的任务不参与聚合，否则卡片数和侧栏计数会把已删的算进去
+    if (task.deletedAt) continue
     if (!task.sopJobId) {
       out.push(task)
       continue

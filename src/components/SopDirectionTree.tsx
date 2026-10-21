@@ -4,8 +4,10 @@ import type { SopDirectionNode } from '../types'
 import { useStore } from '../store'
 import { groupSopTasks } from '../lib/sopGroup'
 import { directionPath, useSopStore, UNASSIGNED_FILTER } from '../lib/sopStore'
+import { trashNodeWithTasks } from '../lib/directionTree'
 import { ensureImageCached } from '../lib/imageCache'
 import PostTemplateModal from './PostTemplateModal'
+import MoveNodeModal from './MoveNodeModal'
 
 const FolderIcon = ({ className = 'h-4 w-4' }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={className}>
@@ -33,14 +35,23 @@ export default function SopDirectionTree() {
   const collapsed = useSopStore((s) => s.sidebarCollapsed)
   const setCollapsed = useSopStore((s) => s.setSidebarCollapsed)
   const addNode = useSopStore((s) => s.addNode)
-  const removeNode = useSopStore((s) => s.removeNode)
+  const moveNode = useSopStore((s) => s.moveNode)
+  const renameNode = useSopStore((s) => s.renameNode)
+  const setTrashOpen = useSopStore((s) => s.setTrashOpen)
   const tasks = useStore((s) => s.tasks)
+  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const showToast = useStore((s) => s.showToast)
 
   const [postTarget, setPostTarget] = useState<{ id: string; name: string } | null>(null)
   const [postPreview, setPostPreview] = useState('')
   const [folded, setFolded] = useState<Set<string>>(new Set())
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
+  /** 新增下级时的父节点；null 表示新建顶层类目 */
+  const [addingUnder, setAddingUnder] = useState<{ parentId: string | null; kind: SopDirectionNode['kind'] } | null>(null)
+  /** 右键菜单：位置 + 目标节点 */
+  const [menu, setMenu] = useState<{ x: number; y: number; node: SopDirectionNode | null } | null>(null)
+  const [moveTarget, setMoveTarget] = useState<SopDirectionNode | null>(null)
 
   const openPostTemplate = async (product: SopDirectionNode) => {
     setPostTarget({ id: product.id, name: product.name })
@@ -100,8 +111,8 @@ export default function SopDirectionTree() {
     return () => clearTimeout(timer)
   }, [activeDirectionId, currentPathIds])
 
-  const categories = useMemo(() => directions.filter((node) => node.kind === 'category'), [directions])
-  const childrenOf = (id: string) => directions.filter((node) => node.parentId === id)
+  const categories = useMemo(() => directions.filter((node) => node.kind === 'category' && !node.deletedAt), [directions])
+  const childrenOf = (id: string) => directions.filter((node) => node.parentId === id && !node.deletedAt)
   const promptCount = (productId: string) => systemPrompts.filter((item) => item.productId === productId).length
 
   // 数量统一按「任务卡」算：SOP 一卡多条提示词也只算一张，跟画廊里看到的卡片数一致
@@ -126,7 +137,7 @@ export default function SopDirectionTree() {
   const matches = useMemo(() => {
     const keyword = search.trim().toLowerCase()
     if (!keyword) return []
-    return directions.filter((node) => node.kind !== 'category' && node.name.toLowerCase().includes(keyword))
+    return directions.filter((node) => node.kind !== 'category' && !node.deletedAt && node.name.toLowerCase().includes(keyword))
   }, [directions, search])
 
   const toggle = (id: string) => {
@@ -145,12 +156,121 @@ export default function SopDirectionTree() {
     ? directions.find((node) => node.id === activeNode.parentId)
     : activeNode
 
+  /** 打开「新建」输入框；不传参时沿用旧行为：在当前产品下建方向 */
+  const beginAdd = (parentId: string | null, kind: SopDirectionNode['kind']) => {
+    setAddingUnder({ parentId, kind })
+    setDraft('')
+    setAdding(true)
+    // 新建在多层级下，需要先展开父级，否则输入框藏在折叠里
+    if (parentId) setFolded((prev) => {
+      if (!prev.has(parentId)) return prev
+      const next = new Set(prev)
+      next.delete(parentId)
+      return next
+    })
+  }
+
   const submitDraft = () => {
     const name = draft.trim()
     if (!name) return
-    addNode(parentProduct?.id ?? categories[0]?.id ?? null, name, 'direction')
+    const target = addingUnder ?? {
+      parentId: parentProduct?.id ?? categories[0]?.id ?? null,
+      kind: 'direction' as const,
+    }
+    addNode(target.parentId, name, target.kind)
     setDraft('')
+    setAdding(false)
+    setAddingUnder(null)
   }
+
+  /** 删除：二次确认 → 连子孙进回收站 → 下属任务卡划为未归属 */
+  const trashNode = (node: SopDirectionNode) => {
+    const subs = (() => {
+      const ids = new Set([node.id])
+      let grew = true
+      while (grew) {
+        grew = false
+        for (const item of directions) {
+          if (item.parentId && ids.has(item.parentId) && !ids.has(item.id)) {
+            ids.add(item.id)
+            grew = true
+          }
+        }
+      }
+      return ids
+    })()
+    const cardCount = cards.filter((card) => card.sopDirectionId && subs.has(card.sopDirectionId)).length
+    const kindLabel = node.kind === 'category' ? '类目' : node.kind === 'product' ? '产品' : '方向'
+    const subCount = subs.size - 1
+    setConfirmDialog({
+      title: `删除${kindLabel}`,
+      message: [
+        `确定删除「${node.name}」吗？`,
+        subCount > 0 ? `它下面的 ${subCount} 个下级节点会一起进回收站。` : '',
+        cardCount > 0 ? `${cardCount} 张任务卡会变为「未归属」。` : '',
+        '删除后可以在「回收站」里恢复，不会立即丢失。',
+      ].filter(Boolean).join('\n'),
+      action: () => {
+        void trashNodeWithTasks(node.id).then(({ clearedCards }) => {
+          showToast(
+            clearedCards > 0
+              ? `已移入回收站，${clearedCards} 张任务卡已划为未归属`
+              : '已移入回收站',
+            'success',
+          )
+        })
+      },
+    })
+  }
+
+  const submitMove = (parentId: string | null) => {
+    if (!moveTarget) return
+    const error = moveNode(moveTarget.id, parentId)
+    setMoveTarget(null)
+    if (error) {
+      showToast(error, 'error')
+      return
+    }
+    showToast('已移动', 'success')
+  }
+
+  /** 右键菜单项：按节点类型给可用操作 */
+  const menuItemsOf = (node: SopDirectionNode) => {
+    const items: Array<{ label: string; danger?: boolean; onSelect: () => void }> = []
+    if (node.kind === 'category') {
+      items.push({ label: '新建产品', onSelect: () => beginAdd(node.id, 'product') })
+    } else if (node.kind === 'product') {
+      items.push({ label: '新建方向', onSelect: () => beginAdd(node.id, 'direction') })
+      items.push({
+        label: '后处理模板',
+        onSelect: () => { void openPostTemplate(node) },
+      })
+    }
+    items.push({
+      label: '重命名',
+      onSelect: () => {
+        const next = window.prompt('新的名称', node.name)
+        if (next?.trim()) renameNode(node.id, next)
+      },
+    })
+    if (node.kind !== 'category') {
+      items.push({ label: '移动到…', onSelect: () => setMoveTarget(node) })
+    }
+    items.push({ label: '删除', danger: true, onSelect: () => trashNode(node) })
+    return items
+  }
+
+  // 右键菜单点外面就关
+  useEffect(() => {
+    if (!menu) return
+    const close = () => setMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('resize', close)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('resize', close)
+    }
+  }, [menu])
 
   if (collapsed) {
     return (
@@ -213,7 +333,11 @@ export default function SopDirectionTree() {
           type="button"
           data-current={isCurrent || undefined}
           onClick={() => setActiveFilter(node.id)}
-          title={isCurrent ? '当前归属：新生成的图会归到这个方向' : '点击设为当前归属并筛选'}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            setMenu({ x: event.clientX, y: event.clientY, node })
+          }}
+          title={isCurrent ? '当前归属：新生成的图会归到这个方向（右键：更多操作）' : '点击设为当前归属并筛选（右键：更多操作）'}
           className={rowClass({ current: isCurrent, selected: activeFilterId === node.id })}
         >
           {isCurrent && currentBar}
@@ -223,8 +347,11 @@ export default function SopDirectionTree() {
         </button>
         <button
           type="button"
-          onClick={() => removeNode(node.id)}
-          title="删除方向"
+          onClick={(event) => {
+            event.stopPropagation()
+            trashNode(node)
+          }}
+          title="删除方向（可在回收站恢复）"
           className="ml-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-gray-300 hover:bg-red-50 hover:text-red-500 group-hover:flex dark:hover:bg-red-500/10"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3 w-3">
@@ -343,8 +470,18 @@ export default function SopDirectionTree() {
                 <div className="flex-1" />
                 <button
                   type="button"
-                  onClick={() => setAdding((v) => !v)}
-                  title="新建方向"
+                  onClick={() => setTrashOpen(true)}
+                  title="回收站：恢复或彻底删除已删的业务线与任务卡"
+                  className="flex h-5 w-5 items-center justify-center rounded text-gray-300 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-300"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-3 w-3">
+                    <path strokeLinecap="round" d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => (adding && addingUnder === null ? setAdding(false) : beginAdd(null, 'category'))}
+                  title="新建业务线（类目）"
                   className="flex h-5 w-5 items-center justify-center rounded border border-gray-200 text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-700 dark:border-white/10 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3 w-3">
@@ -378,6 +515,11 @@ export default function SopDirectionTree() {
                       <button
                         type="button"
                         onClick={() => setActiveFilter(category.id)}
+                        onContextMenu={(event) => {
+                          event.preventDefault()
+                          setMenu({ x: event.clientX, y: event.clientY, node: category })
+                        }}
+                        title="右键：新建产品 / 重命名 / 删除"
                         className={rowClass({ selected: activeFilterId === category.id, onPath: currentPathIds.has(category.id) })}
                       >
                         <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
@@ -401,9 +543,9 @@ export default function SopDirectionTree() {
                                   onClick={() => setActiveFilter(product.id)}
                                   onContextMenu={(event) => {
                                     event.preventDefault()
-                                    void openPostTemplate(product)
+                                    setMenu({ x: event.clientX, y: event.clientY, node: product })
                                   }}
-                                  title="右键：后处理模板"
+                                  title="右键：新建方向 / 后处理模板 / 移动到 / 删除"
                                   className={rowClass({ selected: activeFilterId === product.id, onPath: currentPathIds.has(product.id) })}
                                 >
                                   <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
@@ -433,16 +575,25 @@ export default function SopDirectionTree() {
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        submitDraft()
+                      if (e.key === 'Enter') submitDraft()
+                      if (e.key === 'Escape') {
                         setAdding(false)
+                        setAddingUnder(null)
                       }
-                      if (e.key === 'Escape') setAdding(false)
                     }}
                     onBlur={() => {
-                      if (!draft.trim()) setAdding(false)
+                      if (!draft.trim()) {
+                        setAdding(false)
+                        setAddingUnder(null)
+                      }
                     }}
-                    placeholder={parentProduct ? `在「${parentProduct.name}」下新建` : '新建方向'}
+                    placeholder={
+                      !addingUnder || addingUnder.parentId === null
+                        ? '新建业务线（类目），回车确认'
+                        : `在「${directions.find((n) => n.id === addingUnder.parentId)?.name ?? ''}」下新建${
+                          addingUnder.kind === 'product' ? '产品' : '方向'
+                        }`
+                    }
                     className="w-full rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700 placeholder:text-gray-300 focus:border-blue-400 focus:outline-none dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                   />
                 </div>
@@ -451,6 +602,46 @@ export default function SopDirectionTree() {
           </>
         )}
       </div>
+
+      {/* 右键菜单：按节点类型给出可做的操作 */}
+      {menu && createPortal(
+        <div
+          className="fixed z-[70] w-40 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-xl dark:border-white/10 dark:bg-gray-800"
+          style={{ left: Math.min(menu.x, window.innerWidth - 172), top: Math.min(menu.y, window.innerHeight - 220) }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {menu.node && (
+            <div className="truncate px-2.5 py-1 text-[10px] text-gray-400">{menu.node.name}</div>
+          )}
+          {(menu.node ? menuItemsOf(menu.node) : [{ label: '新建业务线', onSelect: () => beginAdd(null, 'category') }]).map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => {
+                setMenu(null)
+                item.onSelect()
+              }}
+              className={`block w-full px-2.5 py-1.5 text-left text-xs transition-colors ${
+                item.danger
+                  ? 'text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10'
+                  : 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.06]'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+
+      {moveTarget && createPortal(
+        <MoveNodeModal
+          node={moveTarget}
+          onClose={() => setMoveTarget(null)}
+          onConfirm={submitMove}
+        />,
+        document.body,
+      )}
 
       {postTarget && createPortal(
         <PostTemplateModal

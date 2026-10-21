@@ -357,6 +357,13 @@ export interface TaskRecord {
   variablePromptName?: string
   /** 变量模式：该策略的完整提取结果（Markdown），详情页回看策略用 */
   variableSpecText?: string
+  /**
+   * 伪删除标记：有值表示已进回收站，不再出现在画廊/计数里。
+   * 图片不清、任务记录保留，只有回收站里「清空」才真正删除。
+   */
+  deletedAt?: number
+  /** 与 deletedAt 配套：同一批删除共用一个标识，便于整批恢复 */
+  trashBatchId?: string
 }
 
 // ===== SOP 模式 =====
@@ -367,6 +374,15 @@ export interface SopDirectionNode {
   parentId: string | null
   name: string
   kind: 'category' | 'product' | 'direction'
+  /**
+   * 伪删除标记：有值表示已进回收站。
+   * 连子孙一起删时，整棵子树共用同一个 trashBatchId，恢复时一起回来。
+   */
+  deletedAt?: number
+  /** 同一批删除共用一个标识 */
+  trashBatchId?: string
+  /** 删除前的父级，恢复时原样挂回去（父级若已不在，则挂回顶层或产品的第一个方向） */
+  trashParentId?: string | null
 }
 
 /** 挂在「方向」节点下的系统提示词，同一方向可有多条 */

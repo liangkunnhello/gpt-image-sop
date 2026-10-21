@@ -290,6 +290,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ...plan.state,
     activeFavoriteCollectionId: null,
     favoritePickerTaskIds: null,
+    assignPickerTaskIds: null,
   }
 }
 
@@ -383,6 +384,9 @@ interface AppState {
   // 任务列表
   tasks: TaskRecord[]
   setTasks: (t: TaskRecord[]) => void
+  /** 回收站里的任务。与 tasks 分开存，避免影响任何既有筛选与计数逻辑 */
+  trashedTasks: TaskRecord[]
+  setTrashedTasks: (t: TaskRecord[]) => void
   favoriteCollections: FavoriteCollection[]
   setFavoriteCollections: (collections: FavoriteCollection[]) => void
   defaultFavoriteCollectionId: string | null
@@ -395,6 +399,10 @@ interface AppState {
   favoritePickerTaskIds: string[] | null
   openFavoritePicker: (taskIds: string[]) => void
   closeFavoritePicker: () => void
+  /** 归属选择弹窗：待指派的卡片所属任务 id，null 表示关闭 */
+  assignPickerTaskIds: string[] | null
+  openAssignPicker: (taskIds: string[]) => void
+  closeAssignPicker: () => void
   streamPreviews: Record<string, string>
   streamPreviewSlots: Record<string, Record<string, string>>
   setTaskStreamPreview: (taskId: string, image?: string, requestIndex?: number) => void
@@ -923,6 +931,8 @@ export const useStore = create<AppState>()(
 
       // Tasks
       tasks: [],
+      trashedTasks: [],
+      setTrashedTasks: (trashedTasks) => set(() => ({ trashedTasks })),
       setTasks: (tasks) => set(() => ({
         tasks,
         ...(countSuccessfulOutputImages(tasks) <= SUPPORT_PROMPT_IMAGE_THRESHOLD
@@ -955,6 +965,13 @@ export const useStore = create<AppState>()(
         set({ favoritePickerTaskIds: Array.from(new Set(taskIds)).filter(Boolean) })
       },
       closeFavoritePicker: () => set({ favoritePickerTaskIds: null }),
+      assignPickerTaskIds: null,
+      openAssignPicker: (taskIds) => {
+        if (!taskIds.length) return
+        dismissAllTooltips()
+        set({ assignPickerTaskIds: Array.from(new Set(taskIds)).filter(Boolean) })
+      },
+      closeAssignPicker: () => set({ assignPickerTaskIds: null }),
       streamPreviews: {},
       streamPreviewSlots: {},
       setTaskStreamPreview: (taskId, image, requestIndex = 0) => set((s) => {
@@ -1201,6 +1218,8 @@ export function taskHasOutputErrors(task: Pick<TaskRecord, 'outputErrors'>) {
 }
 
 export function taskMatchesFilterStatus(task: TaskRecord, filterStatus: AppState['filterStatus']) {
+  // 回收站任务已经在 trashedTasks 里，不在 tasks 中；这里再挡一次防御性过滤
+  if (task.deletedAt) return false
   if (filterStatus === 'all') return true
   if (filterStatus === 'error') return task.status === 'error' || taskHasOutputErrors(task)
   return task.status === filterStatus
@@ -1570,7 +1589,9 @@ export async function initStore() {
   await Promise.all(tasks
     .filter((task, index) => normalizedFavorites.changed || interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload)
     .map((task) => putTask(task)))
-  useStore.getState().setTasks(tasks)
+  // 回收站里的任务从主列表分离，主列表只保留未删除的
+  useStore.getState().setTrashedTasks(tasks.filter((task) => Boolean(task.deletedAt)))
+  useStore.getState().setTasks(tasks.filter((task) => !task.deletedAt))
   showSupportPromptForExistingLocalData(tasks)
   // 客户端关闭确认用同样的判断跳过这些任务，它们重启后会继续查询结果
   for (const task of tasks) {
@@ -2268,9 +2289,11 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   const candidates = Array.from(new Set(Array.from(imageIds).filter(Boolean)))
   if (candidates.length === 0) return
 
-  const { tasks, inputImages, galleryInputDraft } = useStore.getState()
+  const { tasks, trashedTasks, inputImages, galleryInputDraft } = useStore.getState()
   const stillUsed = new Set<string>()
   for (const task of tasks) addTaskReferencedImageIds(stillUsed, task)
+  // 回收站里的任务仍然占着图片，清空回收站前不能把它们当孤儿图删掉
+  for (const task of trashedTasks) addTaskReferencedImageIds(stillUsed, task)
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
   for (const img of inputImages) stillUsed.add(img.id)
@@ -4481,6 +4504,105 @@ function expandSopGroupTaskIds(taskIds: string[]): string[] {
   return [...expanded]
 }
 
+/**
+ * 把任务卡放进回收站（伪删除）。
+ *
+ * 任务从 tasks 移到 trashedTasks：这样画廊、计数、筛选完全不用改，
+ * 也不会影响任何既有逻辑。图片自带引用关系一并搬过去，
+ * 清空回收站时才走真正的 removeTasks 并连带清图。
+ */
+export async function trashTasks(taskIds: string[]): Promise<string> {
+  if (!taskIds.length) return ''
+  const ids = expandSopGroupTaskIds(taskIds)
+  const batchId = `trash-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  const deletedAt = Date.now()
+  const moved: TaskRecord[] = []
+  useStore.setState((state) => {
+    const idSet = new Set(ids)
+    const stay: TaskRecord[] = []
+    for (const task of state.tasks) {
+      if (!idSet.has(task.id)) {
+        stay.push(task)
+        continue
+      }
+      moved.push({ ...task, deletedAt, trashBatchId: batchId })
+    }
+    return {
+      tasks: stay,
+      trashedTasks: [...moved, ...state.trashedTasks],
+      selectedTaskIds: state.selectedTaskIds.filter((id) => !idSet.has(id)),
+    }
+  })
+  for (const task of moved) await putTask(task)
+  if (moved.length) {
+    const extra = ids.length > taskIds.length ? '（含同一 SOP 下的其余图片）' : ''
+    useStore.getState().showToast(`已移入回收站 ${moved.length} 个任务${extra}`, 'success')
+  }
+  return moved.length ? batchId : ''
+}
+
+/** 从回收站恢复一批任务 */
+export async function restoreTrashTasks(batchId: string) {
+  const restored: TaskRecord[] = []
+  useStore.setState((state) => {
+    const remaining: TaskRecord[] = []
+    for (const task of state.trashedTasks) {
+      if (task.trashBatchId !== batchId) {
+        remaining.push(task)
+        continue
+      }
+      const next = { ...task, deletedAt: undefined, trashBatchId: undefined }
+      restored.push(next)
+    }
+    return {
+      tasks: [...restored, ...state.tasks],
+      trashedTasks: remaining,
+    }
+  })
+  for (const task of restored) await putTask(task)
+  if (restored.length) useStore.getState().showToast(`已恢复 ${restored.length} 个任务`, 'success')
+  return restored.length
+}
+
+/** 彻底删除一批任务（含图片），不可恢复 */
+export async function purgeTrashTasks(batchId: string) {
+  const list = useStore.getState().trashedTasks.filter((task) => task.trashBatchId === batchId)
+  if (!list.length) return 0
+  // 先从回收站移除，再走真正的删除流程（清图、清 Agent 引用等）
+  useStore.setState((state) => ({
+    trashedTasks: state.trashedTasks.filter((task) => task.trashBatchId !== batchId),
+  }))
+  const count = await deleteTasksPermanently(list)
+  if (count) useStore.getState().showToast(`已彻底删除 ${count} 个任务`, 'success')
+  return count
+}
+
+/** 清空任务卡回收站 */
+export async function purgeAllTrashTasks() {
+  const list = useStore.getState().trashedTasks
+  if (!list.length) return 0
+  useStore.setState({ trashedTasks: [] })
+  const count = await deleteTasksPermanently(list)
+  if (count) useStore.getState().showToast(`已清空回收站，彻底删除 ${count} 个任务`, 'success')
+  return count
+}
+
+/**
+ * 真正删除回收站里的任务。
+ *
+ * removeTasks 是按 tasks 里的 id 工作的，回收站任务已经不在 tasks 里，
+ * 所以先把记录塞回 tasks 再调用，让清图与引用清理走同一套既有逻辑。
+ */
+async function deleteTasksPermanently(list: TaskRecord[]): Promise<number> {
+  const ids = list.map((task) => task.id)
+  const idSet = new Set(ids)
+  useStore.setState((state) => ({ tasks: [...list, ...state.tasks] }))
+  const count = await removeTasks(ids)
+  // 兜底：万一 removeTasks 因某条记录缺失没删干净，别把它们留在 tasks 里
+  useStore.setState((state) => ({ tasks: state.tasks.filter((task) => !idSet.has(task.id)) }))
+  return count
+}
+
 export async function removeMultipleTasks(taskIds: string[]) {
   if (!taskIds.length) return
 
@@ -4493,6 +4615,15 @@ export async function removeMultipleTasks(taskIds: string[]) {
       : `已删除 ${deletedCount} 个任务`,
     'success',
   )
+}
+
+/** 用户界面的「删除」入口：进回收站，可恢复 */
+export async function trashTask(task: TaskRecord) {
+  const ids = task.sopJobId
+    ? useStore.getState().tasks.filter((item) => item.sopJobId === task.sopJobId).map((item) => item.id)
+    : [task.id]
+  if (!ids.length) return
+  await trashTasks(ids)
 }
 
 /** 批量把选中的任务归到某个「产品-方向」下，传 null 表示清空归属 */
@@ -4543,6 +4674,11 @@ export async function clearFailedTasks(taskIds?: string[]) {
 }
 
 /** 删除单条任务 */
+/**
+ * 底层删除：直接把任务从库里清掉（含图片）。
+ * 大量既有逻辑（Agent 晚期响应清理、DB 记录校验等）依赖这个语义，不要改它。
+ * 用户点「删除」走的是 trashTask / trashTasks（进回收站）。
+ */
 export async function removeTask(task: TaskRecord) {
   // SOP 卡片是一组任务，删除时整组一起清掉
   const ids = task.sopJobId
