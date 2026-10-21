@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { SopDirectionNode } from '../types'
 import { useStore } from '../store'
+import { groupSopTasks } from '../lib/sopGroup'
 import { directionPath, useSopStore, UNASSIGNED_FILTER } from '../lib/sopStore'
 import { ensureImageCached } from '../lib/imageCache'
 import PostTemplateModal from './PostTemplateModal'
@@ -100,10 +101,13 @@ export default function SopDirectionTree() {
   const childrenOf = (id: string) => directions.filter((node) => node.parentId === id)
   const promptCount = (productId: string) => systemPrompts.filter((item) => item.productId === productId).length
 
+  // 数量统一按「任务卡」算：SOP 一卡多条提示词也只算一张，跟画廊里看到的卡片数一致
+  const cards = useMemo(() => groupSopTasks(tasks), [tasks])
+
   const counts = useMemo(() => {
     const map = new Map<string, number>()
-    for (const task of tasks) {
-      const directionId = task.sopDirectionId
+    for (const card of cards) {
+      const directionId = card.sopDirectionId
       if (!directionId) continue
       let cursor = directions.find((node) => node.id === directionId)
       while (cursor) {
@@ -113,9 +117,9 @@ export default function SopDirectionTree() {
       }
     }
     return map
-  }, [tasks, directions])
+  }, [cards, directions])
 
-  const unassigned = useMemo(() => tasks.filter((task) => !task.sopDirectionId).length, [tasks])
+  const unassigned = useMemo(() => cards.filter((card) => !card.sopDirectionId).length, [cards])
   const matches = useMemo(() => {
     const keyword = search.trim().toLowerCase()
     if (!keyword) return []
@@ -296,7 +300,7 @@ export default function SopDirectionTree() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 7l8-4 8 4-8 4-8-4zm0 5l8 4 8-4M4 17l8 4 8-4" />
                 </svg>
                 <span className="min-w-0 flex-1 truncate">全部任务</span>
-                {tailBadge(tasks.length)}
+                {tailBadge(cards.length)}
               </button>
 
               {unassigned > 0 && (
