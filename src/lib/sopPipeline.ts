@@ -6,6 +6,7 @@ import { getApiErrorMessage } from './imageApiShared'
 import { apiFetch } from './platform'
 import { productIdForDirection } from './applyPostTemplate'
 import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
+import { dedupePrompts } from './copyDedupe'
 
 /** 生成 SOP 与提示词所用的文本模型 */
 export const SOP_TEXT_MODEL = 'deepseek-v4.1-flash'
@@ -199,6 +200,9 @@ function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false
       ? '【文案唯一来源】用户会单独给出「卖点文案」。每张图都要把这份卖点用全，图上出现的所有文字必须逐字照抄这份卖点，不得改写、缩写、扩写、合并或新增；SOP、参考图里的文案与它冲突时一律以卖点文案为准。'
       : '',
     hasCopy
+      ? '【卖点在各图之间保持一致】所有提示词用的都是同一份卖点：每张图都要把这份卖点完整地用一遍，不能这张图只用前两条、那张图只用后两条，也不许某张图漏掉某一句。各图之间的差别只体现在场景、机位、人物、配色和版式上，文字内容逐张一致。'
+      : '',
+    hasCopy
       ? '【同一张图里不许重复卖点】同一句卖点在一张图上只能出现一次：主标题用掉一句，其他文字位就放别的卖点，不要重复、不要换个说法再写一遍、不要拆成两行重复。版式里的文字位比卖点多时，直接删掉多余的文字位（用图形、色块或留白补位），绝对不能拿同一句卖点去填满版面。'
       : '',
     hasCopy
@@ -243,7 +247,7 @@ export function buildPromptMessages({
   const reserve = avoidHint.trim() ? `\n\n${avoidHint.trim()}` : ''
   const copyBlock = copy ? `\n\n【卖点文案（图上文字必须逐字照抄，不得改写）】\n${copy}` : ''
   const copyTail = copy
-    ? '\n每一条提示词都要用满上面这份卖点（各张图的卖点保持一致），但同一张图里每句只能出现一次：主标题选中其中一句，剩下的按层级放进副标题、角标等位置；文字位数量按卖点条数来定，多出来的槽位直接删掉，不要重复同一句卖点来填版面。'
+    ? '\n注意：每条提示词用的都是同一份卖点，各张图的卖点完全一致。同一张图里，一份卖点从头到尾只用一遍：一句进了主标题，就不许再出现在副标题、角标、贴片等其他文字位上，也不许换个说法或拆成两行重写。文字位数量按卖点条数来定，多出来的槽位删掉，用图形、色块或留白补位。'
     : ''
   return {
     system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta),
@@ -266,7 +270,10 @@ export async function generatePrompts(
     { role: 'system', content: messages.system },
     { role: 'user', content: messages.user },
   ])
-  return parseNumberedList(raw)
+  const prompts = parseNumberedList(raw)
+  // 规则层要求「同一张图里每种卖点只出现一次」，但模型可能写重；
+  // 这里做确定性兜底：同一句卖点在一张图里重复出现时，只保留第一次。
+  return copyText.trim() ? dedupePrompts(prompts).prompts : prompts
 }
 
 /** 解析编号列表；解析不到编号时退回按空行切分 */

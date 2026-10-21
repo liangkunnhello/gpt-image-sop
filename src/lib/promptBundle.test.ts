@@ -51,13 +51,21 @@ describe('buildPromptMessages', () => {
     expect(user).toContain('600 万医疗保障')
   })
 
-  it('卖点在每张图里用全，但同一张图内不重复', () => {
+  it('卖点在每张图里用全，且各图保持一致', () => {
     const { system, user } = buildPromptMessages({ ...base, copyText: 'A\nB\nC' })
     // 不再按张分配，卖点整段给到每一条提示词
     expect(user).not.toContain('卖点分配')
-    expect(user).toContain('每一条提示词都要用满上面这份卖点')
-    expect(user).toContain('同一张图里每句只能出现一次')
+    expect(user).toContain('各张图的卖点完全一致')
+    expect(system).toContain('卖点在各图之间保持一致')
+    expect(system).toContain('文字内容逐张一致')
+  })
+
+  it('同一张图内不许重复同一句卖点', () => {
+    const { system, user } = buildPromptMessages({ ...base, copyText: 'A\nB\nC' })
     expect(system).toContain('同一张图里不许重复卖点')
+    expect(system).toContain('不能拿同一句卖点去填满版面')
+    expect(user).toContain('同一张图里，一份卖点从头到尾只用一遍')
+    expect(user).toContain('不许换个说法或拆成两行重写')
     expect(system).toContain('文字位')
   })
 
