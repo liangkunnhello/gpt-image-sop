@@ -4,6 +4,7 @@ import { NO_PRESET, SOP_LIBRARY_LABEL, directionPath, useSopStore } from '../lib
 import { useStore } from '../store'
 import AiRewriteBar from './AiRewriteBar'
 import MarkdownEditor from './MarkdownEditor'
+import SopLibraryImportModal from './SopLibraryImportModal'
 
 /** 系统提示词和卖点/风格的字段形状一致，抽平了好统一渲染 */
 interface LibraryItem {
@@ -65,6 +66,7 @@ export default function SopLibraryModal() {
   const tab: SopLibraryTab = libraryTab ?? 'prompt'
   const direction = directions.find((node) => node.id === activeDirectionId)
   const productId = direction?.kind === 'direction' ? direction.parentId ?? '' : direction?.id ?? ''
+  const productName = directions.find((node) => node.id === productId)?.name ?? ''
   const path = activeDirectionId ? directionPath(directions, activeDirectionId) : ''
 
   /** pick 里三类各自对应的字段名 */
@@ -97,6 +99,7 @@ export default function SopLibraryModal() {
   const [draftName, setDraftName] = useState('')
   const [draftContent, setDraftContent] = useState('')
   const [newName, setNewName] = useState('')
+  const [importOpen, setImportOpen] = useState(false)
 
   const loadDraft = (item: LibraryItem) => {
     setEditingId(item.id)
@@ -106,11 +109,12 @@ export default function SopLibraryModal() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setLibraryTab(null)
+      // 导入弹窗开着时，Esc 交给它自己处理
+      if (event.key === 'Escape' && !importOpen) setLibraryTab(null)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [setLibraryTab])
+  }, [setLibraryTab, importOpen])
 
   // 切换分组或方向时，编辑区跟着切到该组的当前项，避免停在上一组的内容上
   useEffect(() => {
@@ -221,6 +225,7 @@ export default function SopLibraryModal() {
   if (!libraryTab) return null
 
   return (
+    <>
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-3 sm:p-6"
       onClick={() => setLibraryTab(null)}
@@ -367,6 +372,18 @@ export default function SopLibraryModal() {
             </div>
 
             <div className="shrink-0 border-t border-gray-100 p-2 dark:border-white/[0.06]">
+              <button
+                type="button"
+                onClick={() => setImportOpen(true)}
+                title="把这个产品下已有的系统提示词 / 卖点 / 风格复制过来"
+                className="mb-1 flex w-full items-center justify-center gap-1 rounded-lg border border-dashed border-gray-200 px-2 py-1.5 text-[11px] text-gray-500 transition-colors hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-400 dark:hover:border-blue-500/40 dark:hover:text-blue-300"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3 w-3">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4" />
+                  <path strokeLinecap="round" d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+                </svg>
+                从其他产品导入
+              </button>
               <input
                 value={newName}
                 onChange={(event) => setNewName(event.target.value)}
@@ -474,5 +491,15 @@ export default function SopLibraryModal() {
         </div>
       </div>
     </div>
+
+    {importOpen && (
+      <SopLibraryImportModal
+        targetProductId={productId}
+        targetProductName={productName}
+        defaultTab={tab}
+        onClose={() => setImportOpen(false)}
+      />
+    )}
+    </>
   )
 }
