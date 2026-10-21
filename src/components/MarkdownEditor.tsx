@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { useStore } from '../store'
 import MarkdownRenderer from './MarkdownRenderer'
 
 type ViewMode = 'edit' | 'split' | 'preview'
@@ -16,7 +17,15 @@ interface Props {
   headerExtra?: React.ReactNode
   /** 支持 Ctrl/⌘+S 触发保存 */
   onSave?: () => void
+  /**
+   * 把 .md 文件拖进编辑区时的回调。不传则只把内容填进编辑框（由调用方自己保存）。
+   * 传了就可以在这里顺便落库。
+   */
+  onImportFile?: (text: string, fileName: string) => void
 }
+
+/** 允许直接拖进来导入的文本文件 */
+const IMPORTABLE_FILE = /\.(md|markdown|txt)$/i
 
 /** 工具栏按钮：把选区包起来，或给每一行加前缀 */
 type Action = {
@@ -64,10 +73,13 @@ export default function MarkdownEditor({
   autoFocus = false,
   headerExtra,
   onSave,
+  onImportFile,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [mode, setMode] = useState<ViewMode>('edit')
   const [focused, setFocused] = useState(false)
+  /** 有 md 文件拖到编辑区上方时给个淡蓝描边，松手即导入 */
+  const [fileOver, setFileOver] = useState(false)
 
   /** 改完值后把光标/选区放回去，否则受控 textarea 会跳到末尾 */
   const applyEdit = (next: string, selectionStart: number, selectionEnd: number) => {
@@ -183,6 +195,51 @@ export default function MarkdownEditor({
     }
   }
 
+  // ===== 拖入 .md 文件直接导入 =====
+  const isFileDrag = (event: React.DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
+
+  const handleDragOver = (event: React.DragEvent) => {
+    if (!isFileDrag(event)) return
+    // 必须拦下来，否则会被全局的「拖入图片」处理和浏览器的默认打开文件接管
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    if (!fileOver) setFileOver(true)
+  }
+
+  const handleDragLeave = (event: React.DragEvent) => {
+    if (!isFileDrag(event)) return
+    event.stopPropagation()
+    const next = event.relatedTarget as Node | null
+    if (!next || !event.currentTarget.contains(next)) setFileOver(false)
+  }
+
+  const handleDrop = async (event: React.DragEvent) => {
+    if (!isFileDrag(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    setFileOver(false)
+    const file = Array.from(event.dataTransfer.files).find((item) => IMPORTABLE_FILE.test(item.name))
+    if (!file) {
+      useStore.getState().showToast('只支持 .md / .markdown / .txt 文件', 'error')
+      return
+    }
+    try {
+      const text = await file.text()
+      if (!text.trim()) {
+        useStore.getState().showToast(`${file.name} 是空文件`, 'error')
+        return
+      }
+      if (onImportFile) onImportFile(text, file.name)
+      else {
+        onChange(text)
+        useStore.getState().showToast(`已导入 ${file.name}`, 'success')
+      }
+    } catch {
+      useStore.getState().showToast(`读取 ${file.name} 失败`, 'error')
+    }
+  }
+
   // 预览/分栏模式下外部内容变化（AI 改写、切条目）时，保持编辑区滚动位置不跳
   useEffect(() => {
     if (mode === 'preview') return
@@ -193,7 +250,17 @@ export default function MarkdownEditor({
   const lines = value ? value.split('\n').length : 0
 
   return (
-    <div className={`flex min-h-0 flex-col overflow-hidden rounded-lg border border-gray-200 bg-white focus-within:border-blue-400 dark:border-white/10 dark:bg-gray-900/40 ${className}`}>
+    <div
+      onDragEnter={handleDragOver}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`flex min-h-0 flex-col overflow-hidden rounded-lg border bg-white transition-colors focus-within:border-blue-400 dark:bg-gray-900/40 ${
+        fileOver
+          ? 'border-blue-400 ring-2 ring-blue-300/50 dark:border-blue-400 dark:ring-blue-500/30'
+          : 'border-gray-200 dark:border-white/10'
+      } ${className}`}
+    >
       {/* 工具栏 */}
       <div className="flex shrink-0 flex-wrap items-center gap-0.5 border-b border-gray-100 px-1.5 py-1 dark:border-white/[0.06]">
         {WRAP_ACTIONS.map((action) => (

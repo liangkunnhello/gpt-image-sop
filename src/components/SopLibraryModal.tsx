@@ -173,6 +173,33 @@ export default function SopLibraryModal() {
     if (editingId === item.id) setEditingId('')
   }
 
+  /**
+   * 拖入 .md 文件：有选中条目就直接覆盖并保存，
+   * 没有就用文件名新建一条，省去「点新建 → 起名 → 粘内容」。
+   */
+  const importMarkdownFile = (text: string, fileName: string) => {
+    if (editingId) {
+      setDraftContent(text)
+      updateItem(editingId, { content: text })
+      showToast(`已导入并保存：${fileName}`, 'success')
+      return
+    }
+    const base = fileName.replace(/\.(md|markdown|txt)$/i, '').trim() || `导入的${label}`
+    const existing = new Set(items.map((entry) => entry.name))
+    let name = base
+    let seq = 2
+    while (existing.has(name)) {
+      name = `${base} ${seq}`
+      seq += 1
+    }
+    const id = tab === 'prompt'
+      ? addSystemPrompt(productId, name, text)
+      : addPreset(productId, tab, name, text)
+    applyItem(id)
+    loadDraft({ id, name, content: text, updatedAt: Date.now() })
+    showToast(`已导入并保存为「${name}」`, 'success')
+  }
+
   const saveDraft = () => {
     if (!editingId) return
     updateItem(editingId, { name: draftName.trim() || '未命名', content: draftContent })
@@ -380,6 +407,7 @@ export default function SopLibraryModal() {
                     : `${label}正文，支持 Markdown`}
                   className="mt-3 min-h-0 flex-1"
                   onSave={saveDraft}
+                  onImportFile={importMarkdownFile}
                 />
 
                 <div className="mt-3 shrink-0">

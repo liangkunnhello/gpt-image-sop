@@ -1,5 +1,6 @@
 import { useState } from 'react'
 
+import { useStore } from '../store'
 import MarkdownEditor from './MarkdownEditor'
 
 interface Props {
@@ -42,6 +43,10 @@ export default function SopEditorModal({ title, value, onClose, onSave }: Props)
             placeholder="SOP 正文，支持 Markdown"
             className="min-h-0 flex-1"
             autoFocus
+            onImportFile={(text, fileName) => {
+              setDraft(text)
+              useStore.getState().showToast(`已导入 ${fileName}，点保存写回`, 'success')
+            }}
           />
         </div>
 
