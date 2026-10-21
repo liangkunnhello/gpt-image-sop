@@ -3,6 +3,7 @@ import type { SopLibraryTab } from '../lib/sopStore'
 import { NO_PRESET, SOP_LIBRARY_LABEL, directionPath, useSopStore } from '../lib/sopStore'
 import { useStore } from '../store'
 import AiRewriteBar from './AiRewriteBar'
+import MarkdownEditor from './MarkdownEditor'
 
 /** 系统提示词和卖点/风格的字段形状一致，抽平了好统一渲染 */
 interface LibraryItem {
@@ -370,11 +371,15 @@ export default function SopLibraryModal() {
                   {dirty && <span className="shrink-0 text-[10px] text-amber-500">未保存</span>}
                 </div>
 
-                <textarea
+                {/* 系统提示词本身是 Markdown 文件，用带工具栏和预览的编辑器，不要纯文本框 */}
+                <MarkdownEditor
                   value={draftContent}
-                  onChange={(event) => setDraftContent(event.target.value)}
-                  placeholder={`${label}正文`}
-                  className="mt-3 min-h-0 flex-1 resize-none rounded-lg border border-gray-200 bg-white p-3 text-xs leading-relaxed text-gray-700 focus:border-blue-400 focus:outline-none dark:border-white/10 dark:bg-gray-900/40 dark:text-gray-200 custom-scrollbar"
+                  onChange={setDraftContent}
+                  placeholder={tab === 'prompt'
+                    ? '系统提示词正文，支持 Markdown：# 标题、- 列表、**重点**…'
+                    : `${label}正文，支持 Markdown`}
+                  className="mt-3 min-h-0 flex-1"
+                  onSave={saveDraft}
                 />
 
                 <div className="mt-3 shrink-0">

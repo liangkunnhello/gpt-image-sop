@@ -1,5 +1,7 @@
 import { useState } from 'react'
 
+import MarkdownEditor from './MarkdownEditor'
+
 interface Props {
   title: string
   value: string
@@ -33,12 +35,15 @@ export default function SopEditorModal({ title, value, onClose, onSave }: Props)
           </button>
         </div>
 
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          spellCheck={false}
-          className="min-h-0 flex-1 resize-none bg-transparent px-5 py-4 font-mono text-[13px] leading-relaxed text-gray-700 outline-none dark:text-gray-200"
-        />
+        <div className="flex min-h-0 flex-1 flex-col p-4">
+          <MarkdownEditor
+            value={draft}
+            onChange={setDraft}
+            placeholder="SOP 正文，支持 Markdown"
+            className="min-h-0 flex-1"
+            autoFocus
+          />
+        </div>
 
         <div className="flex items-center justify-between border-t border-gray-200 px-5 py-2 text-[11px] text-gray-400 dark:border-white/[0.08]">
           <span>保存后，这份 SOP 会同步到同一张卡片的全部任务。</span>
