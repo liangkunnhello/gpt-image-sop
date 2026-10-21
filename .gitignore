@@ -17,3 +17,6 @@ data-backups/
 
 # 构建临时目录（指定 TEMP 时产生）
 .tmp-build/
+# 临时验证打包输出与 esbuild 临时目录（沙箱下 dist 不可清空时用）
+.tmp-verify*/
+.tmp-esbuild/
