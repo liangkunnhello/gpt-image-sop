@@ -1736,3 +1736,26 @@ describe('model list', () => {
     expect(getActiveApiProfile({ profiles: [profile], activeProfileId: 'p1' }).model).toBe('b')
   })
 })
+
+describe('任务卡文件夹命名设置', () => {
+  it('缺省时用默认模板，自定义为空', () => {
+    const settings = normalizeSettings({})
+    expect(settings.taskFolderTemplate).toBe('{date}-{product}-{direction}-{size}-{sop}-{custom}')
+    expect(settings.taskFolderCustom).toBe('')
+  })
+
+  it('保留用户填的模板与自定义文案，长度截断', () => {
+    const settings = normalizeSettings({
+      taskFolderTemplate: '{date}-{product}',
+      taskFolderCustom: '第三批',
+    })
+    expect(settings.taskFolderTemplate).toBe('{date}-{product}')
+    expect(settings.taskFolderCustom).toBe('第三批')
+    expect(normalizeSettings({ taskFolderTemplate: 'x'.repeat(300) }).taskFolderTemplate.length).toBe(200)
+    expect(normalizeSettings({ taskFolderCustom: 'y'.repeat(80) }).taskFolderCustom.length).toBe(40)
+  })
+
+  it('允许先清空模板，拼名字时会退回默认', () => {
+    expect(normalizeSettings({ taskFolderTemplate: '' }).taskFolderTemplate).toBe('')
+  })
+})

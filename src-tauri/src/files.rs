@@ -29,6 +29,13 @@ pub struct SaveDir {
     path: String,
 }
 
+/// 保存目录下按规则创建的任务卡文件夹
+#[derive(Serialize)]
+pub struct SaveFolder {
+    name: String,
+    path: String,
+}
+
 pub(crate) fn header<'a>(request: &'a Request<'_>, name: &str) -> &'a str {
     request
         .headers()
@@ -305,13 +312,14 @@ pub async fn save_dir_pick(
 }
 
 /// 在 save_dir_pick 或 download_dir_use 登记的目录中开始一次分块写入，返回写入序号；
-/// 提交时已有同名文件则加序号
+/// 提交时已有同名文件则加序号。folder 为 save_dir_folder 建好的任务卡文件夹名
 #[tauri::command]
 pub async fn save_dir_begin(
     dirs: State<'_, SaveDirs>,
     writes: State<'_, Writes>,
     token: usize,
     name: String,
+    folder: Option<String>,
 ) -> Result<u32, String> {
     check_name(&name)?;
     let dir = dirs
@@ -321,9 +329,51 @@ pub async fn save_dir_begin(
         .and_then(|list| list.get(token).cloned())
         .ok_or_else(|| "保存目录无效".to_string())?;
     tokio::task::block_in_place(|| {
+        let target_dir = match folder {
+            Some(folder) => {
+                check_name(&folder)?;
+                let path = dir.join(&folder);
+                // 文件夹可能已被用户删掉，写入前再兜一次
+                fs::create_dir_all(&path).map_err(|err| format!("创建文件夹 {folder} 失败：{err}"))?;
+                path
+            }
+            None => dir.clone(),
+        };
         writes
-            .begin(&dir, Target::Unique(dir.clone(), name.clone()))
+            .begin(&target_dir, Target::Unique(target_dir.clone(), name.clone()))
             .map_err(|err| format!("创建 {name} 失败：{err}"))
+    })
+}
+
+/// 在登记目录里建一个任务卡文件夹：已存在同名文件夹时依次用“名称-02”“名称-03”……
+#[tauri::command]
+pub async fn save_dir_folder(
+    dirs: State<'_, SaveDirs>,
+    token: usize,
+    name: String,
+) -> Result<SaveFolder, String> {
+    check_name(&name)?;
+    let dir = dirs
+        .0
+        .lock()
+        .ok()
+        .and_then(|list| list.get(token).cloned())
+        .ok_or_else(|| "保存目录无效".to_string())?;
+    tokio::task::block_in_place(|| {
+        for n in 1..=999 {
+            let candidate = if n == 1 { name.clone() } else { format!("{name}-{n:02}") };
+            let path = dir.join(&candidate);
+            if path.exists() {
+                continue;
+            }
+            fs::create_dir_all(&path)
+                .map_err(|err| format!("创建文件夹 {candidate} 失败：{err}"))?;
+            return Ok(SaveFolder {
+                name: candidate,
+                path: path.display().to_string(),
+            });
+        }
+        Err(format!("同名文件夹过多：{name}"))
     })
 }
 

@@ -69,6 +69,7 @@ pub fn run() {
             files::save_file,
             files::save_dir_pick,
             files::save_dir_begin,
+            files::save_dir_folder,
             files::save_write,
             files::save_commit,
             files::save_abort,

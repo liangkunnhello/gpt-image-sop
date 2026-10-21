@@ -3,6 +3,7 @@ import type { AppSettings } from '../../types'
 import { markSaveLocationAsked } from '../../hooks/useSaveLocationPrompt'
 import { isTauri } from '../../lib/platform'
 import { getDefaultSaveDir, openDefaultSaveDir } from '../../lib/saveFile'
+import { buildTaskFolderName, DEFAULT_TASK_FOLDER_TEMPLATE, TASK_FOLDER_TOKENS } from '../../lib/taskFolderName'
 import { openTauriLogDir } from '../../lib/tauriLog'
 import { useStore } from '../../store'
 import Select from '../Select'
@@ -27,6 +28,16 @@ export default function GeneralSettingsTab({
 }: GeneralSettingsTabProps) {
   const showToast = useStore((s) => s.showToast)
   const [defaultSaveDir, setDefaultSaveDir] = useState('')
+
+  // 用一条假任务演示命名效果，省得用户为了看效果去导一次
+  const folderNamePreview = buildTaskFolderName(draft.taskFolderTemplate, {
+    date: new Date(),
+    product: '百万医疗险',
+    direction: '月亮',
+    size: '1280x720',
+    sopName: 'SOP名',
+    custom: draft.taskFolderCustom,
+  })
 
   useEffect(() => {
     if (!isTauri) return
@@ -337,6 +348,51 @@ export default function GeneralSettingsTab({
               </div>
               <div data-selectable-text className="break-all text-xs text-gray-500 dark:text-gray-500">
                 {defaultSaveDir || '读取中…'}
+              </div>
+            </div>
+            <div className="block">
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <span className="block text-sm text-gray-600 dark:text-gray-300">任务卡文件夹命名</span>
+                <button
+                  type="button"
+                  onClick={() => commitSettings({ ...draft, taskFolderTemplate: DEFAULT_TASK_FOLDER_TEMPLATE })}
+                  className="shrink-0 rounded-xl border border-transparent bg-black/[0.04] px-3 py-1 text-xs font-medium text-gray-700 transition hover:bg-black/[0.07] hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
+                >
+                  恢复默认
+                </button>
+              </div>
+              <input
+                value={draft.taskFolderTemplate}
+                onChange={(event) => commitSettings({ ...draft, taskFolderTemplate: event.target.value })}
+                placeholder={DEFAULT_TASK_FOLDER_TEMPLATE}
+                spellCheck={false}
+                className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 font-mono text-xs text-gray-700 outline-none transition-all hover:bg-black/[0.07] focus:border-blue-400 focus:bg-white dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1] dark:focus:bg-white/[0.09]"
+              />
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {TASK_FOLDER_TOKENS.map((token) => (
+                  <button
+                    key={token}
+                    type="button"
+                    title={`插入 {${token}}`}
+                    onClick={() => commitSettings({ ...draft, taskFolderTemplate: `${draft.taskFolderTemplate}{${token}}` })}
+                    className="rounded-md bg-black/[0.04] px-1.5 py-0.5 font-mono text-[10px] text-gray-500 transition hover:bg-black/[0.08] hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-400 dark:hover:bg-white/[0.1] dark:hover:text-gray-200"
+                  >
+                    {`{${token}}`}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-1.5 flex items-center gap-2">
+                <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">自定义</span>
+                <input
+                  value={draft.taskFolderCustom}
+                  onChange={(event) => commitSettings({ ...draft, taskFolderCustom: event.target.value })}
+                  placeholder="选填，替换模板里的 {custom}"
+                  className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-1 text-xs text-gray-700 outline-none transition-all hover:bg-black/[0.07] focus:border-blue-400 focus:bg-white dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1] dark:focus:bg-white/[0.09]"
+                />
+              </div>
+              <div data-selectable-text className="mt-1.5 break-all text-xs text-gray-500 dark:text-gray-500">
+                保存一张任务卡的全部图片时，按这个规则建同名文件夹（重复时自动加 -02、-03）。预览：
+                <span className="ml-1 font-mono text-gray-600 dark:text-gray-300">{folderNamePreview}</span>
               </div>
             </div>
           </>

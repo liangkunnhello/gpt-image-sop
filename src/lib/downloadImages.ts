@@ -4,7 +4,8 @@ import { trackDataTransfer } from './dataOperations'
 import { getNumberedFileNameBase, sanitizeFileNamePart } from './exportFileName'
 import { ensureImageCached } from './imageCache'
 import { apiFetch, isTauri } from './platform'
-import { pickSaveDir, saveFile, saveFileToDir, type SaveDir } from './saveFile'
+import { createSaveFolder, pickSaveDir, saveFile, saveFileToDir, type SaveDir } from './saveFile'
+import { buildTaskFolderName, type TaskFolderContext } from './taskFolderName'
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -41,6 +42,134 @@ export function withSaveLocation(msg: string, location?: string) {
 /** Rust 命令的错误是字符串（例如默认保存地址不可用），附上原因；其他错误只提示下载失败 */
 export function getDownloadErrorMessage(err: unknown) {
   return typeof err === 'string' ? `下载失败，${err}` : '下载失败'
+}
+
+export interface TaskFolderDownloadOptions {
+  /** 文件夹命名模板（设置里的 taskFolderTemplate） */
+  template: string
+  /** 模板里 {custom} 的取值 */
+  custom?: string
+  /** 产品 / 方向名，缺省时用任务的 SOP 归属反查 */
+  product?: string
+  direction?: string
+  /** 已选好的保存目录；不传则让用户选一次 */
+  dir?: SaveDir | null
+}
+
+/**
+ * 客户端：把一张任务卡的全部图片写进一个同名文件夹（文件夹名按设置里的模板生成）。
+ * 重名时客户端自动补 -02、-03；网页版没有文件夹，调用方应退回原来的下载方式。
+ */
+export async function downloadTaskImagesToFolder(
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName'>,
+  options: TaskFolderDownloadOptions,
+): Promise<DownloadImagesResult> {
+  const imageIds = task.outputImages || []
+  if (!imageIds.length || !isTauri) return { successCount: 0, failCount: 0 }
+
+  const dir = options.dir ?? (await pickSaveDir())
+  if (!dir) return { successCount: 0, failCount: 0, canceled: true }
+
+  const context: TaskFolderContext = {
+    date: new Date(task.createdAt),
+    product: options.product,
+    direction: options.direction,
+    size: task.params?.size,
+    sopName: task.sopName,
+    custom: options.custom,
+  }
+  const folderName = buildTaskFolderName(options.template, context) || `task-${task.id}`
+
+  return trackDataTransfer(async () => {
+    let successCount = 0
+    let failCount = 0
+    let error: string | undefined
+    try {
+      const folder = await createSaveFolder(dir, sanitizeFileNamePart(folderName) || `task-${task.id}`)
+      for (let index = 0; index < imageIds.length; index++) {
+        try {
+          const blob = await getImageBlob(imageIds[index])
+          const order = String(index + 1).padStart(2, '0')
+          await saveFileToDir(dir, blob, `${order}.${getBlobExtension(blob)}`, undefined, folder.name)
+          successCount++
+        } catch (err) {
+          console.error(err)
+          if (typeof err === 'string') error = err
+          failCount++
+        }
+      }
+      return { successCount, failCount, location: folder.path, error }
+    } catch (err) {
+      console.error(err)
+      return { successCount, failCount, error: typeof err === 'string' ? err : '创建文件夹失败' }
+    }
+  })
+}
+
+export interface TaskCardFolderTask {
+  id: string
+  createdAt: number
+  outputImages: string[]
+  params?: { size?: string }
+  sopName?: string
+  sopDirectionId?: string
+}
+
+/**
+ * 客户端：多张任务卡各建一个文件夹（命名规则同单卡），图片依次写进各自文件夹。
+ * 一次只让用户选一次目录。
+ */
+export async function downloadTaskCardsToFolders(
+  tasks: TaskCardFolderTask[],
+  options: {
+    template: string
+    custom?: string
+    dir?: SaveDir | null
+    resolveNames: (task: TaskCardFolderTask) => { product?: string; direction?: string }
+  },
+): Promise<DownloadImagesResult> {
+  const cards = tasks.filter((task) => task.outputImages?.length)
+  if (!cards.length || !isTauri) return { successCount: 0, failCount: 0 }
+
+  const dir = options.dir ?? (await pickSaveDir())
+  if (!dir) return { successCount: 0, failCount: 0, canceled: true }
+
+  return trackDataTransfer(async () => {
+    let successCount = 0
+    let failCount = 0
+    let error: string | undefined
+    for (const task of cards) {
+      const names = options.resolveNames(task)
+      try {
+        const base = buildTaskFolderName(options.template, {
+          date: new Date(task.createdAt),
+          product: names.product,
+          direction: names.direction,
+          size: task.params?.size,
+          sopName: task.sopName,
+          custom: options.custom,
+        }) || `task-${task.id}`
+        const folder = await createSaveFolder(dir, sanitizeFileNamePart(base) || `task-${task.id}`)
+        for (let index = 0; index < task.outputImages.length; index++) {
+          try {
+            const blob = await getImageBlob(task.outputImages[index])
+            const order = String(index + 1).padStart(2, '0')
+            await saveFileToDir(dir, blob, `${order}.${getBlobExtension(blob)}`, undefined, folder.name)
+            successCount++
+          } catch (err) {
+            console.error(err)
+            if (typeof err === 'string') error = err
+            failCount++
+          }
+        }
+      } catch (err) {
+        console.error(err)
+        if (typeof err === 'string') error = err
+        failCount += task.outputImages.length
+      }
+    }
+    return { successCount, failCount, location: dir.path, error }
+  })
 }
 
 /** dir 为客户端中已选好的保存目录；未传入时，客户端下载多张会先弹出一次目录选择框，单张弹出保存对话框（“默认地址”模式下都直接写入默认保存地址） */

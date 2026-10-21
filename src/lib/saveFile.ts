@@ -92,9 +92,27 @@ export async function pickSaveDir() {
   return await invoke<SaveDir | null>(saveToDefaultDir ? 'download_dir_use' : 'save_dir_pick')
 }
 
-/** 仅客户端：写入 pickSaveDir 选定的目录，已有同名文件时自动加序号，返回实际写入的完整路径 */
-export async function saveFileToDir(dir: SaveDir, data: Blob | Uint8Array, fileName: string, opts?: SaveOptions) {
-  return await writeInChunks(await invoke<number>('save_dir_begin', { token: dir.token, name: fileName }), data, opts)
+/** 仅客户端：pickSaveDir 目录下按规则建好的任务卡文件夹 */
+export interface SaveFolder {
+  name: string
+  path: string
+}
+
+/** 仅客户端：在选定的保存目录里建一个任务卡文件夹，重名时由客户端加 -02、-03 */
+export async function createSaveFolder(dir: SaveDir, name: string): Promise<SaveFolder> {
+  return await invoke<SaveFolder>('save_dir_folder', { token: dir.token, name })
+}
+
+/** 仅客户端：写入 pickSaveDir 选定的目录（或其中的任务卡文件夹），已有同名文件时自动加序号，返回实际写入的完整路径 */
+export async function saveFileToDir(
+  dir: SaveDir,
+  data: Blob | Uint8Array,
+  fileName: string,
+  opts?: SaveOptions,
+  folder?: string,
+) {
+  const id = await invoke<number>('save_dir_begin', { token: dir.token, name: fileName, folder })
+  return await writeInChunks(id, data, opts)
 }
 
 /** 仅客户端：默认保存地址，用于在设置中显示 */

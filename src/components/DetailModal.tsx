@@ -12,7 +12,8 @@ import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyImageSourceToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
-import { downloadImageEntriesAsZip, downloadImageIds, getDownloadErrorMessage, getImageZipEntries, withSaveLocation } from '../lib/downloadImages'
+import { downloadImageEntriesAsZip, downloadImageIds, downloadTaskImagesToFolder, getDownloadErrorMessage, getImageZipEntries, withSaveLocation } from '../lib/downloadImages'
+import { isTauri } from '../lib/platform'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { getApiProviderLabel } from '../lib/apiProfiles'
@@ -506,9 +507,21 @@ export default function DetailModal() {
 
     try {
       const fileNameBase = `task-${task.id}`
+      // 客户端默认按「一张卡一个同名文件夹」保存，网页版没有文件夹，退回单张下载
+      const directionNode = task.sopDirectionId ? sopDirections.find((node) => node.id === task.sopDirectionId) : undefined
+      const productNode = directionNode
+        ? sopDirections.find((node) => node.id === directionNode.parentId && node.kind === 'product')
+        : undefined
       const result = settings.zipDownloadRoutes.includes('task-detail-all')
         ? await downloadImageEntriesAsZip(getImageZipEntries(task.outputImages, fileNameBase), fileNameBase)
-        : await downloadImageIds(task.outputImages, fileNameBase)
+        : isTauri
+          ? await downloadTaskImagesToFolder(task, {
+            template: settings.taskFolderTemplate,
+            custom: settings.taskFolderCustom,
+            product: productNode?.name,
+            direction: directionNode?.name,
+          })
+          : await downloadImageIds(task.outputImages, fileNameBase)
       if (result.canceled) return
       if (result.successCount === 0) {
         showToast(getDownloadErrorMessage(result.error), 'error')

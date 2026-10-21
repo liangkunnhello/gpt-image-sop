@@ -182,6 +182,10 @@ export interface AppSettings {
   zipDownloadRoutes: ZipDownloadRoute[]
   /** 仅客户端：默认保存地址本身由 Rust 侧保存，不在设置中 */
   saveLocationMode: SaveLocationMode
+  /** 仅客户端：任务卡图片保存到同名文件夹时的命名模板 */
+  taskFolderTemplate: string
+  /** 模板里 {custom} 的取值 */
+  taskFolderCustom: string
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean
