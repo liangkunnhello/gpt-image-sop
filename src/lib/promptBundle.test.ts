@@ -49,9 +49,21 @@ describe('buildPromptMessages', () => {
     expect(system).toContain('不得改写')
     expect(user).toContain('【卖点文案（图上文字必须逐字照抄，不得改写）】')
     expect(user).toContain('600 万医疗保障')
-    expect(user).toContain('【卖点分配（同一句只能用一次）】')
-    expect(user).toContain('严格按上面的卖点分配来写')
-    expect(system).toContain('卖点不得重复')
+  })
+
+  it('卖点在每张图里用全，但同一张图内不重复', () => {
+    const { system, user } = buildPromptMessages({ ...base, copyText: 'A\nB\nC' })
+    // 不再按张分配，卖点整段给到每一条提示词
+    expect(user).not.toContain('卖点分配')
+    expect(user).toContain('每一条提示词都要用满上面这份卖点')
+    expect(user).toContain('同一张图里每句只能出现一次')
+    expect(system).toContain('同一张图里不许重复卖点')
+    expect(system).toContain('文字位')
+  })
+
+  it('SOP 阶段要求文字槽位数跟着卖点条数走', () => {
+    expect(buildSopSystemPrompt(true, false, true)).toContain('按卖点条数定义槽位')
+    expect(buildSopSystemPrompt(true, false, true)).toContain('不能靠重复同一句卖点把版面填满')
   })
 
   it('没有卖点时退回原来的规则，不出现卖点段', () => {
@@ -86,25 +98,5 @@ describe('按钮 / 引导点击开关', () => {
   it('关闭时不出现相关限制，保留参考图原有按钮', () => {
     expect(buildSopSystemPrompt(true, false, false)).not.toContain('仿系统界面')
     expect(buildPromptMessages({ sopText: 'SOP', count: 2, avoidCta: false }).system).not.toContain('立即领取')
-  })
-})
-
-describe('卖点按条分配，避免重复', () => {
-  it('卖点够时均摊到每条，分配表里不出现重复', () => {
-    const { user } = buildPromptMessages({ sopText: 'SOP', count: 3, copyText: 'A\nB\nC\nD' })
-    expect(user).toContain('第 1 条：「A」、「B」')
-    expect(user).toContain('第 2 条：「C」')
-    expect(user).toContain('第 3 条：「D」')
-  })
-
-  it('卖点不够时后面的条目改成不需要文字的版式', () => {
-    const { user } = buildPromptMessages({ sopText: 'SOP', count: 4, copyText: 'A\nB' })
-    expect(user).toContain('第 1 条：「A」')
-    expect(user).toContain('第 2 条：「B」')
-    expect(user.match(/不使用卖点文案/g)?.length).toBe(2)
-  })
-
-  it('SOP 阶段要求版式按卖点条数自适应', () => {
-    expect(buildSopSystemPrompt(true, false, true)).toContain('0 / 1 / 2 / 3 条卖点自适应')
   })
 })
