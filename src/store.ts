@@ -26,7 +26,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, resolveApiProfileModel, splitModelList, validateApiProfile } from './lib/apiProfiles'
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
-import { useSopStore } from './lib/sopStore'
+import { collectSopLibrary, mergeSopLibrary, useSopStore } from './lib/sopStore'
 import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
 import {
   getAllTasks,
@@ -4662,10 +4662,12 @@ async function recoverCustomTask(taskId: string) {
 export interface ExportOptions {
   exportConfig?: boolean
   exportTasks?: boolean
+  /** 提示词库：方向树、系统提示词、卖点、风格、后处理模板 */
+  exportLibrary?: boolean
 }
 
 /** 导出数据为 ZIP */
-export async function exportData(options: ExportOptions = { exportConfig: true, exportTasks: true }) {
+export async function exportData(options: ExportOptions = { exportConfig: true, exportTasks: true, exportLibrary: true }) {
   // 导出全程可取消：网页版放弃后续下载，客户端丢弃正在写入的临时文件
   const signal = startDataProgress('export', true)
   let savedParts = 0
@@ -4685,6 +4687,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       favoriteCollections,
       defaultFavoriteCollectionId,
       agentConversations: options.exportTasks ? getPersistableAgentConversations(agentConversations) : [],
+      sopLibrary: options.exportLibrary ? collectSopLibrary() : undefined,
     }
     // 进度回调中检查取消，逐张读取时也能及时中断
     const imageSizes = await getExportImageSizes(imageIds, (done) => {
@@ -4761,6 +4764,8 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
 export interface ImportOptions {
   importConfig?: boolean
   importTasks?: boolean
+  /** 提示词库：方向树、系统提示词、卖点、风格、后处理模板 */
+  importLibrary?: boolean
 }
 
 export async function restoreExplicitPresetConfig(ids: { providerIds: string[], profileIds: string[] }) {
@@ -4815,7 +4820,11 @@ export async function importData(input: File | File[], options: ImportOptions = 
     }
 
     const settingsManifests = selected.filter((part) => part.manifest.settings)
-    if (options.importConfig && !options.importTasks && !settingsManifests.length) throw new Error('这份备份里没有配置。')
+    const libraryManifests = selected.filter((part) => part.manifest.sopLibrary)
+    if (options.importConfig && !options.importTasks && !options.importLibrary && !settingsManifests.length) throw new Error('这份备份里没有配置。')
+    if (options.importLibrary && !options.importTasks && !(options.importConfig && settingsManifests.length) && !libraryManifests.length) {
+      throw new Error('这份备份里没有提示词库。')
+    }
     const importedTasks = selected.flatMap((part) => part.manifest.tasks ?? [])
     const importedAgentConversations = selected.flatMap((part) => part.manifest.agentConversations ?? [])
     const hasTaskData = selected.some((part) => part.manifest.tasks != null || part.manifest.imageFiles != null)
@@ -4934,11 +4943,18 @@ export async function importData(input: File | File[], options: ImportOptions = 
       current.setSettings(settings)
     }
 
+    if (options.importLibrary && libraryManifests.length) {
+      // 按 id 合并，同 id 以备份里的为准
+      for (const part of libraryManifests) mergeSopLibrary(part.manifest.sopLibrary)
+    }
+
     let msg = '导入完成'
     if (options.importTasks && hasTaskData) {
       msg = `已导入 ${importedTasks.length} 个任务`
     } else if (options.importConfig && settingsManifests.length) {
       msg = '配置已导入'
+    } else if (options.importLibrary && libraryManifests.length) {
+      msg = '提示词库已导入'
     }
 
     useStore.getState().showToast(msg, 'success')

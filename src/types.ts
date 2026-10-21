@@ -576,6 +576,8 @@ export interface FalApiResponse {
 export interface ExportData {
   version: number
   exportedAt: string
+  /** 提示词库：方向树、系统提示词、卖点、风格、后处理模板 */
+  sopLibrary?: import('./lib/sopStore').SopLibraryExport
   backupPart?: {
     id: string
     index: number

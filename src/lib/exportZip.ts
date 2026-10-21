@@ -15,6 +15,8 @@ const ZIP_ENTRY_OVERHEAD_BYTES = 1024
 export interface BuildExportZipOptions {
   exportConfig?: boolean
   exportTasks?: boolean
+  /** 提示词库（方向树、系统提示词、卖点、风格、后处理模板） */
+  exportLibrary?: boolean
 }
 
 /** 客户端直接从磁盘读出的原图，ext 须与网页版 dataUrlToBytes 推出的扩展名一致 */
@@ -39,6 +41,8 @@ export interface BuildExportZipParams {
   favoriteCollections: FavoriteCollection[]
   defaultFavoriteCollectionId: string | null
   agentConversations: AgentConversation[]
+  /** 提示词库，仅在 exportLibrary 打开时写进 manifest */
+  sopLibrary?: ExportData['sopLibrary']
   imageTasks?: TaskRecord[]
   includeManifestData?: boolean
   backupPart?: ExportData['backupPart']
@@ -121,6 +125,9 @@ export async function buildExportZip(params: BuildExportZipParams) {
   if (params.backupPart) manifest.backupPart = params.backupPart
   if (params.options.exportConfig && params.includeManifestData !== false) {
     manifest.settings = getExportSettings(params.settings)
+  }
+  if (params.options.exportLibrary && params.sopLibrary && params.includeManifestData !== false) {
+    manifest.sopLibrary = params.sopLibrary
   }
   if (params.options.exportTasks) {
     if (params.includeManifestData !== false || params.tasks.length) manifest.tasks = params.tasks

@@ -207,8 +207,10 @@ export default function SettingsModal() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('api')
   const [exportConfig, setExportConfig] = useState(true)
   const [exportTasks, setExportTasks] = useState(true)
+  const [exportLibrary, setExportLibrary] = useState(true)
   const [importConfig, setImportConfig] = useState(true)
   const [importTasks, setImportTasks] = useState(true)
+  const [importLibrary, setImportLibrary] = useState(true)
   const [clearConfig, setClearConfig] = useState(true)
   const [clearTasks, setClearTasks] = useState(true)
   const [isExportingData, setIsExportingData] = useState(false)
@@ -691,7 +693,7 @@ export default function SettingsModal() {
     }
     setIsExportingData(true)
     try {
-      await trackDataTransfer(() => exportData({ exportConfig, exportTasks }))
+      await trackDataTransfer(() => exportData({ exportConfig, exportTasks, exportLibrary }))
     } finally {
       setIsExportingData(false)
     }
@@ -707,7 +709,11 @@ export default function SettingsModal() {
       }
       setIsImportingData(true)
       try {
-        const imported = await trackDataTransfer(() => importData(files, { importConfig: presetConfigOnly ? false : importConfig, importTasks }))
+        const imported = await trackDataTransfer(() => importData(files, {
+          importConfig: presetConfigOnly ? false : importConfig,
+          importTasks,
+          importLibrary: presetConfigOnly ? false : importLibrary,
+        }))
         if (imported) {
           const nextDraft = normalizeSettings(useStore.getState().settings)
           setDraft(nextDraft)
@@ -1880,10 +1886,18 @@ export default function SettingsModal() {
                       onChange={setExportTasks}
                       label="包含任务和图片"
                     />
+                    <Checkbox
+                      checked={exportLibrary}
+                      onChange={setExportLibrary}
+                      label="包含提示词库"
+                    />
                   </div>
+                  <p className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                    提示词库包含方向树、系统提示词、卖点、风格、后处理模板（含 Logo / 警示语预留位）。
+                  </p>
                   <button
                     onClick={handleExport}
-                    disabled={(!exportConfig && !exportTasks) || isExportingData}
+                    disabled={(!exportConfig && !exportTasks && !exportLibrary) || isExportingData}
                     className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     {isExportingData ? (
@@ -1917,10 +1931,15 @@ export default function SettingsModal() {
                       onChange={setImportTasks}
                       label="包含任务和图片"
                     />
+                    {!presetConfigOnly && <Checkbox
+                      checked={importLibrary}
+                      onChange={setImportLibrary}
+                      label="包含提示词库"
+                    />}
                   </div>
                   <button
                     onClick={() => importInputRef.current?.click()}
-                    disabled={(!(presetConfigOnly ? false : importConfig) && !importTasks) || isImportingData}
+                    disabled={(!presetConfigOnly && !importConfig && !importTasks && !importLibrary) || isImportingData}
                     className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     {isImportingData ? (

@@ -31,6 +31,33 @@ describe('exportZip', () => {
     expect((await readExportZip(filled.bytes)).manifest.settings?.customProviders).toEqual([provider])
   })
 
+  it('writes the prompt library only when exportLibrary is on', async () => {
+    const sopLibrary = {
+      directions: [{ id: 'cat-1', parentId: null, name: '保险', kind: 'category' as const }],
+      systemPrompts: [{ id: 'sys-1', productId: 'cat-1', name: '默认', content: '内容', updatedAt: 1 }],
+      presets: [{ id: 'preset-1', productId: 'cat-1', kind: 'point' as const, name: '卖点', content: '内容', updatedAt: 1 }],
+      postTemplates: {},
+      lastPick: {},
+      defaultPick: {},
+    }
+    const base = {
+      exportedAt: 1700000001000,
+      settings: DEFAULT_SETTINGS,
+      tasks: [],
+      images: [],
+      thumbnailsByImageId: new Map<string, StoredImageThumbnail>(),
+      favoriteCollections: [],
+      defaultFavoriteCollectionId: null,
+      agentConversations: [],
+      sopLibrary,
+    }
+    const withLibrary = await buildExportZip({ ...base, options: { exportLibrary: true } })
+    expect((await readExportZip(withLibrary.bytes)).manifest.sopLibrary).toEqual(sopLibrary)
+
+    const withoutLibrary = await buildExportZip({ ...base, options: { exportConfig: true } })
+    expect((await readExportZip(withoutLibrary.bytes)).manifest.sopLibrary).toBeUndefined()
+  })
+
   it('builds and reads backup zip entries without changing manifest shape', async () => {
     const task: TaskRecord = {
       id: 'task-1',

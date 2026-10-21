@@ -289,6 +289,76 @@ export const useSopStore = create<SopState>()(
   ),
 )
 
+/** 备份里的提示词库：方向树、系统提示词、卖点、风格、后处理模板 */
+export interface SopLibraryExport {
+  directions: SopDirectionNode[]
+  systemPrompts: SopSystemPrompt[]
+  presets: SopPreset[]
+  postTemplates: Record<string, PostTemplate[]>
+  lastPick: Record<string, SopPick>
+  defaultPick: Record<string, SopPick>
+  ignoreCompliance?: boolean
+  useImageSellingPoints?: boolean
+  promptsPerGroup?: number
+  avoidOverlay?: boolean
+}
+
+/** 导出用：把提示词库整份取出来，不含运行时状态 */
+export function collectSopLibrary(): SopLibraryExport {
+  const state = useSopStore.getState()
+  return {
+    directions: state.directions,
+    systemPrompts: state.systemPrompts,
+    presets: state.presets,
+    postTemplates: state.postTemplates,
+    lastPick: state.lastPick,
+    defaultPick: state.defaultPick,
+    ignoreCompliance: state.ignoreCompliance,
+    useImageSellingPoints: state.useImageSellingPoints,
+    promptsPerGroup: state.promptsPerGroup,
+    avoidOverlay: state.avoidOverlay,
+  }
+}
+
+/** 按 id 合并：导入的同 id 覆盖本地，没见过的补进来 */
+function mergeById<T extends { id: string }>(current: T[], incoming?: T[]): T[] {
+  if (!incoming?.length) return current
+  const map = new Map(current.map((item) => [item.id, item]))
+  for (const item of incoming) {
+    if (!item?.id) continue
+    map.set(item.id, item)
+  }
+  return [...map.values()]
+}
+
+/**
+ * 导入备份里的提示词库。
+ * 用合并而不是覆盖：换设备导入时本地空、等于全量恢复；
+ * 两边都有内容时也不会把本地新建的提示词冲掉。
+ */
+export function mergeSopLibrary(library?: SopLibraryExport | null) {
+  if (!library) return
+  useSopStore.setState((state) => {
+    const postTemplates = { ...state.postTemplates }
+    for (const [productId, templates] of Object.entries(library.postTemplates ?? {})) {
+      if (!productId || !Array.isArray(templates)) continue
+      postTemplates[productId] = mergeById(postTemplates[productId] ?? [], templates)
+    }
+    return {
+      directions: mergeById(state.directions, library.directions),
+      systemPrompts: mergeById(state.systemPrompts, library.systemPrompts),
+      presets: mergeById(state.presets, library.presets),
+      postTemplates,
+      lastPick: { ...state.lastPick, ...(library.lastPick ?? {}) },
+      defaultPick: { ...state.defaultPick, ...(library.defaultPick ?? {}) },
+      ignoreCompliance: library.ignoreCompliance ?? state.ignoreCompliance,
+      useImageSellingPoints: library.useImageSellingPoints ?? state.useImageSellingPoints,
+      promptsPerGroup: typeof library.promptsPerGroup === 'number' ? library.promptsPerGroup : state.promptsPerGroup,
+      avoidOverlay: library.avoidOverlay ?? state.avoidOverlay,
+    }
+  })
+}
+
 /** 取某个方向的完整路径，例如「保险 / 百万医疗险 / 月亮」 */
 export function directionPath(nodes: SopDirectionNode[], id: string): string {
   const names: string[] = []
