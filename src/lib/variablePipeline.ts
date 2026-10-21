@@ -10,7 +10,7 @@
  */
 
 import type { ApiProfile, VariableDimension, VariablePrompt, VariableStrategy } from '../types'
-import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, useStore } from '../store'
+import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, updateTaskInStore, useStore } from '../store'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage } from './imageApiShared'
@@ -62,6 +62,10 @@ async function chat(profile: ApiProfile, messages: unknown[], timeoutSeconds = 3
 /**
  * 变量提示词为空时的兜底：直接用内置的提取策略。
  * 用户没建变量提示词也能跑，界面上的「变量提示词」选择器会显示「内置策略」。
+ *
+ * 这里刻意不写「输出 Markdown / 固定回复格式」那一套：变量模式要的是 JSON，
+ * 两套格式要求并存会让模型按 Markdown 吐，解析直接失败（卡片转圈后消失）。
+ * 输出格式统一由 OUTPUT_RULES 负责。
  */
 export const BUILTIN_VARIABLE_PROMPT: VariablePrompt = {
   id: '__builtin_variable__',
@@ -100,8 +104,9 @@ export const BUILTIN_VARIABLE_PROMPT: VariablePrompt = {
 /** 输出格式约定：模型必须吐 JSON，避免 Markdown 解析歧义 */
 const OUTPUT_RULES = [
   '',
-  '## 输出格式',
+  '## 输出格式（优先级最高，与上文任何格式要求冲突时一律以本节为准）',
   '只输出一个 JSON 数组，不要任何解释、不要 Markdown 代码块、不要前后缀文字。',
+  '即使上面的提取策略里写了「按 markdown 逐条输出」「可变项：」之类的格式要求，也一律改用下面的 JSON。',
   '数组每一项是一个策略对象，字段固定为：',
   '{"name":"策略名称","evidence":"对应图1、图3","skeleton":"含 {{变量名}} 的完整提示词","dimensions":[{"name":"变量名","options":["选项A","选项B","选项C"]}],"value":"一句话说明适用价值"}',
   '所有 dimensions 里的 name 必须在 skeleton 里以完全相同的 {{name}} 出现，且 skeleton 里出现的每个变量都要在 dimensions 里出现。',
@@ -213,15 +218,19 @@ export async function extractStrategies(
 export function parseStrategies(raw: string): VariableStrategy[] {
   const start = raw.indexOf('[')
   const end = raw.lastIndexOf(']')
-  if (start < 0 || end <= start) return []
+  if (start < 0 || end <= start) {
+    // 用户自建的变量提示词常带「按 markdown 逐条输出」的要求，模型会照着吐 Markdown，
+    // 这里兜一层 Markdown 解析，别让整批任务因为一个格式就跑不出来
+    return parseMarkdownStrategies(raw)
+  }
 
   let parsed: unknown
   try {
     parsed = JSON.parse(raw.slice(start, end + 1))
   } catch {
-    return []
+    return parseMarkdownStrategies(raw)
   }
-  if (!Array.isArray(parsed)) return []
+  if (!Array.isArray(parsed)) return parseMarkdownStrategies(raw)
 
   const out: VariableStrategy[] = []
   for (const item of parsed) {
@@ -230,18 +239,13 @@ export function parseStrategies(raw: string): VariableStrategy[] {
     const skeleton = String(row.skeleton ?? '').trim()
     if (!skeleton) continue
 
-    const used = new Set<string>()
-    for (const match of skeleton.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
-      const name = match[1].trim()
-      if (name) used.add(name)
-    }
     // 骨架里没有的变量丢掉，骨架里有但模型漏给的补空，后面采样会自动跳过
     const dimensions: VariableDimension[] = []
     for (const entry of Array.isArray(row.dimensions) ? row.dimensions : []) {
       if (!entry || typeof entry !== 'object') continue
       const dim = entry as Record<string, unknown>
       const name = String(dim.name ?? '').trim()
-      if (!name || !used.has(name)) continue
+      if (!name) continue
       const options = (Array.isArray(dim.options) ? dim.options : [])
         .map((option) => String(option ?? '').trim())
         .filter(Boolean)
@@ -253,8 +257,86 @@ export function parseStrategies(raw: string): VariableStrategy[] {
       name: String(row.name ?? '').trim() || `策略 ${out.length + 1}`,
       evidence: String(row.evidence ?? '').trim(),
       skeleton,
-      dimensions,
+      dimensions: alignDimensions(skeleton, dimensions),
       value: String(row.value ?? '').trim(),
+    })
+  }
+  return out
+}
+
+/**
+ * 让 dimensions 与骨架里的 {{变量}} 严格对齐：
+ * 骨架没用的变量删掉，骨架用到但模型没给选项的补成单选项（采样会自动跳过，填词保留占位提醒）。
+ */
+function alignDimensions(skeleton: string, dimensions: VariableDimension[]): VariableDimension[] {
+  const used: string[] = []
+  for (const match of skeleton.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+    const name = match[1].trim()
+    if (name && !used.includes(name)) used.push(name)
+  }
+  return used.map((name) => dimensions.find((dim) => dim.name === name) ?? { name, options: [] })
+}
+
+/**
+ * Markdown 格式兜底解析。
+ *
+ * 用户自建的变量提示词经常照抄「1. 策略名 / 一段提示词 / 可变项：/ 变量：A / B / C」这套，
+ * 模型就会按 Markdown 吐而不是 JSON。这里把这种结构读出来，总比整批失败好。
+ */
+export function parseMarkdownStrategies(raw: string): VariableStrategy[] {
+  const text = raw.replace(/```[a-z]*\n?/gi, '').trim()
+  if (!text) return []
+
+  // 按「1. 策略名」「## 1. 策略名」「**1. 策略名**」切块
+  const blocks: Array<{ name: string; body: string }> = []
+  const head = /^[ \t]*(?:#{1,4}[ \t]*)?(?:\*\*)?(\d{1,2})[.、)][ \t]*(?:\*\*)?[ \t]*(.+?)[ \t]*(?:\*\*)?$/gm
+  const matches = Array.from(text.matchAll(head))
+  for (let i = 0; i < matches.length; i += 1) {
+    const match = matches[i]
+    const start = (match.index ?? 0) + match[0].length
+    const end = i + 1 < matches.length ? (matches[i + 1].index ?? text.length) : text.length
+    blocks.push({ name: match[2].replace(/[:：]\s*$/, '').trim(), body: text.slice(start, end) })
+  }
+  if (!blocks.length) return []
+
+  const out: VariableStrategy[] = []
+  for (const block of blocks) {
+    // 「可变项：」之后是变量定义，之前是策略描述与骨架
+    const cut = block.body.search(/^\s*(?:可变项|变量)\s*[:：]/m)
+    const beforeRaw = cut >= 0 ? block.body.slice(0, cut) : block.body
+    const afterRaw = cut >= 0 ? block.body.slice(cut) : ''
+
+    // 骨架：取最长的一段正文，且必须含 {{变量}} 才算
+    const paragraphs = beforeRaw
+      .split(/\r?\n\s*\r?\n/)
+      .map((item) => item.replace(/^\s*(?:-\s*)?\*\*?提示词\*\*?[:：]\s*/i, '').trim())
+      .filter(Boolean)
+    const skeleton = paragraphs
+      .filter((item) => /\{\{[^{}]+\}\}/.test(item))
+      .sort((a, b) => b.length - a.length)[0]
+    if (!skeleton) continue
+
+    // 变量行：「- {{圆盘}}：A / B / C」「核心圆盘：A、B、C」
+    const dimensions: VariableDimension[] = []
+    for (const line of afterRaw.split(/\r?\n/)) {
+      const match = line.match(/^[ \t]*(?:[-*+][ \t]*)?\{\{\s*([^{}]+?)\s*\}\}[ \t]*[:：][ \t]*(.+)$/)
+        ?? line.match(/^[ \t]*(?:[-*+][ \t]*)?([^:：{}\n]{1,20})[ \t]*[:：][ \t]*(.+)$/)
+      if (!match) continue
+      const name = match[1].trim()
+      const options = match[2]
+        .split(/[/／、,，]| \| /)
+        .map((item) => item.replace(/^\s*(?:选项)?[\dA-Za-z一二三四五六七八九十]*\s*[.、)]?\s*/, '').trim())
+        .filter(Boolean)
+      if (!name || !options.length) continue
+      dimensions.push({ name, options: Array.from(new Set(options)) })
+    }
+
+    out.push({
+      name: block.name || `策略 ${out.length + 1}`,
+      evidence: (block.body.match(/对应图[\d、,，和白至到\s]+/) ?? [''])[0].trim(),
+      skeleton: skeleton.replace(/\s*\n\s*/g, ' ').trim(),
+      dimensions: alignDimensions(skeleton, dimensions),
+      value: '',
     })
   }
   return out
@@ -266,6 +348,9 @@ export function parseStrategies(raw: string): VariableStrategy[] {
  * 变量模式下卖点只写一次（在 skeleton 里），填词阶段不再有机会补；
  * 模型如果擅自把卖点省掉、改写，或偷偷做成变量，整批图就全丢卖点。
  * 这里用 normalizeCopy 做确定性比对（忽略空白与标点差异），不依赖模型自觉。
+ *
+ * 注意：这是**提示**而不是**闸门**。模型把长卖点拆成两行、加个连接词都是正常行为，
+ * 严格比对必然误判，所以只返回问题清单交给调用方提示用户，不在这里拦死。
  */
 export function checkCopyInSkeleton(
   strategies: VariableStrategy[],
@@ -281,14 +366,22 @@ export function checkCopyInSkeleton(
     .filter(Boolean)
   if (!items.length) return { ok: true, missing: [], leaked: [] }
 
+  // 文件头这类极短的不可判定，跳过，免得误报
+  const checkable = items.filter((item) => normalizeCopy(item).length >= 4)
   const skeletonText = normalizeCopy(strategies.map((item) => item.skeleton).join('\n'))
-  const missing = items.filter((item) => !skeletonText.includes(normalizeCopy(item)))
+  // 轻微拆行（把一句拆成两段）也算写了：退一步按「去掉首尾后再包含」再比一次
+  const missing = checkable.filter((item) => {
+    const key = normalizeCopy(item)
+    if (skeletonText.includes(key)) return false
+    const head = key.slice(0, Math.max(4, Math.floor(key.length * 0.7)))
+    return !skeletonText.includes(head)
+  })
 
-  // 卖点被做成变量选项时，每填一次词图上的文字就换一套，必须拦下来
+  // 卖点被做成变量选项时，每填一次词图上的文字就换一套，必须提醒
   const leaked: string[] = []
   for (const strategy of strategies) {
     const optionText = normalizeCopy(strategy.dimensions.flatMap((dim) => dim.options).join('\n'))
-    for (const item of items) {
+    for (const item of checkable) {
       const key = normalizeCopy(item)
       if (key && optionText.includes(key)) leaked.push(item)
     }
@@ -330,6 +423,8 @@ export interface VariableJobRequest {
   directionId?: string
   ignoreCompliance?: boolean
   avoidCta?: boolean
+  /** 内部用：占位卡已经转成错误卡时不再弹卖点提示 */
+  quietCopyCheck?: boolean
 }
 
 const QUEUE_LIMIT = 10
@@ -381,13 +476,14 @@ async function runJob(job: VariableJobRequest) {
     const { fills, notes } = planStrategyFills(strategies, job.fillsPerCard)
     if (!fills.length) throw new Error(`${job.label} 没有得到可用的变量组合`)
 
-    // 卖点只在骨架里写一次，漏了就整批丢，这里拦在出图之前
+    // 卖点校验只做提示：模型拆行、加连接词都是正常行为，严格比对会误判，
+    // 不能因为这里报错就把整批图丢掉。有疑问就提醒，图照出。
     const copyCheck = checkCopyInSkeleton(strategies, job.copyText ?? '')
-    if (copyCheck.leaked.length) {
-      throw new Error(`${job.label} 模型把卖点做成了变量，图上文字会每张不同：${copyCheck.leaked.slice(0, 2).join('、')}`)
-    }
-    if (copyCheck.missing.length) {
-      throw new Error(`${job.label} 骨架里漏了卖点：${copyCheck.missing.slice(0, 2).join('、')}，请重试或换个变量提示词`)
+    if (!copyCheck.ok && !job.quietCopyCheck) {
+      const parts: string[] = []
+      if (copyCheck.leaked.length) parts.push(`卖点被做成了变量（图上文字会每张不同）：${copyCheck.leaked.slice(0, 2).join('、')}`)
+      if (copyCheck.missing.length) parts.push(`骨架里可能漏了卖点：${copyCheck.missing.slice(0, 2).join('、')}`)
+      useStore.getState().showToast(`${job.label} ${parts.join('；')}，请留意出图文字`, 'error')
     }
 
     // 采样只保证变量组合不同；清洗掉同图内重复文案后仍可能撞车，这里按最终文本再兜一层
@@ -426,7 +522,17 @@ async function runJob(job: VariableJobRequest) {
       },
     })
   } catch (err) {
-    await removeSopPlaceholder(placeholderId)
+    // 不能删卡：删掉就只剩「转圈后卡片消失」这一个现象，用户完全看不到原因。
+    // 把占位卡转成错误卡，报错原因留在卡上，可点开看、可重试。
+    const message = err instanceof Error ? err.message : String(err)
+    updateTaskInStore(placeholderId, {
+      status: 'error',
+      error: message,
+      prompt: `${job.label} · 变量模式失败`,
+      finishedAt: Date.now(),
+      // 清掉占位标记，否则详情页会把它当临时占位过滤掉
+      sopPlaceholder: false,
+    })
     throw err
   }
 }

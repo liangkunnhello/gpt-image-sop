@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
+import { planStrategyFills } from './variableSample'
 import {
   BUILTIN_VARIABLE_PROMPT,
   buildVariableExtractMessages,
   checkCopyInSkeleton,
+  parseMarkdownStrategies,
   parseStrategies,
   strategiesToText,
 } from './variablePipeline'
@@ -94,6 +96,76 @@ describe('buildVariableExtractMessages', () => {
     expect(user).toContain('【风格】')
     expect(user).toContain('扁平插画')
     expect(user.indexOf('【卖点文案')).toBeLessThan(user.indexOf('【风格】'))
+  })
+})
+
+describe('parseMarkdownStrategies（模型按 Markdown 吐时的兜底）', () => {
+  const md = [
+    '1. 中心核心与外围阵列',
+    '',
+    '对应图1。用外围阵列托住中心核心。',
+    '',
+    '一张{{主体}}居中，由{{外围元素}}呈放射状环绕，{{承载结构}}承托底部。',
+    '',
+    '可变项：',
+    '- {{主体}}：种子 / 光核 / 药丸',
+    '- {{外围元素}}：羽翼 / 叶片 / 齿轮',
+    '- {{承载结构}}：圆盘 / 方台',
+    '',
+    '2. 负形融合',
+    '',
+    '对应图2。轮廓即内容。',
+    '',
+    '以{{轮廓}}剪出{{内部主体}}，保持完整闭合。',
+    '',
+    '可变项：',
+    '- {{轮廓}}：羽翼 / 齿 / 云',
+    '- {{内部主体}}：城市 / 森林',
+  ].join('\n')
+
+  it('按编号切块，读出策略名', () => {
+    const list = parseMarkdownStrategies(md)
+    expect(list).toHaveLength(2)
+    expect(list[0].name).toBe('中心核心与外围阵列')
+    expect(list[1].name).toBe('负形融合')
+  })
+
+  it('取含 {{变量}} 的最长段落当骨架', () => {
+    const [first] = parseMarkdownStrategies(md)
+    expect(first.skeleton).toContain('{{主体}}')
+    expect(first.skeleton).toContain('{{外围元素}}')
+  })
+
+  it('读出可变项里的变量与选项', () => {
+    const [first] = parseMarkdownStrategies(md)
+    const byName = Object.fromEntries(first.dimensions.map((d) => [d.name, d.options]))
+    expect(byName['主体']).toEqual(['种子', '光核', '药丸'])
+    expect(byName['外围元素']).toEqual(['羽翼', '叶片', '齿轮'])
+  })
+
+  it('变量与骨架严格对齐：骨架没用的丢掉', () => {
+    const [first] = parseMarkdownStrategies(md)
+    for (const dim of first.dimensions) expect(first.skeleton).toContain(`{{${dim.name}}}`)
+  })
+
+  it('解析出的结果能直接填词', () => {
+    const [first] = parseMarkdownStrategies(md)
+    const { fills } = planStrategyFills([first], 3)
+    expect(fills.length).toBeGreaterThan(0)
+    for (const fill of fills) expect(fill.prompt).not.toContain('{{')
+  })
+
+  it('没有编号块时返回空', () => {
+    expect(parseMarkdownStrategies('就是一段普通文字，没有策略')).toEqual([])
+  })
+
+  it('JSON 解析失败时 parseStrategies 自动回退到 Markdown', () => {
+    expect(parseStrategies(md)).toHaveLength(2)
+  })
+
+  it('骨架里没有变量的策略会被丢弃', () => {
+    const noVar = '1. 纯描述\n\n就是一张好看的图。\n\n可变项：\n- {{A}}：x / y'
+    expect(parseMarkdownStrategies(noVar)).toEqual([])
   })
 })
 
