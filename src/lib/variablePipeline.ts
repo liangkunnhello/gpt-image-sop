@@ -17,7 +17,7 @@ import { getApiErrorMessage } from './imageApiShared'
 import { apiFetch } from './platform'
 import { productIdForDirection } from './applyPostTemplate'
 import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
-import { dedupePrompts } from './copyDedupe'
+import { dedupePrompts, normalizeCopy } from './copyDedupe'
 import { planStrategyFills } from './variableSample'
 import { shrinkToDataUrl, SOP_TEXT_MODEL } from './sopPipeline'
 
@@ -107,6 +107,22 @@ const OUTPUT_RULES = [
   '所有 dimensions 里的 name 必须在 skeleton 里以完全相同的 {{name}} 出现，且 skeleton 里出现的每个变量都要在 dimensions 里出现。',
 ].join('\n')
 
+/**
+ * 卖点放进骨架时的硬规则。
+ *
+ * 变量模式和 SOP 模式的差别在这里：SOP 是模型逐条写提示词，卖点由模型抄进去；
+ * 变量模式的提示词由骨架填词得到，卖点必须提前写死在 skeleton 里，
+ * 而且绝对不能变成变量选项——否则每填一次词卖点就换一套，图上的文字全乱。
+ */
+const COPY_RULES = [
+  '【卖点进骨架的硬规则】',
+  '- 卖点文案必须逐字写进 skeleton 的文字位（用「」包裹），不得改写、缩写、扩写、合并或新增；卖点与提取策略冲突时，一律以卖点为准。',
+  '- 卖点绝不能做成变量：dimensions 的 name 和 options 里都不许出现卖点原文或其改写，否则每填一次词图上文字就变了。',
+  '- 同一句卖点在一张图上只能出现一次：一句进了主标题，就不许再出现在副标题、角标、贴片等其他文字位，也不许换个说法或拆成两行重写。',
+  '- 文字位数量按卖点条数来定：有几条卖点就排几个文字位，不要设计固定数量的装饰性文字位，更不要用重复的卖点把版面填满。',
+  '- 所有策略用的是同一份卖点，因此所有填词结果图上文字逐张一致，各图的差别只体现在变量带来的场景、结构、机位与配色上。',
+].join('\n')
+
 /** 拼「参考图 + 变量提示词」这一轮的提示词；单独抽出来便于测试 */
 export function buildVariableExtractMessages({
   variablePromptText,
@@ -114,6 +130,7 @@ export function buildVariableExtractMessages({
   styleText = '',
   ignoreCompliance = true,
   avoidCta = true,
+  avoidHint = '',
   imageCount = 1,
 }: {
   variablePromptText: string
@@ -121,25 +138,32 @@ export function buildVariableExtractMessages({
   styleText?: string
   ignoreCompliance?: boolean
   avoidCta?: boolean
+  /** 后处理预留区说明：出图后要叠 Logo / 警示语，骨架里的主体与文字要避开 */
+  avoidHint?: string
   imageCount?: number
 }): { system: string; user: string } {
+  const copy = copyText.trim()
   const system = [
     variablePromptText.trim() || BUILTIN_VARIABLE_PROMPT.content,
+    copy ? COPY_RULES : '',
     ignoreCompliance
       ? '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要提取，也不要写进任何变量选项。'
       : '',
     avoidCta
       ? '参考图里的按钮、悬浮球、进度条、返回箭头、开关等「仿系统界面 / 可点击」的设计元素，一律不要写进策略；提示词里要明确列为禁忌：不画按钮、不画手指点击示意、不加指向性箭头，也不写「立即领取」「点击查看」「滑动解锁」这类引导点击的文案。'
       : '',
+    avoidHint.trim()
+      ? '【画面预留区】出图后会在固定位置叠加 Logo / 警示语，skeleton 里要写清主体、主要文字和关键视觉安排在预留区之外，并明确说明这些区域留白或保持干净背景。'
+      : '',
     OUTPUT_RULES,
   ].filter(Boolean).join('\n')
 
-  const copy = copyText.trim()
   const user = [
     `根据下面 ${imageCount} 张参考图，按上面的提取策略产出策略与可变项。`,
     copy ? `\n【卖点文案（图上文字必须逐字照抄，不得改写）】\n${copy}` : '',
-    copy ? '注意：卖点只决定图上文字，不要把卖点当成视觉策略；变量选项里也不要复述卖点原文。' : '',
+    copy ? '注意：卖点只决定图上文字，要逐字写进 skeleton 的文字位；不要把卖点当成视觉策略，也不要把它放进变量选项。' : '',
     styleText.trim() ? `\n【风格】\n${styleText.trim()}` : '',
+    avoidHint.trim() ? `\n${avoidHint.trim()}` : '',
     '\n现在只输出 JSON 数组。',
   ].filter(Boolean).join('\n')
 
@@ -159,6 +183,7 @@ export async function extractStrategies(
     styleText?: string
     ignoreCompliance?: boolean
     avoidCta?: boolean
+    avoidHint?: string
   },
 ): Promise<{ strategies: VariableStrategy[]; raw: string }> {
   const maxSide = params.imageDataUrls.length > MANY_IMAGE_THRESHOLD ? 768 : MODEL_MAX_SIDE
@@ -169,6 +194,7 @@ export async function extractStrategies(
     styleText: params.styleText,
     ignoreCompliance: params.ignoreCompliance,
     avoidCta: params.avoidCta,
+    avoidHint: params.avoidHint,
     imageCount: images.length,
   })
   const content: Array<Record<string, unknown>> = [{ type: 'text', text: messages.user }]
@@ -232,6 +258,43 @@ export function parseStrategies(raw: string): VariableStrategy[] {
     })
   }
   return out
+}
+
+/**
+ * 校验卖点有没有真的写进骨架。
+ *
+ * 变量模式下卖点只写一次（在 skeleton 里），填词阶段不再有机会补；
+ * 模型如果擅自把卖点省掉、改写，或偷偷做成变量，整批图就全丢卖点。
+ * 这里用 normalizeCopy 做确定性比对（忽略空白与标点差异），不依赖模型自觉。
+ */
+export function checkCopyInSkeleton(
+  strategies: VariableStrategy[],
+  copyText: string,
+): { ok: boolean; missing: string[]; leaked: string[] } {
+  const copy = copyText.trim()
+  if (!copy) return { ok: true, missing: [], leaked: [] }
+
+  // 卖点按行拆；逗号不拆，避免把一句文案切碎
+  const items = copy
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[-*+]|\d+[.、)]|[①-⑳])\s*/, '').trim())
+    .filter(Boolean)
+  if (!items.length) return { ok: true, missing: [], leaked: [] }
+
+  const skeletonText = normalizeCopy(strategies.map((item) => item.skeleton).join('\n'))
+  const missing = items.filter((item) => !skeletonText.includes(normalizeCopy(item)))
+
+  // 卖点被做成变量选项时，每填一次词图上的文字就换一套，必须拦下来
+  const leaked: string[] = []
+  for (const strategy of strategies) {
+    const optionText = normalizeCopy(strategy.dimensions.flatMap((dim) => dim.options).join('\n'))
+    for (const item of items) {
+      const key = normalizeCopy(item)
+      if (key && optionText.includes(key)) leaked.push(item)
+    }
+  }
+
+  return { ok: !missing.length && !leaked.length, missing, leaked: Array.from(new Set(leaked)) }
 }
 
 /** 把策略列表回写成 Markdown，存进任务里供详情页回看 */
@@ -312,10 +375,20 @@ async function runJob(job: VariableJobRequest) {
       styleText: job.styleText,
       ignoreCompliance: job.ignoreCompliance !== false,
       avoidCta: job.avoidCta !== false,
+      avoidHint,
     })
 
     const { fills, notes } = planStrategyFills(strategies, job.fillsPerCard)
     if (!fills.length) throw new Error(`${job.label} 没有得到可用的变量组合`)
+
+    // 卖点只在骨架里写一次，漏了就整批丢，这里拦在出图之前
+    const copyCheck = checkCopyInSkeleton(strategies, job.copyText ?? '')
+    if (copyCheck.leaked.length) {
+      throw new Error(`${job.label} 模型把卖点做成了变量，图上文字会每张不同：${copyCheck.leaked.slice(0, 2).join('、')}`)
+    }
+    if (copyCheck.missing.length) {
+      throw new Error(`${job.label} 骨架里漏了卖点：${copyCheck.missing.slice(0, 2).join('、')}，请重试或换个变量提示词`)
+    }
 
     // 采样只保证变量组合不同；清洗掉同图内重复文案后仍可能撞车，这里按最终文本再兜一层
     const seen = new Set<string>()

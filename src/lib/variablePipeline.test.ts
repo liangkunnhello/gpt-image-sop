@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BUILTIN_VARIABLE_PROMPT,
   buildVariableExtractMessages,
+  checkCopyInSkeleton,
   parseStrategies,
   strategiesToText,
 } from './variablePipeline'
@@ -46,6 +47,102 @@ describe('buildVariableExtractMessages', () => {
 
   it('多张参考图时说明张数', () => {
     expect(buildVariableExtractMessages({ variablePromptText: '策略', imageCount: 3 }).user).toContain('3 张参考图')
+  })
+
+  it('有卖点时把「卖点进骨架」的硬规则写进 system', () => {
+    const { system } = buildVariableExtractMessages({ variablePromptText: '策略', copyText: '600 万保障' })
+    expect(system).toContain('卖点进骨架的硬规则')
+    expect(system).toContain('不得改写、缩写、扩写、合并或新增')
+    expect(system).toContain('卖点绝不能做成变量')
+    expect(system).toContain('同一句卖点在一张图上只能出现一次')
+    expect(system).toContain('文字位数量按卖点条数来定')
+    expect(system).toContain('图上文字逐张一致')
+  })
+
+  it('没有卖点时不写卖点硬规则', () => {
+    const { system } = buildVariableExtractMessages({ variablePromptText: '策略' })
+    expect(system).not.toContain('卖点进骨架的硬规则')
+    expect(system).not.toContain('卖点绝不能做成变量')
+  })
+
+  it('user 消息里提示卖点要逐字写进 skeleton，且不能进选项', () => {
+    const { user } = buildVariableExtractMessages({ variablePromptText: '策略', copyText: '600 万保障' })
+    expect(user).toContain('要逐字写进 skeleton 的文字位')
+    expect(user).toContain('不要把它放进变量选项')
+  })
+
+  it('有预留区时把避让说明同时放进 system 与 user', () => {
+    const hint = '【画面预留区】左上角 0-18% 要留白'
+    const { system, user } = buildVariableExtractMessages({ variablePromptText: '策略', avoidHint: hint })
+    expect(system).toContain('画面预留区')
+    expect(system).toContain('留白或保持干净背景')
+    expect(user).toContain(hint)
+  })
+
+  it('没有预留区时不出现避让要求', () => {
+    const { system, user } = buildVariableExtractMessages({ variablePromptText: '策略' })
+    expect(system).not.toContain('画面预留区')
+    expect(user).not.toContain('画面预留区')
+  })
+
+  it('风格单独成块，与卖点、策略并列', () => {
+    const { user } = buildVariableExtractMessages({
+      variablePromptText: '策略',
+      copyText: '600 万保障',
+      styleText: '扁平插画，莫兰迪配色',
+    })
+    expect(user).toContain('【风格】')
+    expect(user).toContain('扁平插画')
+    expect(user.indexOf('【卖点文案')).toBeLessThan(user.indexOf('【风格】'))
+  })
+})
+
+describe('checkCopyInSkeleton', () => {
+  const strategy = (skeleton: string, options: string[][] = [['a', 'b']]) => ({
+    name: 'A',
+    evidence: '图1',
+    skeleton,
+    dimensions: options.map((opts, i) => ({ name: `D${i}`, options: opts })),
+    value: '',
+  })
+
+  it('卖点逐字在骨架里时不报错', () => {
+    const check = checkCopyInSkeleton([strategy('画面写「600 万保障」和「住院 0 免赔」')], '600 万保障\n住院 0 免赔')
+    expect(check).toEqual({ ok: true, missing: [], leaked: [] })
+  })
+
+  it('忽略空白与标点差异也算写了', () => {
+    const check = checkCopyInSkeleton([strategy('画面写「住院0免赔」')], '住院 0 免赔')
+    expect(check.ok).toBe(true)
+  })
+
+  it('骨架漏写某条卖点时列出来', () => {
+    const check = checkCopyInSkeleton([strategy('画面写「600 万保障」')], '600 万保障\n住院 0 免赔')
+    expect(check.ok).toBe(false)
+    expect(check.missing).toEqual(['住院 0 免赔'])
+  })
+
+  it('多条策略里只要有一条写全就算写了', () => {
+    const check = checkCopyInSkeleton(
+      [strategy('画面写「600 万保障」'), strategy('画面写「600 万保障」和「住院 0 免赔」')],
+      '600 万保障\n住院 0 免赔',
+    )
+    expect(check.ok).toBe(true)
+  })
+
+  it('卖点被做成变量选项时拦下来', () => {
+    const check = checkCopyInSkeleton([strategy('画面写「600 万保障」', [['600 万保障', '别的']])], '600 万保障')
+    expect(check.ok).toBe(false)
+    expect(check.leaked).toEqual(['600 万保障'])
+  })
+
+  it('没有卖点时不校验', () => {
+    expect(checkCopyInSkeleton([strategy('随便')], '').ok).toBe(true)
+  })
+
+  it('卖点带列表前缀时能正确剥离', () => {
+    const check = checkCopyInSkeleton([strategy('写「600 万保障」和「住院 0 免赔」')], '- 600 万保障\n1. 住院 0 免赔')
+    expect(check.ok).toBe(true)
   })
 })
 
