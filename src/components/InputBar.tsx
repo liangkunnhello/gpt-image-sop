@@ -26,6 +26,7 @@ import SopSplitModal, { type SopRunOptions } from './SopSplitModal'
 import SopPresetPicker, { resolvePickedPreset } from './SopPresetPicker'
 import SopSystemPromptPicker from './SopSystemPromptPicker'
 import { useSopStore } from '../lib/sopStore'
+import { buildPromptBundle } from '../lib/promptBundle'
 import { enqueueSopJobs, splitEven } from '../lib/sopPipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import { CommentBadge } from './CommentMarks'
@@ -535,17 +536,19 @@ export default function InputBar() {
   const runSop = useCallback((options: SopRunOptions) => {
     setSopSplitOpen(false)
     if (!inputImages.length) return
-    const extras = [
-      pickedPoint?.content ? `【卖点】\n${pickedPoint.content}` : '',
-      pickedStyle?.content ? `【风格】\n${pickedStyle.content}` : '',
-    ].filter(Boolean).join('\n\n')
-    const systemPromptText = [options.systemPromptText, extras].filter(Boolean).join('\n\n')
+    // 三个板块合成一份再发：卖点排最前并写死优先级，避免被系统提示词里的文案盖掉
+    const bundle = buildPromptBundle({
+      systemPrompt: options.systemPromptText,
+      point: pickedPoint?.content,
+      style: pickedStyle?.content,
+    })
     const groups = splitEven(inputImages, options.groupCount)
     enqueueSopJobs(groups.map((group, index) => ({
       label: `第 ${index + 1}/${groups.length} 张卡`,
       imageDataUrls: group.map((img) => img.dataUrl),
       imageIds: group.map((img) => img.id),
-      systemPromptText,
+      systemPromptText: bundle.merged,
+      copyText: bundle.copyText,
       promptsPerGroup: options.promptsPerGroup,
       directionId: options.directionId,
       ignoreCompliance: options.ignoreCompliance,

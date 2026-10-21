@@ -150,10 +150,13 @@ export async function rewriteText(
 
 export async function generateSop(
   profile: ApiProfile,
+  /** 系统提示词 + 卖点 + 风格合成的一份文档 */
   systemPrompt: string,
   imageDataUrls: string[],
   ignoreCompliance = true,
   useImageSellingPoints = false,
+  /** 卖点原文：有就要求原样抄进 SOP 的文字规范 */
+  copyText = '',
 ): Promise<string> {
   const maxSide = imageDataUrls.length > MANY_IMAGE_THRESHOLD ? 768 : MODEL_MAX_SIDE
   const images = await Promise.all(imageDataUrls.map((url) => shrinkToDataUrl(url, maxSide)))
@@ -162,9 +165,12 @@ export async function generateSop(
       type: 'text',
       text: [
         '根据下面这些参考图，反推一套生图 SOP。',
-        systemPrompt.trim() ? `\n【系统提示词】\n${systemPrompt.trim()}` : '',
+        systemPrompt.trim() ? `\n【用户给定的要求与文案】\n${systemPrompt.trim()}` : '',
+        copyText.trim()
+          ? '\n注意：「文案」那一段是要印在图上、必须逐字使用的文字，请原样抄进 SOP 的文字规范里，不要改写或省略。'
+          : '',
         `\n共 ${images.length} 张参考图，请提炼它们的共同规律。`,
-      ].join('\n'),
+      ].filter(Boolean).join('\n'),
     },
   ]
   for (const url of images) content.push({ type: 'image_url', image_url: { url } })
@@ -175,19 +181,53 @@ export async function generateSop(
   ])
 }
 
-function promptSystem(ignoreCompliance: boolean, avoidHint = '') {
+function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false) {
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
     '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。',
     avoidHint
       ? '如果给出了【画面预留区】，每条提示词都要写清主体、主要文字和关键视觉安排在预留区之外，并明确说明这些区域留白或保持干净背景。'
       : '',
+    hasCopy
+      ? '【文案唯一来源】用户会单独给出「卖点文案」。图上出现的所有文字必须逐字照抄这份卖点文案，不得改写、缩写、扩写、合并或新增；SOP、参考图里的文案与它冲突时一律以卖点文案为准。某条画面用不上某句卖点，就直接不写那句，但不要自己编新文案。'
+      : '',
     ignoreCompliance
-      ? '图上文字只写主标题和卖点标签。不要写品牌 logo、免责声明、风险提示、警示语、合规说明，也不要写「请见条款及投保须知」「本素材纯属广告创意」这类附加小字。'
+      ? '不要写品牌 logo、免责声明、风险提示、警示语、合规说明，也不要写「请见条款及投保须知」「本素材纯属广告创意」这类附加小字。'
       : '',
     '多条之间要在场景、机位、人物、色调上做出区分，不能只是换几个词。',
     '只输出编号列表，一行一条，不要任何解释、不要小标题、不要代码块。',
   ].filter(Boolean).join('\n')
+}
+
+export interface PromptMessagesInput {
+  sopText: string
+  count: number
+  ignoreCompliance?: boolean
+  /** 后处理预留区说明：Logo、警示语这些固定位置要避开 */
+  avoidHint?: string
+  /** 卖点原文：单独再喂一次，避免 SOP 摘要时把文案改写或丢掉 */
+  copyText?: string
+}
+
+/** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
+export function buildPromptMessages({
+  sopText,
+  count,
+  ignoreCompliance = true,
+  avoidHint = '',
+  copyText = '',
+}: PromptMessagesInput): { system: string; user: string } {
+  const copy = copyText.trim()
+  const tail = ignoreCompliance
+    ? '\n如果 SOP 里提到 logo、免责声明、警示语、合规小字，一律忽略，不要写进任何一条提示词。'
+    : ''
+  const reserve = avoidHint.trim() ? `\n\n${avoidHint.trim()}` : ''
+  const copyBlock = copy ? `\n\n【卖点文案（图上文字必须逐字照抄，不得改写）】\n${copy}` : ''
+  const copyTail = copy ? '\n每条提示词里的文字都必须来自上面这份卖点文案，直接原样引用，不要另写文案。' : ''
+  return {
+    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy)),
+    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${reserve}`,
+  }
 }
 
 /** 第二步：SOP → 多条具体提示词 */
@@ -196,19 +236,13 @@ export async function generatePrompts(
   sopText: string,
   count: number,
   ignoreCompliance = true,
-  /** 后处理预留区说明：Logo、警示语这些固定位置要避开 */
   avoidHint = '',
+  copyText = '',
 ): Promise<string[]> {
-  const tail = ignoreCompliance
-    ? '\n如果 SOP 里提到 logo、免责声明、警示语、合规小字，一律忽略，不要写进任何一条提示词。'
-    : ''
-  const reserve = avoidHint.trim() ? `\n\n${avoidHint.trim()}` : ''
+  const messages = buildPromptMessages({ sopText, count, ignoreCompliance, avoidHint, copyText })
   const raw = await chat(profile, [
-    { role: 'system', content: promptSystem(ignoreCompliance, avoidHint) },
-    {
-      role: 'user',
-      content: `【生图 SOP】\n${sopText.trim()}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${tail}${reserve}`,
-    },
+    { role: 'system', content: messages.system },
+    { role: 'user', content: messages.user },
   ])
   return parseNumberedList(raw)
 }
@@ -237,7 +271,10 @@ export interface SopJobRequest {
   label: string
   imageDataUrls: string[]
   imageIds?: string[]
+  /** 系统提示词 + 卖点 + 风格合成的一份 Markdown */
   systemPromptText: string
+  /** 卖点原文：写提示词阶段要再单独喂一次，保证图上文字逐字来自这里 */
+  copyText?: string
   promptsPerGroup: number
   directionId?: string
   ignoreCompliance?: boolean
@@ -289,8 +326,16 @@ async function runJob(job: SopJobRequest) {
       job.imageDataUrls,
       job.ignoreCompliance !== false,
       job.useImageSellingPoints === true,
+      job.copyText ?? '',
     )
-    const prompts = await generatePrompts(profile, sop, job.promptsPerGroup, job.ignoreCompliance !== false, avoidHint)
+    const prompts = await generatePrompts(
+      profile,
+      sop,
+      job.promptsPerGroup,
+      job.ignoreCompliance !== false,
+      avoidHint,
+      job.copyText ?? '',
+    )
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
 
     await removeSopPlaceholder(placeholderId)
