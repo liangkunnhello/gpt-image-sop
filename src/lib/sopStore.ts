@@ -58,6 +58,16 @@ export interface SopPick {
   promptId?: string
 }
 
+/** 提示词库弹窗的三个分组，也用作 tab 的 key */
+export type SopLibraryTab = 'prompt' | 'point' | 'style'
+
+/** 三个分组的展示名，输入框按钮、tab、空状态文案共用 */
+export const SOP_LIBRARY_LABEL: Record<SopLibraryTab, string> = {
+  prompt: '系统提示词',
+  point: '卖点',
+  style: '风格',
+}
+
 interface SopState {
   /** SOP 模式开关，挂在输入框「更多」旁边 */
   sopMode: boolean
@@ -84,6 +94,9 @@ interface SopState {
   promptsPerGroup: number
   /** 按产品存的后处理模板，同一产品可以有多套（按比例匹配） */
   postTemplates: Record<string, PostTemplate[]>
+  /** 提示词库弹窗当前打开的分组，null 表示关闭。运行时状态，不落盘 */
+  libraryTab: SopLibraryTab | null
+  setLibraryTab: (tab: SopLibraryTab | null) => void
   setPromptsPerGroup: (value: number) => void
   setPostTemplates: (productId: string, templates: PostTemplate[]) => void
   setSopMode: (value: boolean) => void
@@ -122,6 +135,8 @@ export const useSopStore = create<SopState>()(
       useImageSellingPoints: false,
       promptsPerGroup: 5,
       postTemplates: {},
+      libraryTab: null,
+      setLibraryTab: (tab) => set({ libraryTab: tab }),
       setSopMode: (value) => set({ sopMode: value }),
       setPromptsPerGroup: (value) => set({ promptsPerGroup: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
       setPostTemplates: (productId, templates) => set((state) => ({

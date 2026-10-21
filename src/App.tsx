@@ -16,6 +16,7 @@ import TaskGrid from './components/TaskGrid'
 import AgentWorkspace from './components/AgentWorkspace'
 import InputBar from './components/InputBar'
 import SopDirectionTree from './components/SopDirectionTree'
+import SopLibraryModal from './components/SopLibraryModal'
 import DetailModal from './components/DetailModal'
 import Lightbox from './components/Lightbox'
 import SettingsModal from './components/SettingsModal'
@@ -214,6 +215,7 @@ export default function App() {
         </main>
       )}
       <InputBar />
+      <SopLibraryModal />
       <DetailModal />
       <Lightbox />
       <SettingsModal />

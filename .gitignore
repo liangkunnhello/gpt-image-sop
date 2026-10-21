@@ -14,3 +14,6 @@ src-tauri/dev-downloads/
 
 # 本地数据备份（导出的一次性文件，不入库）
 data-backups/
+
+# 构建临时目录（指定 TEMP 时产生）
+.tmp-build/
