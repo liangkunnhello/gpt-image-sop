@@ -188,8 +188,18 @@ export default function SopDirectionTree() {
   /** 当前归属尾部的小圆点，竖条被遮挡时也能认出来 */
   const currentDot = <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500 dark:bg-blue-400" />
 
-  const tailBadge = (text: number, tone: 'muted' | 'accent' = 'muted') => (
-    <span className={`shrink-0 text-[11px] tabular-nums ${tone === 'accent' ? 'text-blue-500' : 'text-gray-400'}`}>{text}</span>
+  const tailBadge = (text: number) => (
+    <span className="shrink-0 text-[11px] tabular-nums text-gray-400">{text}</span>
+  )
+
+  /** 产品行的蓝色胶囊：这个产品下存了几条系统提示词，跟右侧的卡片数区分开 */
+  const promptBadge = (count: number) => (
+    <span
+      title={`这个产品下有 ${count} 条系统提示词`}
+      className="shrink-0 cursor-default rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] leading-none tabular-nums text-blue-500 dark:bg-blue-500/15 dark:text-blue-300"
+    >
+      {count}
+    </span>
   )
 
   const renderDirection = (node: SopDirectionNode) => {
@@ -395,7 +405,7 @@ export default function SopDirectionTree() {
                                 >
                                   <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
                                   <span className="min-w-0 flex-1 truncate">{product.name}</span>
-                                  {promptCount(product.id) > 0 && tailBadge(promptCount(product.id), 'accent')}
+                                  {promptCount(product.id) > 0 && promptBadge(promptCount(product.id))}
                                   {tailBadge(counts.get(product.id) ?? 0)}
                                 </button>
                               </div>
