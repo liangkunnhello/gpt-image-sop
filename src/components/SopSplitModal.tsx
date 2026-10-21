@@ -11,6 +11,8 @@ export interface SopRunOptions {
   promptsPerGroup: number
   ignoreCompliance: boolean
   useImageSellingPoints: boolean
+  /** 避免按钮、悬浮球这类引导点击的仿系统界面设计 */
+  avoidCta: boolean
 }
 
 interface Props {
@@ -28,6 +30,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const setIgnoreCompliance = useSopStore((s) => s.setIgnoreCompliance)
   const useImageSellingPoints = useSopStore((s) => s.useImageSellingPoints)
   const setUseImageSellingPoints = useSopStore((s) => s.setUseImageSellingPoints)
+  const avoidCtaDesign = useSopStore((s) => s.avoidCtaDesign)
+  const setAvoidCtaDesign = useSopStore((s) => s.setAvoidCtaDesign)
   const avoidOverlay = useSopStore((s) => s.avoidOverlay)
   const setAvoidOverlay = useSopStore((s) => s.setAvoidOverlay)
   const postTemplates = useSopStore((s) => s.postTemplates)
@@ -205,6 +209,21 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
           <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
             <input
               type="checkbox"
+              checked={avoidCtaDesign}
+              onChange={(e) => setAvoidCtaDesign(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">不要按钮 / 引导点击的设计</span>
+              <span className="block text-[11px] leading-relaxed text-gray-400">
+                默认开启：画面不出现按钮、悬浮球、进度条、返回箭头这类仿系统控件，也不写「立即领取」「点击查看」「滑动解锁」这类引导点击的文案。取消勾选则允许参考图上的按钮样式。
+              </span>
+            </span>
+          </label>
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <input
+              type="checkbox"
               checked={useImageSellingPoints}
               onChange={(e) => setUseImageSellingPoints(e.target.checked)}
               className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
@@ -249,6 +268,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               promptsPerGroup,
               ignoreCompliance,
               useImageSellingPoints,
+              avoidCta: avoidCtaDesign,
             })}
             className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
           >

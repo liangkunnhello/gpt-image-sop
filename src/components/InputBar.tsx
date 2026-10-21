@@ -17,7 +17,7 @@ import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { getContentEditableCursor, getContentEditablePlainText, getContentEditableSelection, getMentionTagHtml, setContentEditableCursor, setContentEditableSelection, syncMentionTagSelection } from '../lib/contentEditableMentions'
 import { useHintTooltip } from '../hooks/useHintTooltip'
-import { downloadImageEntriesAsZip, downloadImageIds, downloadTaskCardsToFolders, formatExportFileTime, getDownloadErrorMessage, getTaskOutputImageZipEntries, withSaveLocation } from '../lib/downloadImages'
+import { downloadImageEntriesAsZip, downloadImageIds, downloadTaskCardsToFolders, downloadTaskCardsToWebFolders, formatExportFileTime, getDownloadErrorMessage, getTaskOutputImageZipEntries, withSaveLocation } from '../lib/downloadImages'
 import { pickSaveDir } from '../lib/saveFile'
 import { isTauri } from '../lib/platform'
 import SizePickerModal from './SizePickerModal'
@@ -237,19 +237,26 @@ export default function InputBar() {
       const timeStr = formatExportFileTime(new Date())
       const fileNameBase = `batch-${timeStr}`
       // 客户端默认「一张卡一个同名文件夹」，网页版没有文件夹，退回单张下载
-      const result = settings.zipDownloadRoutes.includes('task-selection')
-        ? await downloadImageEntriesAsZip(getTaskOutputImageZipEntries(selectedTasks), fileNameBase)
-        : isTauri
-          ? await downloadTaskCardsToFolders(selectedTasks, {
-            template: settings.taskFolderTemplate,
-            custom: settings.taskFolderCustom,
-            resolveNames: (task) => {
-              const node = task.sopDirectionId ? sopDirections.find((item) => item.id === task.sopDirectionId) : undefined
-              const product = node ? sopDirections.find((item) => item.id === node.parentId && item.kind === 'product') : undefined
-              return { product: product?.name, direction: node?.name }
-            },
-          })
-          : await downloadImageIds(imageIds, fileNameBase)
+      const resolveNames = (task: { sopDirectionId?: string }) => {
+        const node = task.sopDirectionId ? sopDirections.find((item) => item.id === task.sopDirectionId) : undefined
+        const product = node ? sopDirections.find((item) => item.id === node.parentId && item.kind === 'product') : undefined
+        return { product: product?.name, direction: node?.name }
+      }
+      const folderOptions = {
+        template: settings.taskFolderTemplate,
+        custom: settings.taskFolderCustom,
+        resolveNames,
+      }
+      let result: Awaited<ReturnType<typeof downloadImageIds>>
+      if (settings.zipDownloadRoutes.includes('task-selection')) {
+        result = await downloadImageEntriesAsZip(getTaskOutputImageZipEntries(selectedTasks), fileNameBase)
+      } else if (isTauri) {
+        result = await downloadTaskCardsToFolders(selectedTasks, folderOptions)
+      } else {
+        // 网页端用浏览器的目录权限建文件夹，不支持的浏览器退回单张下载
+        const folderResult = await downloadTaskCardsToWebFolders(selectedTasks, folderOptions)
+        result = folderResult.webUnsupported ? await downloadImageIds(imageIds, fileNameBase) : folderResult
+      }
       if (result.canceled) return
 
       if (result.successCount === 0) {
@@ -564,6 +571,7 @@ export default function InputBar() {
       directionId: options.directionId,
       ignoreCompliance: options.ignoreCompliance,
       useImageSellingPoints: options.useImageSellingPoints,
+      avoidCta: options.avoidCta,
     })))
   }, [inputImages, pickedPoint, pickedStyle])
 

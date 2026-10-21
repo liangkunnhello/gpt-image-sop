@@ -90,6 +90,8 @@ interface SopState {
   ignoreCompliance: boolean
   /** 生成时使用参考图上的卖点文案，默认关闭，卖点以上方选择器为准 */
   useImageSellingPoints: boolean
+  /** 避免按钮、悬浮球这类仿系统界面的可点击设计，默认开启 */
+  avoidCtaDesign: boolean
   /** 每张任务卡生成几条提示词（=几张图），SOP 模式下唯一的数量来源 */
   promptsPerGroup: number
   /** 生成提示词时自动避让后处理预留区（Logo / 警示语），默认开启 */
@@ -104,6 +106,7 @@ interface SopState {
   setSopMode: (value: boolean) => void
   setIgnoreCompliance: (value: boolean) => void
   setUseImageSellingPoints: (value: boolean) => void
+  setAvoidCtaDesign: (value: boolean) => void
   setAvoidOverlay: (value: boolean) => void
   setProgress: (value: SopState['progress']) => void
   setActiveDirection: (id: string) => void
@@ -136,6 +139,7 @@ export const useSopStore = create<SopState>()(
       defaultPick: {},
       ignoreCompliance: true,
       useImageSellingPoints: false,
+      avoidCtaDesign: true,
       promptsPerGroup: 5,
       avoidOverlay: true,
       postTemplates: {},
@@ -148,6 +152,7 @@ export const useSopStore = create<SopState>()(
       })),
       setIgnoreCompliance: (value) => set({ ignoreCompliance: value }),
       setUseImageSellingPoints: (value) => set({ useImageSellingPoints: value }),
+      setAvoidCtaDesign: (value) => set({ avoidCtaDesign: value }),
       setAvoidOverlay: (value) => set({ avoidOverlay: value }),
       setProgress: (value) => set({ progress: value }),
       setActiveDirection: (id) => set({ activeDirectionId: id }),
@@ -284,7 +289,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, promptsPerGroup: state.promptsPerGroup, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates }),
+      partialize: (state) => ({ sopMode: state.sopMode, directions: state.directions, systemPrompts: state.systemPrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates }),
     },
   ),
 )
@@ -299,6 +304,7 @@ export interface SopLibraryExport {
   defaultPick: Record<string, SopPick>
   ignoreCompliance?: boolean
   useImageSellingPoints?: boolean
+  avoidCtaDesign?: boolean
   promptsPerGroup?: number
   avoidOverlay?: boolean
 }
@@ -315,6 +321,7 @@ export function collectSopLibrary(): SopLibraryExport {
     defaultPick: state.defaultPick,
     ignoreCompliance: state.ignoreCompliance,
     useImageSellingPoints: state.useImageSellingPoints,
+    avoidCtaDesign: state.avoidCtaDesign,
     promptsPerGroup: state.promptsPerGroup,
     avoidOverlay: state.avoidOverlay,
   }
@@ -353,6 +360,7 @@ export function mergeSopLibrary(library?: SopLibraryExport | null) {
       defaultPick: { ...state.defaultPick, ...(library.defaultPick ?? {}) },
       ignoreCompliance: library.ignoreCompliance ?? state.ignoreCompliance,
       useImageSellingPoints: library.useImageSellingPoints ?? state.useImageSellingPoints,
+      avoidCtaDesign: library.avoidCtaDesign ?? state.avoidCtaDesign,
       promptsPerGroup: typeof library.promptsPerGroup === 'number' ? library.promptsPerGroup : state.promptsPerGroup,
       avoidOverlay: library.avoidOverlay ?? state.avoidOverlay,
     }

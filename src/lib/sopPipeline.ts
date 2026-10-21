@@ -85,7 +85,8 @@ export function splitEven<T>(items: T[], groups: number): T[][] {
   return out
 }
 
-function sopSystem(ignoreCompliance: boolean, useImageSellingPoints: boolean) {
+/** 反推 SOP 的系统提示词；单独导出便于测试哪些规则被写进去了 */
+export function buildSopSystemPrompt(ignoreCompliance: boolean, useImageSellingPoints: boolean, avoidCta = false) {
   return [
     '你是广告设计团队的资深生图指导。用户会给你若干张参考图，你要从这些图里反推出一套可复用的「生图 SOP」。',
     'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
@@ -96,6 +97,9 @@ function sopSystem(ignoreCompliance: boolean, useImageSellingPoints: boolean) {
     useImageSellingPoints
       ? ''
       : '不要从参考图上提取或复用卖点文案。SOP 的文字规范只描述文字的层级、字号与排布方式，具体文案以用户提供的卖点为准。',
+    avoidCta
+      ? '参考图里的按钮、悬浮球、进度条、返回箭头、开关、卡片跳转等「仿系统界面 / 可点击」的设计元素，一律不要写进 SOP；SOP 里要明确列为禁忌：不画按钮、不画手指点击示意、不加指向性的箭头或手势，也不写「立即领取」「点击查看」「滑动解锁」「下载App」这类引导点击的文案。'
+      : '',
     '输出 Markdown，包含以下小节：## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌。',
     '不要输出任何解释性开场白。',
   ].filter(Boolean).join('\n')
@@ -157,6 +161,8 @@ export async function generateSop(
   useImageSellingPoints = false,
   /** 卖点原文：有就要求原样抄进 SOP 的文字规范 */
   copyText = '',
+  /** 避免按钮等引导点击的仿系统界面设计 */
+  avoidCta = false,
 ): Promise<string> {
   const maxSide = imageDataUrls.length > MANY_IMAGE_THRESHOLD ? 768 : MODEL_MAX_SIDE
   const images = await Promise.all(imageDataUrls.map((url) => shrinkToDataUrl(url, maxSide)))
@@ -176,12 +182,12 @@ export async function generateSop(
   for (const url of images) content.push({ type: 'image_url', image_url: { url } })
 
   return chat(profile, [
-    { role: 'system', content: sopSystem(ignoreCompliance, useImageSellingPoints) },
+    { role: 'system', content: buildSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta) },
     { role: 'user', content },
   ])
 }
 
-function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false) {
+function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false) {
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
     '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。',
@@ -193,6 +199,9 @@ function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false
       : '',
     ignoreCompliance
       ? '不要写品牌 logo、免责声明、风险提示、警示语、合规说明，也不要写「请见条款及投保须知」「本素材纯属广告创意」这类附加小字。'
+      : '',
+    avoidCta
+      ? '画面里不要出现按钮、悬浮球、进度条、返回箭头、开关等仿系统界面的可点击控件，也不要写「立即领取」「点击查看」「滑动解锁」「下载App」这类引导点击的文案，不要画手指点击示意或指向性箭头。'
       : '',
     '多条之间要在场景、机位、人物、色调上做出区分，不能只是换几个词。',
     '只输出编号列表，一行一条，不要任何解释、不要小标题、不要代码块。',
@@ -207,6 +216,8 @@ export interface PromptMessagesInput {
   avoidHint?: string
   /** 卖点原文：单独再喂一次，避免 SOP 摘要时把文案改写或丢掉 */
   copyText?: string
+  /** 避免按钮等引导点击的仿系统界面设计 */
+  avoidCta?: boolean
 }
 
 /** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
@@ -216,6 +227,7 @@ export function buildPromptMessages({
   ignoreCompliance = true,
   avoidHint = '',
   copyText = '',
+  avoidCta = false,
 }: PromptMessagesInput): { system: string; user: string } {
   const copy = copyText.trim()
   const tail = ignoreCompliance
@@ -225,7 +237,7 @@ export function buildPromptMessages({
   const copyBlock = copy ? `\n\n【卖点文案（图上文字必须逐字照抄，不得改写）】\n${copy}` : ''
   const copyTail = copy ? '\n每条提示词里的文字都必须来自上面这份卖点文案，直接原样引用，不要另写文案。' : ''
   return {
-    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy)),
+    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta),
     user: `【生图 SOP】\n${sopText.trim()}${copyBlock}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${reserve}`,
   }
 }
@@ -238,8 +250,9 @@ export async function generatePrompts(
   ignoreCompliance = true,
   avoidHint = '',
   copyText = '',
+  avoidCta = false,
 ): Promise<string[]> {
-  const messages = buildPromptMessages({ sopText, count, ignoreCompliance, avoidHint, copyText })
+  const messages = buildPromptMessages({ sopText, count, ignoreCompliance, avoidHint, copyText, avoidCta })
   const raw = await chat(profile, [
     { role: 'system', content: messages.system },
     { role: 'user', content: messages.user },
@@ -279,6 +292,8 @@ export interface SopJobRequest {
   directionId?: string
   ignoreCompliance?: boolean
   useImageSellingPoints?: boolean
+  /** 避免按钮、悬浮球这类引导点击的仿系统界面设计，默认开启 */
+  avoidCta?: boolean
 }
 
 /** 同时在跑的任务卡数量 */
@@ -327,6 +342,7 @@ async function runJob(job: SopJobRequest) {
       job.ignoreCompliance !== false,
       job.useImageSellingPoints === true,
       job.copyText ?? '',
+      job.avoidCta !== false,
     )
     const prompts = await generatePrompts(
       profile,
@@ -335,6 +351,7 @@ async function runJob(job: SopJobRequest) {
       job.ignoreCompliance !== false,
       avoidHint,
       job.copyText ?? '',
+      job.avoidCta !== false,
     )
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
 

@@ -94,3 +94,22 @@ describe('提示词库导入导出', () => {
     expect(library.promptsPerGroup).toBe(5)
   })
 })
+
+describe('按钮 / 引导点击开关', () => {
+  beforeEach(() => {
+    useSopStore.setState({ avoidCtaDesign: true })
+  })
+
+  it('默认开启，明确关掉后才关', () => {
+    expect(useSopStore.getState().avoidCtaDesign).toBe(true)
+    useSopStore.getState().setAvoidCtaDesign(false)
+    expect(useSopStore.getState().avoidCtaDesign).toBe(false)
+  })
+
+  it('随提示词库一起备份与恢复', () => {
+    useSopStore.getState().setAvoidCtaDesign(false)
+    expect(collectSopLibrary().avoidCtaDesign).toBe(false)
+    mergeSopLibrary({ ...collectSopLibrary(), avoidCtaDesign: true })
+    expect(useSopStore.getState().avoidCtaDesign).toBe(true)
+  })
+})

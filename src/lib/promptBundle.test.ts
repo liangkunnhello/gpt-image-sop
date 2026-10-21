@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildPromptBundle } from './promptBundle'
-import { buildPromptMessages } from './sopPipeline'
+import { buildPromptMessages, buildSopSystemPrompt } from './sopPipeline'
 
 describe('buildPromptBundle', () => {
   it('把三份合成一份，卖点排在最前并写明优先级', () => {
@@ -67,5 +67,22 @@ describe('buildPromptMessages', () => {
     })
     expect(system).toContain('画面预留区')
     expect(user.trimEnd().endsWith('左上角留白')).toBe(true)
+  })
+})
+
+describe('按钮 / 引导点击开关', () => {
+  it('开启时 SOP 与提示词两轮都禁止按钮类设计', () => {
+    const sopSystem = buildSopSystemPrompt(true, false, true)
+    expect(sopSystem).toContain('按钮')
+    expect(sopSystem).toContain('禁忌')
+
+    const promptSystem = buildPromptMessages({ sopText: 'SOP', count: 2, avoidCta: true }).system
+    expect(promptSystem).toContain('仿系统界面')
+    expect(promptSystem).toContain('立即领取')
+  })
+
+  it('关闭时不出现相关限制，保留参考图原有按钮', () => {
+    expect(buildSopSystemPrompt(true, false, false)).not.toContain('仿系统界面')
+    expect(buildPromptMessages({ sopText: 'SOP', count: 2, avoidCta: false }).system).not.toContain('立即领取')
   })
 })

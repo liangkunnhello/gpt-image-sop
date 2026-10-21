@@ -6,6 +6,7 @@ import { ensureImageCached } from './imageCache'
 import { apiFetch, isTauri } from './platform'
 import { createSaveFolder, pickSaveDir, saveFile, saveFileToDir, type SaveDir } from './saveFile'
 import { buildTaskFolderName, type TaskFolderContext } from './taskFolderName'
+import { pickWebFolderRoot, supportsWebFolder, writeFilesToWebFolder } from './webFolder'
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -84,25 +85,28 @@ export async function downloadTaskImagesToFolder(
     let successCount = 0
     let failCount = 0
     let error: string | undefined
+    let folderInfo: { name: string, path: string } | undefined
     try {
-      const folder = await createSaveFolder(dir, sanitizeFileNamePart(folderName) || `task-${task.id}`)
-      for (let index = 0; index < imageIds.length; index++) {
-        try {
-          const blob = await getImageBlob(imageIds[index])
-          const order = String(index + 1).padStart(2, '0')
-          await saveFileToDir(dir, blob, `${order}.${getBlobExtension(blob)}`, undefined, folder.name)
-          successCount++
-        } catch (err) {
-          console.error(err)
-          if (typeof err === 'string') error = err
-          failCount++
-        }
-      }
-      return { successCount, failCount, location: folder.path, error }
+      folderInfo = await createSaveFolder(dir, sanitizeFileNamePart(folderName) || `task-${task.id}`)
     } catch (err) {
+      // 旧版客户端没有 save_dir_folder 命令：退回直接把图片写进所选目录，别让下载整体失败
       console.error(err)
-      return { successCount, failCount, error: typeof err === 'string' ? err : '创建文件夹失败' }
     }
+    for (let index = 0; index < imageIds.length; index++) {
+      try {
+        const blob = await getImageBlob(imageIds[index])
+        const order = String(index + 1).padStart(2, '0')
+        const ext = getBlobExtension(blob)
+        const base = folderInfo ? `${order}.${ext}` : `${sanitizeFileNamePart(folderName) || 'task'}-${order}.${ext}`
+        await saveFileToDir(dir, blob, base, undefined, folderInfo?.name)
+        successCount++
+      } catch (err) {
+        console.error(err)
+        if (typeof err === 'string') error = err
+        failCount++
+      }
+    }
+    return { successCount, failCount, location: folderInfo?.path ?? dir.path, error }
   })
 }
 
@@ -169,6 +173,109 @@ export async function downloadTaskCardsToFolders(
       }
     }
     return { successCount, failCount, location: dir.path, error }
+  })
+}
+
+/**
+ * 网页端：用 File System Access API 建同名文件夹保存一张卡的全部图片（仅 Chromium 系支持）。
+ * 不支持的浏览器返回 webUnsupported，调用方退回原来的下载方式。
+ */
+export async function downloadTaskImagesToWebFolder(
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName'>,
+  options: TaskFolderDownloadOptions,
+): Promise<DownloadImagesResult & { webUnsupported?: boolean }> {
+  const imageIds = task.outputImages || []
+  if (!imageIds.length) return { successCount: 0, failCount: 0 }
+  if (!supportsWebFolder()) return { successCount: 0, failCount: 0, webUnsupported: true }
+
+  const root = await pickWebFolderRoot()
+  if (!root) return { successCount: 0, failCount: 0, canceled: true }
+
+  const folderName = buildTaskFolderName(options.template, {
+    date: new Date(task.createdAt),
+    product: options.product,
+    direction: options.direction,
+    size: task.params?.size,
+    sopName: task.sopName,
+    custom: options.custom,
+  }) || `task-${task.id}`
+
+  return trackDataTransfer(async () => {
+    let successCount = 0
+    let failCount = 0
+    let error: string | undefined
+    const files: Array<{ name: string; blob: Blob }> = []
+    for (let index = 0; index < imageIds.length; index++) {
+      try {
+        const blob = await getImageBlob(imageIds[index])
+        files.push({ name: `${String(index + 1).padStart(2, '0')}.${getBlobExtension(blob)}`, blob })
+      } catch (err) {
+        console.error(err)
+        failCount++
+      }
+    }
+    try {
+      const actualName = await writeFilesToWebFolder(root, sanitizeFileNamePart(folderName) || `task-${task.id}`, files)
+      successCount += files.length
+      return { successCount, failCount, location: `${root.name}/${actualName}`, error }
+    } catch (err) {
+      console.error(err)
+      error = err instanceof Error ? err.message : '写入文件夹失败'
+      return { successCount: 0, failCount: failCount + files.length, error }
+    }
+  })
+}
+
+/** 网页端：多张任务卡各建一个文件夹，一次选目录（仅 Chromium 系支持） */
+export async function downloadTaskCardsToWebFolders(
+  tasks: TaskCardFolderTask[],
+  options: {
+    template: string
+    custom?: string
+    resolveNames: (task: TaskCardFolderTask) => { product?: string; direction?: string }
+  },
+): Promise<DownloadImagesResult & { webUnsupported?: boolean }> {
+  const cards = tasks.filter((task) => task.outputImages?.length)
+  if (!cards.length) return { successCount: 0, failCount: 0 }
+  if (!supportsWebFolder()) return { successCount: 0, failCount: 0, webUnsupported: true }
+
+  const root = await pickWebFolderRoot()
+  if (!root) return { successCount: 0, failCount: 0, canceled: true }
+
+  return trackDataTransfer(async () => {
+    let successCount = 0
+    let failCount = 0
+    let error: string | undefined
+    for (const task of cards) {
+      const names = options.resolveNames(task)
+      const base = buildTaskFolderName(options.template, {
+        date: new Date(task.createdAt),
+        product: names.product,
+        direction: names.direction,
+        size: task.params?.size,
+        sopName: task.sopName,
+        custom: options.custom,
+      }) || `task-${task.id}`
+      const files: Array<{ name: string; blob: Blob }> = []
+      for (let index = 0; index < task.outputImages.length; index++) {
+        try {
+          const blob = await getImageBlob(task.outputImages[index])
+          files.push({ name: `${String(index + 1).padStart(2, '0')}.${getBlobExtension(blob)}`, blob })
+        } catch (err) {
+          console.error(err)
+          failCount++
+        }
+      }
+      try {
+        await writeFilesToWebFolder(root, sanitizeFileNamePart(base) || `task-${task.id}`, files)
+        successCount += files.length
+      } catch (err) {
+        console.error(err)
+        error = err instanceof Error ? err.message : '写入文件夹失败'
+        failCount += files.length
+      }
+    }
+    return { successCount, failCount, location: root.name, error }
   })
 }
 
