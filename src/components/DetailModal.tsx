@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask, updateSopText } from '../store'
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
+import PromptPairModal from './PromptPairModal'
 import { directionPath, useSopStore } from '../lib/sopStore'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
@@ -44,6 +45,8 @@ export default function DetailModal() {
   const [imageSizes, setImageSizes] = useState<Record<string, string>>({})
   const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
   const [sopEditing, setSopEditing] = useState(false)
+  /** 图片 ↔ 提示词对照视图 */
+  const [pairOpen, setPairOpen] = useState(false)
   /** 缩略图缩放倍率：1 = 按目标列宽自适应，拖滑块可无级放大缩小 */
   const [galleryZoom, setGalleryZoom] = useState(1)
   const sopDirections = useSopStore((s) => s.directions)
@@ -79,13 +82,17 @@ export default function DetailModal() {
     () => tasks.find((t) => t.id === detailTaskId) ?? null,
     [tasks, detailTaskId],
   )
-  // SOP 卡片代表的是整组任务，详情里要展示这份 SOP 下的全部图片
+  // SOP / 变量卡片代表的是整组任务，详情里要展示这份 SOP 下的全部图片
+  const groupTasks = useMemo(() => {
+    if (!rawTask?.sopJobId) return []
+    return tasks
+      .filter((item) => item.sopJobId === rawTask.sopJobId && !item.sopPlaceholder)
+      .sort((a, b) => (a.sopPromptIndex ?? 0) - (b.sopPromptIndex ?? 0))
+  }, [rawTask, tasks])
   const task = useMemo(() => {
     if (!rawTask) return null
     if (!rawTask.sopJobId) return rawTask
-    const group = tasks
-      .filter((item) => item.sopJobId === rawTask.sopJobId && !item.sopPlaceholder)
-      .sort((a, b) => (a.sopPromptIndex ?? 0) - (b.sopPromptIndex ?? 0))
+    const group = groupTasks
     if (group.length <= 1) return rawTask
     const leader = group[0]
     const anyRunning = group.some((item) => item.status === 'running')
@@ -97,7 +104,7 @@ export default function DetailModal() {
       status: anyRunning ? 'running' : allError ? 'error' : 'done',
       elapsed: group.reduce((sum, item) => sum + (item.elapsed ?? 0), 0),
     } as TaskRecord
-  }, [rawTask, tasks])
+  }, [rawTask, groupTasks])
   const streamPreviewItems = useMemo(() => {
     const slotEntries = streamPreviewSlots
       ? Object.entries(streamPreviewSlots)
@@ -854,6 +861,17 @@ export default function DetailModal() {
                   <span className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
                     {imageIndex + 1} / {outputLen}
                   </span>
+                  {/* 整组图片是摊平展示的，这里给个直达逐条对照的入口 */}
+                  {groupTasks.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setPairOpen(true)}
+                      title="查看每条提示词与它产出的图"
+                      className="absolute bottom-2 right-2 rounded-full bg-black/50 px-2 py-0.5 text-xs text-white transition hover:bg-black/70"
+                    >
+                      图 ↔ 提示词
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -1111,6 +1129,16 @@ export default function DetailModal() {
                     {task.variableMode ? '变量策略' : '生图 SOP'}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-xs text-gray-700 dark:text-gray-300">{task.sopName || ''}</span>
+                  {/* 一组提示词对应一组图，这里给一个逐条对照的入口 */}
+                  {groupTasks.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setPairOpen(true)}
+                      className="shrink-0 rounded border border-gray-200 px-1.5 py-0.5 text-[11px] text-gray-600 transition-colors hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-300 dark:hover:border-blue-500/40 dark:hover:text-blue-300"
+                    >
+                      图 ↔ 提示词（{groupTasks.length}）
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setSopEditing(true)}
@@ -1163,6 +1191,13 @@ export default function DetailModal() {
                   updateSopText(task.sopJobId as string, task.sopName || '生图 SOP', next)
                   setSopEditing(false)
                 }}
+              />
+            )}
+            {pairOpen && groupTasks.length > 1 && (
+              <PromptPairModal
+                tasks={groupTasks}
+                title={task.sopName || '图片与提示词对照'}
+                onClose={() => setPairOpen(false)}
               />
             )}
             {showRevisedPrompt && currentRevisedPrompt && (
