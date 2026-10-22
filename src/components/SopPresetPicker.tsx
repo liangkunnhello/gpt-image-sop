@@ -1,28 +1,41 @@
 import type { SopPick, SopPreset } from '../lib/sopStore'
 import { NO_PRESET, useSopStore } from '../lib/sopStore'
 
-/** 按「默认项 → 上次使用 → 第一项」的顺序决定当前选中的卖点/风格 */
+/**
+ * 按「默认项 → 上次使用 → 就近第一条」决定当前选中的卖点/风格。
+ * scopeIds 是自身 → 父 → 根的作用域链，方向没配就继承产品的。
+ */
 export function resolvePickedPreset(
   presets: SopPreset[],
   directionId: string,
-  productId: string,
+  scopeIds: string[],
   kind: SopPreset['kind'],
   lastPick: Record<string, SopPick>,
   defaultPick: Record<string, SopPick>,
 ) {
-  const list = presets.filter((item) => item.productId === productId && item.kind === kind)
   const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
   const id = kind === 'point' ? pick.pointId : pick.styleId
   if (id === NO_PRESET) return undefined
-  if (id) return list.find((item) => item.id === id)
-  return list[0]
+  if (id) {
+    for (const scopeId of scopeIds) {
+      const hit = presets.find((item) => item.productId === scopeId && item.kind === kind && item.id === id)
+      if (hit) return hit
+    }
+    return undefined
+  }
+  for (const scopeId of scopeIds) {
+    const first = presets.find((item) => item.productId === scopeId && item.kind === kind)
+    if (first) return first
+  }
+  return undefined
 }
 
 interface Props {
   kind: SopPreset['kind']
   label: string
   directionId: string
-  productId: string
+  /** 自身 → 父 → 根 的作用域链，就近继承 */
+  scopeIds: string[]
 }
 
 const EditIcon = () => (
@@ -32,13 +45,13 @@ const EditIcon = () => (
 )
 
 /** 输入框上方的入口：只显示当前用的是哪份，点开进提示词库弹窗 */
-export default function SopPresetPicker({ kind, label, directionId, productId }: Props) {
+export default function SopPresetPicker({ kind, label, directionId, scopeIds }: Props) {
   const presets = useSopStore((s) => s.presets)
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
   const setLibraryTab = useSopStore((s) => s.setLibraryTab)
 
-  const current = resolvePickedPreset(presets, directionId, productId, kind, lastPick, defaultPick)
+  const current = resolvePickedPreset(presets, directionId, scopeIds, kind, lastPick, defaultPick)
   const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
   const currentId = kind === 'point' ? pick.pointId : pick.styleId
   const isNone = currentId === NO_PRESET

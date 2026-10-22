@@ -5,6 +5,7 @@ import { useStore } from '../store'
 import { groupSopTasks } from '../lib/sopGroup'
 import { directionPath, useSopStore, UNASSIGNED_FILTER } from '../lib/sopStore'
 import { effectiveNodeKind, trashNodeWithTasks } from '../lib/directionTree'
+import { nearestScopeId } from '../lib/sopScope'
 import { taskMatchesChannel } from '../lib/channel'
 import { isTaskUnread } from '../lib/unread'
 import { ensureImageCached } from '../lib/imageCache'
@@ -117,7 +118,26 @@ export default function SopDirectionTree() {
   // 顶层节点就算 kind 写错过也得能显示出来，否则节点在树里「消失」
   const categories = useMemo(() => directions.filter((node) => !node.parentId && !node.deletedAt), [directions])
   const childrenOf = (id: string) => directions.filter((node) => node.parentId === id && !node.deletedAt)
-  const promptCount = (productId: string) => systemPrompts.filter((item) => item.productId === productId).length
+  /**
+   * 每层显示「这棵子树里一共配了几条系统提示词」。
+   * 提示词可能配在产品上，也可能配在更深一层，父级累加才不会看着像没配。
+   */
+  const promptCounts = useMemo(() => {
+    const alive = new Map(directions.filter((node) => !node.deletedAt).map((node) => [node.id, node]))
+    const map = new Map<string, number>()
+    for (const prompt of systemPrompts) {
+      if (!prompt.productId) continue
+      const seen = new Set<string>()
+      let cursor = alive.get(prompt.productId)
+      while (cursor && !seen.has(cursor.id)) {
+        seen.add(cursor.id)
+        map.set(cursor.id, (map.get(cursor.id) ?? 0) + 1)
+        cursor = cursor.parentId ? alive.get(cursor.parentId) : undefined
+      }
+    }
+    return map
+  }, [directions, systemPrompts])
+  const promptCount = (nodeId: string) => promptCounts.get(nodeId) ?? 0
 
   // 数量统一按「任务卡」算：SOP 一卡多条提示词也只算一张，跟画廊里看到的卡片数一致
   // 并且跟随渠道筛选：否则选了渠道后，左边数字和右边列表对不上
@@ -183,9 +203,9 @@ export default function SopDirectionTree() {
   const activeNode = directions.find((node) => node.id === activeFilterId)
   const currentNode = directions.find((node) => node.id === activeDirectionId)
   const currentPath = currentNode ? directionPath(directions, activeDirectionId) : ''
-  const parentProduct = activeNode?.kind === 'direction'
-    ? directions.find((node) => node.id === activeNode.parentId)
-    : activeNode
+  const parentProduct = activeNode
+    ? directions.find((node) => node.id === nearestScopeId(directions, activeNode.id))
+    : undefined
 
   /** 打开「新建」输入框；不传参时沿用旧行为：在当前产品下建方向 */
   const beginAdd = (parentId: string | null, kind: SopDirectionNode['kind']) => {

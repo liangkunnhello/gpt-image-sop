@@ -200,11 +200,17 @@ export const useSopStore = create<SopState>()(
       setAvoidOverlay: (value) => set({ avoidOverlay: value }),
       setProgress: (value) => set({ progress: value }),
       setActiveDirection: (id) => set({ activeDirectionId: id }),
-      setActiveFilter: (id) => set((state) => ({
-        activeFilterId: id,
-        // 选到方向时同步弹窗默认方向
-        activeDirectionId: id && state.directions.find((node) => node.id === id)?.kind === 'direction' ? id : state.activeDirectionId,
-      })),
+      setActiveFilter: (id) => set((state) => {
+        // 点谁就归谁：只要有父级就能挂任务卡（产品 / 方向都行），
+        // 顶层类目只是分组容器，点它只筛选、不改归属。
+        // 这里按层级判断而不是 kind 字段，老数据里 kind 写错的节点也能点得动。
+        const target = id ? state.directions.find((node) => node.id === id) : undefined
+        const canOwn = Boolean(target?.parentId)
+        return {
+          activeFilterId: id,
+          activeDirectionId: canOwn && id ? id : state.activeDirectionId,
+        }
+      }),
       setSidebarCollapsed: (value) => set({ sidebarCollapsed: value }),
       addPreset: (productId, kind, name, content) => {
         const id = newId(`preset-${kind}`)
@@ -402,8 +408,9 @@ export const useSopStore = create<SopState>()(
     }),
     {
       name: 'gpt-image-sop-store',
-      // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边；v5：变量提示词库；v6：节点伪删除
-      version: 6,
+      // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边；v5：变量提示词库；v6：节点伪删除；
+      // v7：productId 为空的配置认领到顶层节点
+      version: 7,
       migrate: (persisted, version) => {
         const state = (persisted ?? {}) as Partial<SopState>
 
@@ -449,6 +456,28 @@ export const useSopStore = create<SopState>()(
             }))
           }
           state.postTemplates = upgraded
+        }
+
+        // v7：productId 为空的提示词 / 卖点 / 风格 / 模板，界面里永远查不到
+        // （用户明明配了，输入框上方却显示「未设置」）。认领到第一个顶层节点。
+        if (version < 7) {
+          const nodes = state.directions ?? []
+          const fallback = nodes.find((node) => !node.parentId && !node.deletedAt)?.id
+            ?? nodes.find((node) => !node.deletedAt)?.id
+          if (fallback) {
+            const adopt = <T extends { productId: string }>(list?: T[]) => list?.map((item) => (
+              item.productId ? item : { ...item, productId: fallback }
+            ))
+            state.systemPrompts = adopt(state.systemPrompts)
+            state.variablePrompts = adopt(state.variablePrompts)
+            state.presets = adopt(state.presets)
+            if (state.postTemplates?.['']?.length) {
+              const rest = { ...state.postTemplates }
+              const orphan = rest['']
+              delete rest['']
+              state.postTemplates = { ...rest, [fallback]: [...(rest[fallback] ?? []), ...orphan] }
+            }
+          }
         }
 
         return state as SopState

@@ -28,6 +28,7 @@ import SopPresetPicker, { resolvePickedPreset } from './SopPresetPicker'
 import SopSystemPromptPicker from './SopSystemPromptPicker'
 import VariablePromptPicker from './VariablePromptPicker'
 import { useSopStore } from '../lib/sopStore'
+import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { buildPromptBundle } from '../lib/promptBundle'
 import { taskMatchesChannel } from '../lib/channel'
 import { enqueueSopJobs, splitEven } from '../lib/sopPipeline'
@@ -554,14 +555,20 @@ export default function InputBar() {
   const [variableRunOpen, setVariableRunOpen] = useState(false)
 
   const currentDirection = sopDirections.find((node) => node.id === activeDirectionId)
-  const currentProduct = currentDirection?.kind === 'direction'
-    ? sopDirections.find((node) => node.id === currentDirection.parentId)
-    : currentDirection
-  const pickedPoint = currentDirection && currentProduct
-    ? resolvePickedPreset(sopPresets, currentDirection.id, currentProduct.id, 'point', sopLastPick, sopDefaultPick)
+  /**
+   * 作用域链：自身 → 父 → 根。
+   * 提示词/卖点/风格都按「最近一层配了就用那层」取，所以方向不必自己再配一遍；
+   * 身份按层级判断，不依赖可能写错的 kind 字段。
+   */
+  const sopScopeIds = currentDirection ? scopeChain(sopDirections, currentDirection.id) : []
+  const currentProductId = currentDirection ? nearestScopeId(sopDirections, currentDirection.id) : ''
+  const currentProduct = sopDirections.find((node) => node.id === currentProductId)
+    ?? currentDirection
+  const pickedPoint = currentDirection
+    ? resolvePickedPreset(sopPresets, currentDirection.id, sopScopeIds, 'point', sopLastPick, sopDefaultPick)
     : undefined
-  const pickedStyle = currentDirection && currentProduct
-    ? resolvePickedPreset(sopPresets, currentDirection.id, currentProduct.id, 'style', sopLastPick, sopDefaultPick)
+  const pickedStyle = currentDirection
+    ? resolvePickedPreset(sopPresets, currentDirection.id, sopScopeIds, 'style', sopLastPick, sopDefaultPick)
     : undefined
 
   /** 只负责把任务卡推进后台队列，立即返回，不阻塞输入和其他操作 */
@@ -1941,17 +1948,17 @@ export default function InputBar() {
 
           {sopMode && currentDirection && currentProduct && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <SopSystemPromptPicker productId={currentProduct.id} directionId={currentDirection.id} />
-              <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} productId={currentProduct.id} />
-              <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} productId={currentProduct.id} />
+              <SopSystemPromptPicker scopeIds={sopScopeIds} directionId={currentDirection.id} />
+              <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} scopeIds={sopScopeIds} />
+              <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} scopeIds={sopScopeIds} />
             </div>
           )}
           {/* 变量模式：变量提示词与系统提示词并行，卖点/风格两个模式通用 */}
           {variableMode && currentDirection && currentProduct && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <VariablePromptPicker productId={currentProduct.id} directionId={currentDirection.id} />
-              <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} productId={currentProduct.id} />
-              <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} productId={currentProduct.id} />
+              <VariablePromptPicker scopeIds={sopScopeIds} directionId={currentDirection.id} />
+              <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} scopeIds={sopScopeIds} />
+              <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} scopeIds={sopScopeIds} />
             </div>
           )}
 

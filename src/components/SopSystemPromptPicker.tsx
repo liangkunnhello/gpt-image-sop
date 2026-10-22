@@ -2,23 +2,39 @@ import type { SopPick } from '../lib/sopStore'
 import { NO_PRESET, useSopStore } from '../lib/sopStore'
 import type { SopSystemPrompt } from '../types'
 
-/** 按「默认项 → 上次使用 → 第一项」的顺序决定当前系统提示词；列表按产品共享 */
+/**
+ * 按「默认项 → 上次使用 → 就近第一条」决定当前系统提示词。
+ *
+ * scopeIds 是从当前节点往上的作用域链（自身 → 父产品 → 类目）：
+ * 方向自己没配就继承产品的，产品没配再往上一层找，
+ * 这样「先建产品配提示词、后建方向」不会变成未设置。
+ */
 export function resolveSystemPrompt(
   prompts: SopSystemPrompt[],
-  productId: string,
+  scopeIds: string[],
   directionId: string,
   lastPick: Record<string, SopPick>,
   defaultPick: Record<string, SopPick>,
 ) {
-  const list = prompts.filter((item) => item.productId === productId)
   const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
   if (pick.promptId === NO_PRESET) return undefined
-  if (pick.promptId) return list.find((item) => item.id === pick.promptId)
-  return list[0]
+  if (pick.promptId) {
+    for (const scopeId of scopeIds) {
+      const hit = prompts.find((item) => item.productId === scopeId && item.id === pick.promptId)
+      if (hit) return hit
+    }
+    return undefined
+  }
+  for (const scopeId of scopeIds) {
+    const first = prompts.find((item) => item.productId === scopeId)
+    if (first) return first
+  }
+  return undefined
 }
 
 interface Props {
-  productId: string
+  /** 自身 → 父 → 根 的作用域链，就近继承 */
+  scopeIds: string[]
   directionId: string
 }
 
@@ -29,13 +45,13 @@ const EditIcon = () => (
 )
 
 /** 输入框上方的入口：只显示当前用的是哪份，点开进提示词库弹窗 */
-export default function SopSystemPromptPicker({ productId, directionId }: Props) {
+export default function SopSystemPromptPicker({ scopeIds, directionId }: Props) {
   const systemPrompts = useSopStore((s) => s.systemPrompts)
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
   const setLibraryTab = useSopStore((s) => s.setLibraryTab)
 
-  const current = resolveSystemPrompt(systemPrompts, productId, directionId, lastPick, defaultPick)
+  const current = resolveSystemPrompt(systemPrompts, scopeIds, directionId, lastPick, defaultPick)
   const isNone = (defaultPick[directionId] ?? lastPick[directionId] ?? {}).promptId === NO_PRESET
 
   return (

@@ -5,6 +5,8 @@ import { collectAvoidZones } from '../lib/postReserve'
 import { BUILTIN_VARIABLE_PROMPT } from '../lib/variablePipeline'
 import { resolvePickedPreset } from './SopPresetPicker'
 import { resolveVariablePrompt } from './VariablePromptPicker'
+import { nearestScopeId, scopeChain } from '../lib/sopScope'
+import { effectiveNodeKind } from '../lib/directionTree'
 
 export interface VariableRunOptions {
   directionId: string
@@ -49,24 +51,29 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
   const setVariablesPerCard = useSopStore((s) => s.setVariablesPerCard)
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
 
-  const products = useMemo(() => directions.filter((node) => node.kind !== 'direction'), [directions])
+  // 产品下拉按层级判断，不信可能写错的 kind：只有第三层及更深的才算方向
+  const products = useMemo(
+    () => directions.filter((node) => effectiveNodeKind(directions, node.id) !== 'direction'),
+    [directions],
+  )
   const activeNode = directions.find((node) => node.id === activeDirectionId)
   const [productId, setProductId] = useState(
-    (activeNode?.kind === 'direction' ? activeNode.parentId : activeNode?.id) || products[0]?.id || '',
+    (activeDirectionId ? nearestScopeId(directions, activeDirectionId) : activeNode?.id) || products[0]?.id || '',
   )
   const productChildren = useMemo(
     () => directions.filter((node) => node.parentId === productId),
     [directions, productId],
   )
-  const [directionId, setDirectionId] = useState(activeNode?.kind === 'direction' ? activeNode.id : '')
+  const [directionId, setDirectionId] = useState(activeDirectionId ?? '')
   const currentDirectionId = productChildren.some((n) => n.id === directionId)
     ? directionId
-    : productChildren.find((n) => n.kind === 'direction')?.id || ''
+    : productChildren[0]?.id || ''
 
-  // 变量提示词、卖点、风格都在输入框上方选好了，这里只读当前值做确认
-  const selectedPrompt = resolveVariablePrompt(variablePrompts, productId, currentDirectionId, lastPick, defaultPick)
-  const pickedPoint = resolvePickedPreset(presets, currentDirectionId, productId, 'point', lastPick, defaultPick)
-  const pickedStyle = resolvePickedPreset(presets, currentDirectionId, productId, 'style', lastPick, defaultPick)
+  // 变量提示词、卖点、风格都在输入框上方选好了，这里只读当前值做确认；方向为空则就近继承产品
+  const scopeIds = scopeChain(directions, productId)
+  const selectedPrompt = resolveVariablePrompt(variablePrompts, scopeIds, currentDirectionId, lastPick, defaultPick)
+  const pickedPoint = resolvePickedPreset(presets, currentDirectionId, scopeIds, 'point', lastPick, defaultPick)
+  const pickedStyle = resolvePickedPreset(presets, currentDirectionId, scopeIds, 'style', lastPick, defaultPick)
 
   const [mode, setMode] = useState<SplitMode>('one')
   const [customCount, setCustomCount] = useState(String(Math.max(1, Math.min(4, imageCount))))
@@ -134,7 +141,8 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
                 onChange={(e) => setDirectionId(e.target.value)}
                 className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
               >
-                {productChildren.filter((n) => n.kind === 'direction').map((node) => (
+                {/* 产品下的子节点就是可选归属，按层级算，不依赖可能写错的 kind */}
+                {productChildren.map((node) => (
                   <option key={node.id} value={node.id}>{node.name}</option>
                 ))}
               </select>

@@ -3,6 +3,8 @@ import { useSopStore } from '../lib/sopStore'
 import { splitEven } from '../lib/sopPipeline'
 import { collectAvoidZones, pickAvoidTemplate } from '../lib/postReserve'
 import { resolveSystemPrompt } from './SopSystemPromptPicker'
+import { nearestScopeId, scopeChain } from '../lib/sopScope'
+import { effectiveNodeKind } from '../lib/directionTree'
 
 export interface SopRunOptions {
   directionId: string
@@ -36,25 +38,35 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const setAvoidOverlay = useSopStore((s) => s.setAvoidOverlay)
   const postTemplates = useSopStore((s) => s.postTemplates)
 
-  const products = useMemo(() => directions.filter((node) => node.kind !== 'direction'), [directions])
+  // 产品下拉按层级判断，不信可能写错的 kind：只有第三层及更深的才算方向
+  const products = useMemo(
+    () => directions.filter((node) => effectiveNodeKind(directions, node.id) !== 'direction'),
+    [directions],
+  )
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
   const activeNode = directions.find((node) => node.id === activeDirectionId)
   const [productId, setProductId] = useState(
-    (activeNode?.kind === 'direction' ? activeNode.parentId : activeNode?.id) || products[0]?.id || '',
+    (activeDirectionId ? nearestScopeId(directions, activeDirectionId) : activeNode?.id) || products[0]?.id || '',
   )
   const productChildren = useMemo(
     () => directions.filter((node) => node.parentId === productId),
     [directions, productId],
   )
-  const [directionId, setDirectionId] = useState(activeNode?.kind === 'direction' ? activeNode.id : '')
+  const [directionId, setDirectionId] = useState(activeDirectionId ?? '')
   const currentDirectionId = productChildren.some((n) => n.id === directionId)
     ? directionId
-    : productChildren.find((n) => n.kind === 'direction')?.id || ''
+    : productChildren[0]?.id || ''
 
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
   // 系统提示词统一在输入框上方的选择器里维护，这里只负责取当前选中的那份
-  const selectedPrompt = resolveSystemPrompt(systemPrompts, productId, currentDirectionId, lastPick, defaultPick)
+  const selectedPrompt = resolveSystemPrompt(
+    systemPrompts,
+    scopeChain(directions, productId),
+    currentDirectionId,
+    lastPick,
+    defaultPick,
+  )
   const systemPromptText = selectedPrompt?.content || ''
 
   const [mode, setMode] = useState<SplitMode>('one')
@@ -126,7 +138,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
                 }}
                 className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
               >
-                {productChildren.filter((n) => n.kind === 'direction').map((node) => (
+                {/* 产品下的子节点就是可选归属，按层级算，不依赖可能写错的 kind */}
+                {productChildren.map((node) => (
                   <option key={node.id} value={node.id}>{node.name}</option>
                 ))}
               </select>

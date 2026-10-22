@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { SopLibraryTab } from '../lib/sopStore'
 import { NO_PRESET, SOP_LIBRARY_LABEL, directionPath, useSopStore } from '../lib/sopStore'
+import { nearestScopeId, scopeWithItems } from '../lib/sopScope'
 import { useStore } from '../store'
 import { firstTextFile, isFileDrag } from '../lib/fileDrop'
 import AiRewriteBar from './AiRewriteBar'
@@ -69,10 +70,24 @@ export default function SopLibraryModal() {
   const showToast = useStore((s) => s.showToast)
 
   const tab: SopLibraryTab = libraryTab ?? 'prompt'
-  const direction = directions.find((node) => node.id === activeDirectionId)
-  const productId = direction?.kind === 'direction' ? direction.parentId ?? '' : direction?.id ?? ''
-  const productName = directions.find((node) => node.id === productId)?.name ?? ''
   const path = activeDirectionId ? directionPath(directions, activeDirectionId) : ''
+
+  /**
+   * 列表展示 / 新增落在哪一层：
+   * 从当前节点往上找第一个「已经有内容」的作用域，都没有才用最近的存储层。
+   * 这样产品上配好的提示词，在新建的方向里打开也是同一份（并继续加在那一层），
+   * 不会因为方向自己还空着就显示「未设置」、更不会新建出一份重复的空列表。
+   */
+  const scopeHasItems = (scopeId: string) => {
+    if (tab === 'prompt') return systemPrompts.some((item) => item.productId === scopeId)
+    if (tab === 'variable') return variablePrompts.some((item) => item.productId === scopeId)
+    return presets.some((item) => item.productId === scopeId && item.kind === tab)
+  }
+  const productId = activeDirectionId ? scopeWithItems(directions, activeDirectionId, scopeHasItems) : ''
+  const productName = directions.find((node) => node.id === productId)?.name ?? ''
+  /** 就近那层还是空的、内容取自更上层时，标题里说明一下，避免以为存错了地方 */
+  const ownScopeId = activeDirectionId ? nearestScopeId(directions, activeDirectionId) : ''
+  const inheritedFrom = ownScopeId && productId && productId !== ownScopeId ? productName : ''
 
   /** pick 里各类各自对应的字段名 */
   const pickKey = tab === 'prompt'
@@ -297,6 +312,7 @@ export default function SopLibraryModal() {
             <h2 className="text-sm font-semibold text-gray-900 dark:text-white">提示词库</h2>
             <p className="mt-0.5 truncate text-xs text-gray-400 dark:text-gray-500" title={path}>
               归属 {path || '未选择方向'} · 列表按产品共享，选择只记在当前方向
+              {inheritedFrom ? ` · 当前沿用「${inheritedFrom}」的配置` : ''}
             </p>
           </div>
           <button
