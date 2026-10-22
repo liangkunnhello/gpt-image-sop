@@ -48,7 +48,7 @@ import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboar
 import { createCustomProfileImportUrl } from '../lib/profileImportUrl'
 import { getProfileImportBaseUrl, handledImportLinks } from '../lib/importLink'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
-import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, REASONING_EFFORT_VALUES, type AgentApiConfigMode, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ReasoningEffort, type ZipDownloadRoute } from '../types'
+import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, REASONING_EFFORT_VALUES, type AgentApiConfigMode, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ReasoningEffort, type SopDirectionNode, type TaskRecord, type ZipDownloadRoute } from '../types'
 import {
   CUSTOM_PROVIDER_LLM_PROMPT,
   DEFAULT_CUSTOM_PROVIDER_JSON,
@@ -57,6 +57,9 @@ import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { updateModalScrollRef, useReleaseUpdates } from '../hooks/useReleaseUpdates'
 import { useInspectConfig } from '../lib/inspectConfig'
+import { ALL_SCOPE, scopeSummary, type DirectionScope } from '../lib/directionScope'
+import { useSopStore } from '../lib/sopStore'
+import { readExportZipManifest } from '../lib/exportZip'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
 import Select from './Select'
 import { Checkbox } from './Checkbox'
@@ -70,6 +73,7 @@ import CustomProviderModal from './settings/CustomProviderModal'
 import ProfileImportUrlModal, { type CopyImportUrlOptions } from './settings/ProfileImportUrlModal'
 import ZipDownloadRouteModal, { ZIP_DOWNLOAD_ROUTE_OPTIONS } from './settings/ZipDownloadRouteModal'
 import InspectConfigModal from './InspectConfigModal'
+import DirectionScopeTree from './settings/DirectionScopeTree'
 import StorageInfoSection from './settings/StorageInfoSection'
 import AboutSettingsTab from './settings/AboutSettingsTab'
 import MarkdownRenderer from './MarkdownRenderer'
@@ -179,6 +183,8 @@ export default function SettingsModal() {
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
   const hasRunningOperations = useStore((s) => hasActiveDataOperations(s.tasks, s.agentConversations))
+  const galleryTasks = useStore((s) => s.tasks)
+  const sopDirections = useSopStore((s) => s.directions)
   const importInputRef = useRef<HTMLInputElement>(null)
   const profileMenuRef = useRef<HTMLDivElement>(null)
   const profileMenuTriggerRef = useRef<HTMLButtonElement>(null)
@@ -216,6 +222,14 @@ export default function SettingsModal() {
   const [importConfig, setImportConfig] = useState(true)
   const [importTasks, setImportTasks] = useState(true)
   const [importLibrary, setImportLibrary] = useState(true)
+  /** 导出按业务方向筛选任务；all 表示全部 */
+  const [exportScope, setExportScope] = useState<DirectionScope>(ALL_SCOPE)
+  /** 导入的范围：备份文件解析出业务树后才可选 */
+  const [importScope, setImportScope] = useState<DirectionScope>(ALL_SCOPE)
+  const [backupPreview, setBackupPreview] = useState<{ nodes: SopDirectionNode[]; tasks: TaskRecord[] } | null>(null)
+  const [previewingBackup, setPreviewingBackup] = useState(false)
+  /** 解析过但还没导入的备份文件：范围选好后再真正写入 */
+  const pendingImportFilesRef = useRef<File[]>([])
   const [clearConfig, setClearConfig] = useState(true)
   const [clearTasks, setClearTasks] = useState(true)
   const [isExportingData, setIsExportingData] = useState(false)
@@ -723,38 +737,65 @@ export default function SettingsModal() {
     }
     setIsExportingData(true)
     try {
-      await trackDataTransfer(() => exportData({ exportConfig, exportTasks, exportLibrary }))
+      await trackDataTransfer(() => exportData({ exportConfig, exportTasks, exportLibrary, taskScope: exportTasks ? exportScope : undefined }))
     } finally {
       setIsExportingData(false)
     }
   }
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** 选完备份先解析一遍，让用户按备份里的业务树挑范围，再真正写入 */
+  const handlePickImportFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
-    if (files.length) {
-      if (importTasks && hasRunningOperations) {
-        showToast('有任务正在进行，完成或停止后再导入', 'error')
-        e.target.value = ''
-        return
-      }
-      setIsImportingData(true)
-      try {
-        const imported = await trackDataTransfer(() => importData(files, {
-          importConfig: presetConfigOnly ? false : importConfig,
-          importTasks,
-          importLibrary: presetConfigOnly ? false : importLibrary,
-        }))
-        if (imported) {
-          const nextDraft = normalizeSettings(useStore.getState().settings)
-          setDraft(nextDraft)
-          setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
-          setShowProfileMenu(false)
-        }
-      } finally {
-        setIsImportingData(false)
-      }
-    }
     e.target.value = ''
+    if (!files.length) return
+    setPreviewingBackup(true)
+    try {
+      const nodes: SopDirectionNode[] = []
+      const tasks: TaskRecord[] = []
+      for (const file of files) {
+        const manifest = await readExportZipManifest(new Uint8Array(await file.arrayBuffer()), false)
+        for (const node of manifest.sopLibrary?.directions ?? []) nodes.push(node)
+        for (const task of manifest.tasks ?? []) tasks.push(task)
+      }
+      // 同 id 去重：分卷备份与多次备份可能带同一份树
+      const uniqueNodes = [...new Map(nodes.map((node) => [node.id, node])).values()]
+      const uniqueTasks = [...new Map(tasks.map((task) => [task.id, task])).values()]
+      pendingImportFilesRef.current = files
+      setBackupPreview({ nodes: uniqueNodes, tasks: uniqueTasks })
+      setImportScope(ALL_SCOPE)
+    } catch (err) {
+      pendingImportFilesRef.current = []
+      showToast(`读取备份失败：${err instanceof Error ? err.message : '未知原因'}`, 'error')
+    } finally {
+      setPreviewingBackup(false)
+    }
+  }
+
+  const handleImport = async (files: File[]) => {
+    if (!files.length) return
+    if (importTasks && hasRunningOperations) {
+      showToast('有任务正在进行，完成或停止后再导入', 'error')
+      return
+    }
+    setIsImportingData(true)
+    try {
+      const imported = await trackDataTransfer(() => importData(files, {
+        importConfig: presetConfigOnly ? false : importConfig,
+        importTasks,
+        importLibrary: presetConfigOnly ? false : importLibrary,
+        taskScope: importTasks ? importScope : undefined,
+      }))
+      if (imported) {
+        const nextDraft = normalizeSettings(useStore.getState().settings)
+        setDraft(nextDraft)
+        setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
+        setShowProfileMenu(false)
+        setBackupPreview(null)
+        setImportScope(ALL_SCOPE)
+      }
+    } finally {
+      setIsImportingData(false)
+    }
   }
 
   const handleClearAllData = async () => {
@@ -1929,9 +1970,24 @@ export default function SettingsModal() {
                   <p className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
                     提示词库包含方向树、系统提示词、卖点、风格、后处理模板（含 Logo / 警示语预留位）。
                   </p>
+                  {exportTasks && (
+                    <div className="space-y-1.5">
+                      <span className="block text-xs text-gray-600 dark:text-gray-300">按业务方向导出任务</span>
+                      <DirectionScopeTree
+                        nodes={sopDirections}
+                        tasks={galleryTasks}
+                        scope={exportScope}
+                        onChange={setExportScope}
+                        hint={`已选 ${scopeSummary(sopDirections, exportScope)}`}
+                      />
+                      <p data-selectable-text className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                        只带走勾选方向下的任务卡和图片；配置与提示词库仍整份导出，导入后才不会缺配置。
+                      </p>
+                    </div>
+                  )}
                   <button
                     onClick={handleExport}
-                    disabled={(!exportConfig && !exportTasks && !exportLibrary) || isExportingData}
+                    disabled={(!exportConfig && !exportTasks && !exportLibrary) || (exportTasks && !exportScope.all && !exportScope.ids.length && !exportScope.includeUnassigned) || isExportingData}
                     className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     {isExportingData ? (
@@ -1971,30 +2027,71 @@ export default function SettingsModal() {
                       label="包含提示词库"
                     />}
                   </div>
-                  <button
-                    onClick={() => importInputRef.current?.click()}
-                    disabled={(!presetConfigOnly && !importConfig && !importTasks && !importLibrary) || isImportingData}
-                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
-                  >
-                    {isImportingData ? (
-                      <>
-                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        导入中...
-                      </>
-                    ) : (
-                      '从 ZIP 导入所选数据'
+                  {importTasks && backupPreview && (
+                    <div className="space-y-1.5">
+                      <span className="block text-xs text-gray-600 dark:text-gray-300">按业务方向导入任务</span>
+                      <DirectionScopeTree
+                        nodes={backupPreview.nodes}
+                        tasks={backupPreview.tasks}
+                        scope={importScope}
+                        onChange={setImportScope}
+                        hint={`备份共 ${backupPreview.tasks.length} 条任务 · 已选 ${scopeSummary(backupPreview.nodes, importScope)}`}
+                      />
+                      <p data-selectable-text className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                        只写入勾选方向下的任务卡和图片；同 id 的配置与提示词库照常合并。
+                      </p>
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => importInputRef.current?.click()}
+                      disabled={(!presetConfigOnly && !importConfig && !importTasks && !importLibrary) || isImportingData || previewingBackup}
+                      className="flex-1 rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
+                    >
+                      {previewingBackup ? (
+                        <>
+                          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          读取备份中...
+                        </>
+                      ) : (
+                        backupPreview ? '重新选择备份文件' : '选择备份文件'
+                      )}
+                    </button>
+                    {backupPreview && (
+                      <button
+                        onClick={() => void handleImport(pendingImportFilesRef.current)}
+                        disabled={isImportingData || (importTasks && importScope.all === false && !importScope.ids.length && !importScope.includeUnassigned)}
+                        className="flex-1 rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white transition-all hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isImportingData ? (
+                          <>
+                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            导入中...
+                          </>
+                        ) : (
+                          '导入所选数据'
+                        )}
+                      </button>
                     )}
-                  </button>
+                  </div>
+                  {!backupPreview && (
+                    <p className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                      选好备份文件后可以先按业务方向挑要导进来的任务，再点导入。
+                    </p>
+                  )}
                   <input
                     ref={importInputRef}
                     type="file"
                     accept=".zip"
                     multiple
                     className="hidden"
-                    onChange={handleImport}
+                    onChange={handlePickImportFiles}
                   />
                 </div>
 

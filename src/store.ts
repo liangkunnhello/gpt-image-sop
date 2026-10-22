@@ -27,6 +27,7 @@ import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgen
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { collectSopLibrary, mergeSopLibrary, useSopStore } from './lib/sopStore'
+import { ALL_SCOPE, filterTasksByScope, scopeNodeIds, type DirectionScope } from './lib/directionScope'
 import { channelLabel, taskMatchesChannel } from './lib/channel'
 import { planPlainRequests, type PlainImageMode } from './lib/plainImagePlan'
 import { isTaskUnread } from './lib/unread'
@@ -5004,6 +5005,21 @@ export interface ExportOptions {
   exportTasks?: boolean
   /** 提示词库：方向树、系统提示词、卖点、风格、后处理模板 */
   exportLibrary?: boolean
+  /** 只导出这些业务方向下的任务卡；不传等于全部 */
+  taskScope?: DirectionScope
+}
+
+/** 从任务里收出全部图片 id（含输入图、遮罩、中间步骤图） */
+function collectTaskImageIds(tasks: TaskRecord[]) {
+  const ids = new Set<string>()
+  for (const task of tasks) {
+    for (const id of task.outputImages || []) ids.add(id)
+    for (const id of task.inputImageIds || []) ids.add(id)
+    for (const id of task.transparentOriginalImages || []) ids.add(id)
+    for (const id of task.streamPartialImageIds || []) ids.add(id)
+    if (task.maskImageId) ids.add(task.maskImageId)
+  }
+  return [...ids]
 }
 
 /** 导出数据为 ZIP */
@@ -5014,10 +5030,22 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
   try {
     const state = useStore.getState()
     if (options.exportTasks && hasActiveDataOperations(state.tasks, state.agentConversations)) throw new Error('有任务正在进行，完成或停止后再导出。')
-    const tasks = options.exportTasks ? await getAllTasks() : []
-    const imageIds = options.exportTasks ? await getAllImageIds() : []
+    const allTasks = options.exportTasks ? await getAllTasks() : []
+    // 选了具体业务方向时只带这部分任务，提示词库仍整份带（配置按产品存，拆开反而残缺）
+    const scope = options.taskScope ?? ALL_SCOPE
+    const tasks = filterTasksByScope(allTasks, useSopStore.getState().directions, scope)
+    const taskIds = new Set(tasks.map((task) => task.id))
+    // 选全部时维持原口径（导出图库里所有图）；选了具体方向才收窄到这些任务引用的图
+    const imageIds = options.exportTasks
+      ? (scope.all ? await getAllImageIds() : collectTaskImageIds(tasks))
+      : []
     const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId } = state
     const exportedAt = Date.now()
+    // Agent 会话按轮次引用任务；任务被筛掉后这些会话读出来会是空的，一并去掉
+    const scopedConversations = options.exportTasks
+      ? getPersistableAgentConversations(agentConversations).filter((conversation) =>
+          conversation.rounds.every((round) => round.outputTaskIds.every((id) => taskIds.has(id))))
+      : []
     const params = {
       options,
       exportedAt,
@@ -5026,7 +5054,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       imageTasks: tasks,
       favoriteCollections,
       defaultFavoriteCollectionId,
-      agentConversations: options.exportTasks ? getPersistableAgentConversations(agentConversations) : [],
+      agentConversations: scopedConversations,
       sopLibrary: options.exportLibrary ? collectSopLibrary() : undefined,
     }
     // 进度回调中检查取消，逐张读取时也能及时中断
@@ -5106,6 +5134,8 @@ export interface ImportOptions {
   importTasks?: boolean
   /** 提示词库：方向树、系统提示词、卖点、风格、后处理模板 */
   importLibrary?: boolean
+  /** 只导入这些业务方向下的任务卡；不传等于全部 */
+  taskScope?: DirectionScope
 }
 
 export async function restoreExplicitPresetConfig(ids: { providerIds: string[], profileIds: string[] }) {
@@ -5165,9 +5195,24 @@ export async function importData(input: File | File[], options: ImportOptions = 
     if (options.importLibrary && !options.importTasks && !(options.importConfig && settingsManifests.length) && !libraryManifests.length) {
       throw new Error('这份备份里没有提示词库。')
     }
-    const importedTasks = selected.flatMap((part) => part.manifest.tasks ?? [])
-    const importedAgentConversations = selected.flatMap((part) => part.manifest.agentConversations ?? [])
+    const allImportedTasks = selected.flatMap((part) => part.manifest.tasks ?? [])
+    // 范围按备份自带的业务树判断：本地方向树可能与来源不同，用本地树会筛错
+    const backupDirections = selected
+      .map((part) => part.manifest.sopLibrary?.directions)
+      .find((list) => Boolean(list?.length)) ?? []
+    const scope = options.taskScope ?? ALL_SCOPE
+    const importedTasks = filterTasksByScope(allImportedTasks, backupDirections, scope)
+    const importedTaskIds = new Set(importedTasks.map((task) => task.id))
+    // 被筛掉的任务不写图片，省得把没选的方向也塞进图库
+    const keptImageIds = new Set(collectTaskImageIds(importedTasks))
+    const importedAgentConversations = scope.all
+      ? selected.flatMap((part) => part.manifest.agentConversations ?? [])
+      : selected.flatMap((part) => part.manifest.agentConversations ?? [])
+          .filter((conversation) => conversation.rounds.every((round) => round.outputTaskIds.every((id) => importedTaskIds.has(id))))
     const hasTaskData = selected.some((part) => part.manifest.tasks != null || part.manifest.imageFiles != null)
+    if (options.importTasks && !options.importConfig && !options.importLibrary && !scope.all && !importedTasks.length) {
+      throw new Error('所选业务方向下没有任务卡。')
+    }
 
     // 先关闭取消再检查，确保点了取消就不会进入写入阶段
     setDataProgressCancelable(false)
@@ -5184,6 +5229,8 @@ export async function importData(input: File | File[], options: ImportOptions = 
         for (const [id, info] of Object.entries(manifest.imageFiles ?? {})) {
           // 先计入当前文件，写到最后一个时进度到 100%
           updateDataProgress('写入图片和缩略图', ++filesDone, fileTotal, 'file')
+          // 按方向筛掉的任务，它的图不写进来
+          if (!scope.all && !keptImageIds.has(id)) continue
           const dataUrl = readExportZipFileAsDataUrl(zipFiles, info.path)
           if (!dataUrl) continue
           await putImage({
@@ -5200,6 +5247,7 @@ export async function importData(input: File | File[], options: ImportOptions = 
 
         for (const [id, info] of Object.entries(manifest.thumbnailFiles ?? {})) {
           updateDataProgress('写入图片和缩略图', ++filesDone, fileTotal, 'file')
+          if (!scope.all && !keptImageIds.has(id)) continue
           const thumbnailDataUrl = readExportZipFileAsDataUrl(zipFiles, info.path)
           if (!thumbnailDataUrl) continue
           await putImageThumbnail({
