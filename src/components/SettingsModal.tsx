@@ -56,6 +56,7 @@ import {
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { updateModalScrollRef, useReleaseUpdates } from '../hooks/useReleaseUpdates'
+import { useInspectConfig } from '../lib/inspectConfig'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
 import Select from './Select'
 import { Checkbox } from './Checkbox'
@@ -68,6 +69,7 @@ import FontLicensesModal from './settings/FontLicensesModal'
 import CustomProviderModal from './settings/CustomProviderModal'
 import ProfileImportUrlModal, { type CopyImportUrlOptions } from './settings/ProfileImportUrlModal'
 import ZipDownloadRouteModal, { ZIP_DOWNLOAD_ROUTE_OPTIONS } from './settings/ZipDownloadRouteModal'
+import InspectConfigModal from './InspectConfigModal'
 import StorageInfoSection from './settings/StorageInfoSection'
 import AboutSettingsTab from './settings/AboutSettingsTab'
 import MarkdownRenderer from './MarkdownRenderer'
@@ -200,6 +202,7 @@ export default function SettingsModal() {
   const [profileMenuMaxHeight, setProfileMenuMaxHeight] = useState(DEFAULT_DROPDOWN_MAX_HEIGHT)
   const [showCustomProviderImport, setShowCustomProviderImport] = useState(false)
   const [showZipDownloadRouteManager, setShowZipDownloadRouteManager] = useState(false)
+  const [showInspectConfig, setShowInspectConfig] = useState(false)
   const [showFontLicenses, setShowFontLicenses] = useState(false)
   const [editingCustomProviderId, setEditingCustomProviderId] = useState<string | null>(null)
   const [customProviderJson, setCustomProviderJson] = useState(DEFAULT_CUSTOM_PROVIDER_JSON)
@@ -305,6 +308,21 @@ export default function SettingsModal() {
   const zipDownloadRouteSummary = enabledZipDownloadRouteCount
     ? `已开启 ${enabledZipDownloadRouteCount} 项使用压缩包进行批量下载的途径`
     : '未开启任何使用压缩包进行批量下载的途径'
+
+  // 检查配置只存本机，不进备份，所以直接从 inspectConfig 读
+  const inspectConfig = useInspectConfig((s) => s.config)
+  const inspectChecks = [
+    inspectConfig.checkViolation ? '违规' : '',
+    inspectConfig.checkText ? '文字' : '',
+    inspectConfig.checkOverlap ? '压叠' : '',
+  ].filter(Boolean)
+  const inspectAuto = [
+    inspectConfig.autoQc ? '自动质检' : '',
+    inspectConfig.autoDuplicate ? '自动算重复度' : '',
+  ].filter(Boolean)
+  const inspectSummary = !inspectChecks.length
+    ? '质检检查项全部关闭，只算重复度'
+    : `${inspectAuto.length ? `出图后${inspectAuto.join('、')}；` : '不自动跑；'}检查 ${inspectChecks.join('、')}；重复度判定线 ${Math.round(inspectConfig.limit * 100)}%`
 
   const agentProfiles = (presetConfigOnly ? visibleProfiles : draft.profiles)
     .filter((profile) => {
@@ -1283,8 +1301,10 @@ export default function SettingsModal() {
               <GeneralSettingsTab
                 draft={draft}
                 zipDownloadRouteSummary={zipDownloadRouteSummary}
+                inspectSummary={inspectSummary}
                 commitSettings={commitSettings}
                 onOpenZipDownloadRouteManager={() => setShowZipDownloadRouteManager(true)}
+                onOpenInspectConfig={() => setShowInspectConfig(true)}
                 toggleTaskCompletionNotification={toggleTaskCompletionNotification}
               />
             )}
@@ -2028,6 +2048,8 @@ export default function SettingsModal() {
             onClose={() => setShowZipDownloadRouteManager(false)}
           />
         )}
+
+        {showInspectConfig && <InspectConfigModal onClose={() => setShowInspectConfig(false)} />}
 
         {showFontLicenses && (
           <FontLicensesModal

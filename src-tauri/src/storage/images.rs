@@ -250,6 +250,18 @@ impl Storage {
         Ok(())
     }
 
+    /// 原图在磁盘上的绝对路径；记录不存在或文件已缺失时返回 None。
+    /// 只用于「在资源管理器中显示」这类需要真实位置的操作
+    pub fn image_path(&self, id: &str) -> Result<Option<std::path::PathBuf>> {
+        let rel = {
+            let conn = self.lock();
+            query_file(&conn, Kind::Image, id)?
+        };
+        let Some(rel) = rel else { return Ok(None) };
+        let path = self.root.join(rel);
+        Ok(path.is_file().then_some(path))
+    }
+
     /// 记录存在但文件缺失时记录日志并按不存在处理，与 IndexedDB 中找不到图片的表现一致
     pub fn get_file(&self, kind: Kind, id: &str) -> Result<Option<(FileMeta, Vec<u8>)>> {
         let row = {

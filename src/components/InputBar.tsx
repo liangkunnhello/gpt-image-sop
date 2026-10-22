@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, createInputImageFromFile, removeMultipleTasks, assignTasksDirection, assignTasksChannel, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
+import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImagesFromFiles, createInputImageFromFile, removeMultipleTasks, assignTasksDirection, assignTasksChannel, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
@@ -21,7 +21,6 @@ import { downloadImageEntriesAsZip, downloadImageIds, downloadTaskCardsToFolders
 import { pickSaveDir } from '../lib/saveFile'
 import { isTauri } from '../lib/platform'
 import SizePickerModal from './SizePickerModal'
-import GlassBackdrop from './GlassBackdrop'
 import AssignDirectionModal from './AssignDirectionModal'
 import SopSplitModal, { type SopRunOptions } from './SopSplitModal'
 import VariableRunModal, { type VariableRunOptions } from './VariableRunModal'
@@ -40,6 +39,7 @@ import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import { CommentBadge } from './CommentMarks'
 import ButtonTooltip from './input/buttonTooltip'
 import DragUploadOverlay from './input/dragUploadOverlay'
+import InputThumbImage from './input/inputThumbImage'
 import InputBatchBars from './input/inputBatchBars'
 import InputParamsPanel from './input/inputParamsPanel'
 
@@ -476,6 +476,8 @@ export default function InputBar() {
   const [nInput, setNInput] = useState(String(params.n))
   const [nInputFocused, setNInputFocused] = useState(false)
   const dragCounter = useRef(0)
+  /** 正在导入拖入/选中的图片：挡住重复触发，避免两批同时写状态把顺序打乱 */
+  const uploadingRef = useRef(false)
   const isMobile = useIsMobile()
 
   const settingsActiveProfile = useMemo(() => getActiveApiProfile(settings), [settings])
@@ -1008,29 +1010,34 @@ export default function InputBar() {
   }
 
   const handleFiles = async (files: FileList | File[]) => {
+    const list = Array.from(files)
+    if (list.length === 0) return
+    /**
+     * 拖进来几十张图时，逐张 await 会让每张都触发一次输入区全量重渲染，直接卡住。
+     * 统一走批量入口：有限并发读取 + 只追加一次状态。
+     */
+    if (uploadingRef.current) {
+      useStore.getState().showToast('正在导入上一批图片，请稍候', 'info')
+      return
+    }
+    uploadingRef.current = true
+    const startedAt = Date.now()
     try {
-      const currentCount = useStore.getState().inputImages.length
-      if (currentCount >= imageLimit) {
+      const { added, discarded, failed } = await addImagesFromFiles(list, {
+        limit: Number.isFinite(imageLimit) ? imageLimit : undefined,
+      })
+      // 大批量导入给一次结果反馈；单张小图不打扰
+      if (list.length > 1 || failed > 0 || discarded > 0) {
+        const consumed = Date.now() - startedAt
+        const notes: string[] = [`已添加 ${added} 张图片`]
+        if (discarded > 0) notes.push(`${discarded} 张不是图片`)
+        if (failed > 0) notes.push(`${failed} 张读取失败`)
+        if (Number.isFinite(imageLimit) && added < list.length - discarded - failed) {
+          notes.push(`已达上限 ${imageLimit} 张`)
+        }
         useStore.getState().showToast(
-          `参考图数量已达上限（${imageLimit} 张），无法继续添加`,
-          'error',
-        )
-        return
-      }
-
-      const remaining = imageLimit - currentCount
-      const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
-      const toAdd = accepted.slice(0, remaining)
-      const discarded = accepted.length - toAdd.length
-
-      for (const file of toAdd) {
-        await addImageFromFile(file)
-      }
-
-      if (discarded > 0) {
-        useStore.getState().showToast(
-          `已达上限 ${imageLimit} 张，${discarded} 张图片被丢弃`,
-          'error',
+          `${notes.join('，')}（${(consumed / 1000).toFixed(1)}s）`,
+          added > 0 ? 'success' : 'error',
         )
       }
     } catch (err) {
@@ -1038,6 +1045,8 @@ export default function InputBar() {
         `图片添加失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
+    } finally {
+      uploadingRef.current = false
     }
   }
 
@@ -1665,10 +1674,10 @@ export default function InputBar() {
         >
           {displaySrc && (
             <div className="h-full w-full overflow-hidden">
-              <img
-                src={displaySrc}
+              <InputThumbImage
+                imageId={img.id}
+                fallbackSrc={displaySrc}
                 className="w-full h-full object-cover hover:opacity-90 transition-opacity pointer-events-none"
-                alt=""
               />
             </div>
           )}
@@ -1989,8 +1998,7 @@ export default function InputBar() {
             onDeleteSelected={handleDeleteSelected}
           />
         </div>
-        <div ref={cardRef} data-surface="composer" className={`relative isolate bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10${promptExpanded ? ' flex min-h-0 flex-1 flex-col' : ''}`}>
-          <GlassBackdrop cornerRadius={24} displacementScale={38} blurAmount={0.05} saturation={160} />
+        <div ref={cardRef} className={`relative bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10${promptExpanded ? ' flex min-h-0 flex-1 flex-col' : ''}`}>
           {/* 移动端拖动条 */}
           <div
             ref={handleRef}

@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { getImage } from '../lib/db'
 import { expectFromPrompt, simBatch, simBatchLocal, sidecarAlive, type QcOutcome, type SimResponse } from '../lib/batchCheck'
-import { DEFAULT_QC_MODEL, qcInBrowser } from '../lib/visionQc'
+import { useInspectConfig } from '../lib/inspectConfig'
+import { qcInBrowser, type QcChecks } from '../lib/visionQc'
+import InspectConfigModal from './InspectConfigModal'
 
 const MAX_TASKS = 24
 const DEFAULT_PICK = 12
-const QC_CONCURRENCY = 3
 
 const VERDICT_STYLE: Record<string, string> = {
   pass: 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-400',
@@ -22,17 +23,25 @@ const VERDICT_TEXT: Record<string, string> = {
   error: '出错',
 }
 
-export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
-  const tasks = useStore((s) => s.tasks)
+export default function BatchCheckModal({ onClose }: { onClose: () => void }) {  const tasks = useStore((s) => s.tasks)
   const settings = useStore((s) => s.settings)
   const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
+  const config = useInspectConfig((s) => s.config)
   const [alive, setAlive] = useState<boolean | null>(null)
+  const [showConfig, setShowConfig] = useState(false)
   const [busy, setBusy] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [qc, setQc] = useState<Record<string, QcOutcome>>({})
   const [sim, setSim] = useState<SimResponse | null>(null)
   /** 相似度用的是本地 CLIP 还是浏览器内感知哈希 */
   const [simEngine, setSimEngine] = useState<'clip' | 'phash' | ''>('')
+
+  const checks: QcChecks = {
+    violation: config.checkViolation,
+    text: config.checkText,
+    overlap: config.checkOverlap,
+  }
+  const qcUsable = checks.violation || checks.text || checks.overlap
 
   const candidates = useMemo(
     () => tasks.filter((t) => t.status === 'done' && t.outputImages.length > 0).slice(0, MAX_TASKS),
@@ -66,21 +75,24 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
     let done = 0
     let cursor = 0
     const worker = async () => {
-      while (cursor < items.length) {
-        const task = items[cursor]
+      // cursor 在 await 之间递增，一个 worker 拿一张，避免同时抢到同一张
+      while (true) {
+        const index = cursor
         cursor += 1
+        if (index >= items.length) return
+        const task = items[index]
         const image = await getImage(task.outputImages[0])
         if (image) {
-          const outcome = profile
-            ? await qcInBrowser(profile, image.dataUrl, expectFromPrompt(task.prompt), DEFAULT_QC_MODEL)
-            : { verdict: 'error' as const, violationPass: false, textPass: false, overlapPass: false, missing: [], wrong: [], extra: [], reason: '没有可用的接口配置', confidence: null }
+          const outcome = profile && qcUsable
+            ? await qcInBrowser(profile, image.dataUrl, expectFromPrompt(task.prompt), { model: config.qcModel, checks })
+            : { verdict: 'error' as const, violationPass: false, textPass: false, overlapPass: false, missing: [], wrong: [], extra: [], reason: qcUsable ? '没有可用的接口配置' : '质检项全部关闭，请先点右上角「设置」勾选', confidence: null }
           setQc((prev) => ({ ...prev, [task.id]: outcome }))
         }
         done += 1
         setBusy(`质检 ${done}/${items.length}`)
       }
     }
-    await Promise.all(Array.from({ length: QC_CONCURRENCY }, worker))
+    await Promise.all(Array.from({ length: Math.min(config.qcConcurrency, items.length) }, worker))
     setBusy('')
   }
 
@@ -98,11 +110,11 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
       if (image) payload.push({ key: task.id, dataUrl: image.dataUrl })
     }
     try {
-      setSim(await simBatch(payload))
+      setSim(await simBatch(payload, config.limit))
       setSimEngine('clip')
     } catch {
       // 桌面安装版没有本地 CLIP 服务：退到浏览器内算画面近似度
-      setSim(await simBatchLocal(payload))
+      setSim(await simBatchLocal(payload, config.limit))
       setSimEngine('phash')
     }
     setBusy('')
@@ -125,6 +137,15 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
             {alive === null ? '检测中' : alive ? '相似度服务已连接' : '相似度服务未启动'}
           </span>
           <div className="flex-1" />
+          <button
+            type="button"
+            onClick={() => setShowConfig(true)}
+            className="rounded-lg border border-gray-200 px-3 py-1 text-sm text-gray-500 hover:bg-gray-100 dark:border-white/10 dark:text-gray-400 dark:hover:bg-white/[0.06]"
+            aria-label="质检与重复度设置"
+            title="质检与重复度设置"
+          >
+            设置
+          </button>
           <button type="button" onClick={onClose} className="rounded-lg px-3 py-1 text-sm text-gray-500 hover:bg-gray-100 dark:hover:bg-white/[0.06]">
             关闭
           </button>
@@ -142,9 +163,10 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
           <div className="flex-1" />
           <button
             type="button"
-            disabled={!profile || Boolean(busy) || !picked.size}
+            disabled={!profile || !qcUsable || Boolean(busy) || !picked.size}
             onClick={() => void runQc()}
             className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-40 dark:border-white/10 dark:hover:bg-white/[0.06]"
+            title={qcUsable ? undefined : '质检项全部关闭，点右上角「设置」开启'}
           >
             质检
           </button>
@@ -172,7 +194,7 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
               <>
                 <span className="text-gray-300 dark:text-gray-600">|</span>
                 <span>{sim.count} 张 / {sim.pairs_total} 对</span>
-                <span>判定线 {sim.limit}</span>
+                <span>判定线 {Math.round(sim.limit * 100)}%</span>
                 <span>超线 <b className="text-red-600">{sim.over_pairs}</b> 对</span>
                 <span>建议重出 <b className="text-red-600">{sim.regen.length}</b> 张</span>
                 {simEngine === 'phash' && (
@@ -204,7 +226,7 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
                 {candidates.map((task) => {
                   const outcome = qc[task.id]
                   const row = simOf(task.id)
-                  const over = row ? row.max > (sim?.limit ?? 0.92) : false
+                  const over = row ? row.max > (sim?.limit ?? config.limit) : false
                   return (
                     <tr key={task.id} className="border-t border-gray-100 dark:border-white/[0.06]">
                       <td className="px-3 py-2">
@@ -251,9 +273,10 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="border-t border-gray-200 px-5 py-2 text-[11px] text-gray-400 dark:border-white/[0.08]">
-          标准答案自动取自提示词里「」中的文案；主标题取最长一条，其余当标签。
+          标准答案自动取自提示词里「」中的文案；主标题取最长一条，其余当标签。当前判定线 {Math.round(config.limit * 100)}%，质检模型 {config.qcModel || '默认'}。
         </div>
       </div>
+      {showConfig && <InspectConfigModal onClose={() => setShowConfig(false)} />}
     </div>
   )
 }

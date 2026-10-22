@@ -244,6 +244,11 @@ export async function openStorageDir(): Promise<void> {
   await call('storage_open_dir')
 }
 
+/** 在资源管理器中选中这张原图；文件已被清理时返回 false */
+export function revealImage(id: string): Promise<boolean> {
+  return call('storage_reveal_image', { id })
+}
+
 /** 选好的新数据目录：原目录、新目录与当前数据的文件数和大小 */
 export type DataDirChange = {
   from: string

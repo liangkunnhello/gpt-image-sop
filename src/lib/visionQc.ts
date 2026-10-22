@@ -7,6 +7,15 @@ import type { ExpectText, QcOutcome } from './batchCheck'
 /** 质检默认模型；调用处可覆盖 */
 export const DEFAULT_QC_MODEL = 'deepseek-v4.1-flash'
 
+/** 质检检查项，对应配置弹窗里的三个勾选 */
+export interface QcChecks {
+  violation: boolean
+  text: boolean
+  overlap: boolean
+}
+
+export const DEFAULT_QC_CHECKS: QcChecks = { violation: true, text: true, overlap: true }
+
 const SYSTEM_PROMPT = [
   '你是广告投放前的图片质检员，只做判断，不改图。',
   '判断三件事：一，画面是否含违规内容（色情暴露、暴力血腥、政治敏感、未成年人不良形象、医疗功效夸大或承诺治愈）；',
@@ -18,10 +27,15 @@ const SYSTEM_PROMPT = [
 
 const SCHEMA = '{"violation_pass":true,"violation_items":[],"text_pass":true,"found":[],"missing":[],"wrong":[],"extra":[],"overlap_pass":true,"overlap_spots":[],"verdict":"pass","confidence":0.9,"reason":"一句话"}'
 
-function buildPrompt(expect: ExpectText, strict: boolean) {
+function buildPrompt(expect: ExpectText, strict: boolean, checks: QcChecks) {
   const hasText = Boolean(expect.mainTitle || expect.tags.length)
+  // 关掉的检查项不进提示词，模型只判要查的部分，未开启的项目对应的 *_pass 一律给 true
+  const enabled = [checks.violation ? '违规内容' : '', checks.text ? '文字一致性' : '', checks.overlap ? '文字压叠' : ''].filter(Boolean)
   const lines = ['检查这张图。']
-  if (hasText) {
+  lines.push('', `本次只检查：${enabled.join('、') || '无（全部记为通过）'}。未列出的项目一律视为通过。`)
+  if (!checks.text) {
+    lines.push('不要逐字核对文案，text_pass 直接给 true，missing / wrong / extra 给空数组。')
+  } else if (hasText) {
     lines.push('', '【应出现的文案】')
     if (expect.mainTitle) lines.push(`主标题：${expect.mainTitle}`)
     if (expect.tags.length) lines.push(`标签：${expect.tags.join(' / ')}`)
@@ -31,6 +45,8 @@ function buildPrompt(expect: ExpectText, strict: boolean) {
   } else {
     lines.push('本图不要求出现任何文字。若图上有文字，记入 extra。')
   }
+  if (!checks.violation) lines.push('不做违规判断，violation_pass 给 true。')
+  if (!checks.overlap) lines.push('不做压叠判断，overlap_pass 给 true，overlap_spots 给空数组。')
   lines.push('', 'found 填图上实际读到的文字；missing 填应有但没找到的；wrong 填「应为X实为Y」；extra 填规范外多出来的；overlap_spots 填压字位置描述。')
   lines.push('verdict 取 pass / fail / unsure；拿不准一律 unsure，不要硬判 pass。')
   if (strict) lines.push('', '上一次输出不是合法 JSON。这次只输出一行 JSON，不要换行，不要代码块。')
@@ -126,8 +142,10 @@ export async function qcInBrowser(
   profile: ApiProfile,
   dataUrl: string,
   expect: ExpectText,
-  model = DEFAULT_QC_MODEL,
+  options: { model?: string; checks?: QcChecks } = {},
 ): Promise<QcOutcome> {
+  const model = options.model?.trim() || DEFAULT_QC_MODEL
+  const checks = options.checks ?? DEFAULT_QC_CHECKS
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const url = buildApiUrl(profile.baseUrl, 'chat/completions', proxyConfig, useApiProxy)
@@ -141,7 +159,7 @@ export async function qcInBrowser(
         {
           role: 'user',
           content: [
-            { type: 'text', text: buildPrompt(expect, strict) },
+            { type: 'text', text: buildPrompt(expect, strict, checks) },
             { type: 'image_url', image_url: { url: image } },
           ],
         },

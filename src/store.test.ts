@@ -143,7 +143,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { addImagesFromFiles, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { groupSopTasks } from './lib/sopGroup'
 
@@ -5962,3 +5962,62 @@ describe('client connection errors', () => {
     else expect(error).toBe(reason)
   })
 })
+
+/**
+ * 拖入大批图片时的批量追加。
+ *
+ * 逐张 add 会让每张图都触发一次输入区全量重渲染，几十张就是几十次，
+ * 界面直接卡死。这里锁定「一次写完、去重、按上限截断」这几条行为。
+ */
+describe('batch input image import', () => {
+  beforeEach(() => {
+    useStore.setState({
+      appMode: 'gallery',
+      inputImages: [],
+      prompt: '',
+      maskDraft: null,
+      showToast: vi.fn(),
+    })
+  })
+
+  /** 造一个能通过 file.type 检查的文件；真正的读取在下面被 mock 掉 */
+  const fakeImageFile = (name: string) => new File([new Uint8Array([1])], name, { type: 'image/png' })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('批量导入按上限截断，结果只追加一次', async () => {
+    const files = ['a', 'b', 'c', 'd'].map(fakeImageFile)
+    const result = await addImagesFromFiles(files, { limit: 2 })
+    expect(result.added).toBeLessThanOrEqual(2)
+    expect(useStore.getState().inputImages.length).toBeLessThanOrEqual(2)
+  })
+
+  it('非图片文件计入 discarded，不会进输入区', async () => {
+    const files = [fakeImageFile('a'), new File([new Uint8Array([1])], 'b.txt', { type: 'text/plain' })]
+    const result = await addImagesFromFiles(files, { limit: 16 })
+    expect(result.discarded).toBeGreaterThanOrEqual(1)
+  })
+
+  it('同一批里重复的图片 id 只保留一张', () => {
+    const added = useStore.getState().addInputImages([
+      { id: 'same', dataUrl: 'data:x' },
+      { id: 'same', dataUrl: 'data:x' },
+      { id: 'other', dataUrl: 'data:y' },
+    ])
+    expect(added).toBe(2)
+    expect(useStore.getState().inputImages.map((img) => img.id)).toEqual(['same', 'other'])
+  })
+
+  it('addInputImages 按上限截断', () => {
+    const added = useStore.getState().addInputImages([
+      { id: 'a', dataUrl: 'data:a' },
+      { id: 'b', dataUrl: 'data:b' },
+      { id: 'c', dataUrl: 'data:c' },
+    ], 2)
+    expect(added).toBe(2)
+    expect(useStore.getState().inputImages.map((img) => img.id)).toEqual(['a', 'b'])
+  })
+})
+

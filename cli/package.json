@@ -1,0 +1,17 @@
+{
+  "name": "gpt-image-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GPT Image 2 命令行生图工具（文生图 / 参考图改图 / 遮罩 / 批量），供 WorkBuddy Skill 调用",
+  "bin": {
+    "gpt-image": "src/cli.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "help": "node src/cli.mjs --help",
+    "dry": "node src/cli.mjs gen \"a small red fish mascot on white background\" --dry-run"
+  }
+}

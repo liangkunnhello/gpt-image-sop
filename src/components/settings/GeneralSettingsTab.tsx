@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import type { AppSettings } from '../../types'
-import { APPEARANCE_OPTIONS } from '../../lib/appearance'
 import { markSaveLocationAsked } from '../../hooks/useSaveLocationPrompt'
 import { isTauri } from '../../lib/platform'
 import { getDefaultSaveDir, openDefaultSaveDir } from '../../lib/saveFile'
@@ -15,16 +14,20 @@ import { changeSaveDirWithMigration } from './saveDirMigration'
 interface GeneralSettingsTabProps {
   draft: AppSettings
   zipDownloadRouteSummary: string
+  inspectSummary: string
   commitSettings: (nextDraft: AppSettings) => void
   onOpenZipDownloadRouteManager: () => void
+  onOpenInspectConfig: () => void
   toggleTaskCompletionNotification: () => Promise<void>
 }
 
 export default function GeneralSettingsTab({
   draft,
   zipDownloadRouteSummary,
+  inspectSummary,
   commitSettings,
   onOpenZipDownloadRouteManager,
+  onOpenInspectConfig,
   toggleTaskCompletionNotification,
 }: GeneralSettingsTabProps) {
   const showToast = useStore((s) => s.showToast)
@@ -80,36 +83,6 @@ export default function GeneralSettingsTab({
     <div className="space-y-8">
       <section className="space-y-4">
         <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">外观</h4>
-        <div>
-          <div className="mb-1 flex items-center justify-between">
-            <span className="block text-sm text-gray-600 dark:text-gray-300">界面主题</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {APPEARANCE_OPTIONS.map((option) => {
-              const active = draft.appearance === option.value
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => commitSettings({ ...draft, appearance: option.value })}
-                  className={`rounded-xl border px-3 py-2 text-left transition-colors ${
-                    active
-                      ? 'border-blue-400 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-500/10'
-                      : 'border-gray-200 bg-white hover:border-gray-300 dark:border-white/10 dark:bg-white/[0.04] dark:hover:border-white/20'
-                  }`}
-                >
-                  <span className={`block text-sm font-medium ${active ? 'text-blue-700 dark:text-blue-300' : 'text-gray-600 dark:text-gray-300'}`}>
-                    {option.label}
-                  </span>
-                  <span className="block text-xs text-gray-400 dark:text-gray-500">{option.hint}</span>
-                </button>
-              )
-            })}
-          </div>
-          <div className="mt-1 text-xs text-gray-500 dark:text-gray-500">
-            玻璃主题用液态玻璃面板：顶栏、业务树、输入栏会折射背后的光晕。顶栏的水滴按钮也能一键切换。
-          </div>
-        </div>
         <FontSettingField
           slot="ui"
           label="界面字体"
@@ -428,6 +401,24 @@ export default function GeneralSettingsTab({
             </div>
           </>
         )}
+      </section>
+      <section className="space-y-4">
+        <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">质检与重复度</h4>
+        <div className="block">
+          <div className="mb-1 flex items-center justify-between gap-3">
+            <span className="block text-sm text-gray-600 dark:text-gray-300">检查配置</span>
+            <button
+              type="button"
+              onClick={onOpenInspectConfig}
+              className="shrink-0 rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-black/[0.07] hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
+            >
+              配置
+            </button>
+          </div>
+          <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+            {inspectSummary}
+          </div>
+        </div>
       </section>
       <section className="space-y-4">
         <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">通知</h4>

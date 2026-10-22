@@ -19,13 +19,14 @@ import { isTauri } from '../lib/platform'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { getApiProviderLabel } from '../lib/apiProfiles'
-import { openImagesFolder } from '../lib/openImagesFolder'
+import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
 import { inspectImages, useClipStore } from '../lib/clipSimilarity'
 import { expectFromPrompt } from '../lib/batchCheck'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
 import { CommentBadge } from './CommentMarks'
+import InspectConfigModal from './InspectConfigModal'
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -59,6 +60,7 @@ export default function DetailModal() {
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   /** 手动触发的检查是否在进行中（质检 + 重复度一起跑） */
   const [inspecting, setInspecting] = useState(false)
+  const [showInspectConfig, setShowInspectConfig] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
@@ -408,7 +410,7 @@ export default function DetailModal() {
         }
         if (entries.length >= 12) break
       }
-      await inspectImages(entries, { expect: expectFromPrompt(task.prompt) })
+      await inspectImages(entries, { expect: expectFromPrompt(task.prompt), manual: true })
     } catch (err) {
       showToast(`检查失败：${err instanceof Error ? err.message : '未知原因'}`, 'error')
     } finally {
@@ -434,6 +436,35 @@ export default function DetailModal() {
       return
     }
     showToast(`打开文件夹失败：${result.error || '未知原因'}${result.path ? `（路径 ${result.path}）` : ''}`, 'error')
+  }
+
+  /**
+   * 「打开文件所在位置」：在资源管理器里选中当前这一张图本身。
+   *
+   * 图片按内容 hash 分桶存在 data/images/<前两位>/<hash>.ext，并没有「一张卡一个文件夹」，
+   * 所以以前那种「打开 data 目录」的做法对用户没意义。这里定位到文件；
+   * 文件被清理过、或网页版没有本地文件时，退回打开所在文件夹。
+   */
+  const handleRevealCurrentImage = async (variant: 'output' | 'original') => {
+    const imageId = variant === 'original'
+      ? currentOriginalOutputImageId || currentOutputImageId
+      : currentOutputImageId
+    if (imageId) {
+      const result = await revealImageFile(imageId)
+      if (result.ok) return
+      if (!result.webOnly && result.error) {
+        // 文件已被清理：还是要给用户一个能进去的地方
+        await handleOpenFolder(variant === 'original' ? 'images' : 'finished')
+        showToast(result.error, 'info')
+        return
+      }
+      if (result.webOnly) {
+        showToast('网页版的图片存在浏览器里，没有本地文件；要用这个按钮请用桌面客户端', 'info')
+        return
+      }
+    }
+    // 没有对应图片（比如这一格是失败项）时，退回打开所在文件夹
+    await handleOpenFolder(variant === 'original' ? 'images' : 'finished')
   }
 
   const handleDelete = () => {
@@ -1325,14 +1356,23 @@ export default function DetailModal() {
                 <div className="mb-4 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-gray-400 dark:text-gray-500">质检 + 重复度</span>
-                    <button
-                      type="button"
-                      onClick={handleInspect}
-                      disabled={inspecting}
-                      className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 transition hover:bg-gray-100 disabled:opacity-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/10"
-                    >
-                      {inspecting ? '检查中…' : '重新检查'}
-                    </button>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowInspectConfig(true)}
+                        className="rounded border border-gray-300 px-1.5 py-0.5 text-[11px] text-gray-500 transition hover:bg-gray-100 dark:border-white/10 dark:text-gray-400 dark:hover:bg-white/10"
+                      >
+                        设置
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleInspect}
+                        disabled={inspecting}
+                        className="rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 transition hover:bg-gray-100 disabled:opacity-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/10"
+                      >
+                        {inspecting ? '检查中…' : '重新检查'}
+                      </button>
+                    </span>
                   </div>
                   {inspectQc || inspectScore != null ? (
                     <div className="mt-1.5 space-y-1">
@@ -1513,9 +1553,9 @@ export default function DetailModal() {
               删除任务
             </button>
             <button
-              onClick={() => void handleOpenFolder('finished')}
+              onClick={() => void handleRevealCurrentImage('output')}
               className="col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 transition hover:bg-blue-50 hover:text-blue-500 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
-              title="打开成品图文件夹（后处理后的图）"
+              title="打开文件所在位置（当前这张成品图）"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
@@ -1523,9 +1563,9 @@ export default function DetailModal() {
               </svg>
             </button>
             <button
-              onClick={() => void handleOpenFolder('images')}
+              onClick={() => void handleRevealCurrentImage('original')}
               className="col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 transition hover:bg-blue-50 hover:text-blue-500 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
-              title="打开原图文件夹（模型直出的原图）"
+              title="打开文件所在位置（当前这张原图）"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
                 <rect x="3" y="4" width="18" height="16" rx="2" />
@@ -1681,6 +1721,7 @@ export default function DetailModal() {
           </div>
         </div>
       )}
+      {showInspectConfig && <InspectConfigModal onClose={() => setShowInspectConfig(false)} />}
     </div>
   )
 }

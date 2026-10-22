@@ -1,0 +1,16 @@
+# 凭据与产物不入库
+.env
+.env.local
+.env.*.local
+
+# 生成产物
+out/
+out-*/
+
+# 跑批产物：图片、清单、质检结果都是本地运行数据，不入库
+batches/
+
+# 依赖与临时文件
+node_modules/
+models.json
+*.log

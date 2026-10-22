@@ -362,7 +362,7 @@ const server = http.createServer(async (req, res) => {
         fs.writeFileSync(path.join(tmpDir, name), Buffer.from(m[2], 'base64'));
         nameMap.set(name, it.key || it.id || name);
       });
-      const r = spawnSync('python', [path.join(ROOT, 'tools', 'clip_similarity.py'), tmpDir, '--hi', String(HI), '--json'], { cwd: ROOT, encoding: 'utf8' });
+      const r = spawnSync('python', [path.join(ROOT, 'tools', 'clip_similarity.py'), tmpDir, '--hi', String(Number(body.limit) || HI), '--json'], { cwd: ROOT, encoding: 'utf8' });
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
       if (r.status !== 0) return json(res, 500, { error: (r.stderr || r.stdout || 'python 执行失败').slice(0, 500) });
       const parsed = JSON.parse(r.stdout);

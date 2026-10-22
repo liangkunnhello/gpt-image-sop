@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { initStore, useStore } from './store'
 import { clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
-import { applyAppearance } from './lib/appearance'
 import { createDefaultOpenAIProfile, hasDefaultPresetConfig, isAgentTextApiProfile, normalizeSettings } from './lib/apiProfiles'
 import { getCustomProviderConfigUrl, hasEmbeddedDefaultConfig, loadCustomProviderSettingsFromUrl, loadEmbeddedDefaultConfig } from './lib/customProviderConfigUrl'
 import { getDefaultPresetProfileId, getPresetProfileIds, isPresetConfigOnlyEnabled, setPresetConfig } from './lib/presetConfig'
@@ -51,10 +50,7 @@ export default function App() {
   const writeLogFile = useStore((s) => s.settings.writeLogFile)
   const saveLocationMode = useStore((s) => s.settings.saveLocationMode)
   const autoCheckUpdate = useStore((s) => s.settings.autoCheckUpdate)
-  const appearance = useStore((s) => s.settings.appearance)
   const [startupImportDone, setStartupImportDone] = useState(false)
-  // 主题写在 <html data-appearance> 上，样式和玻璃背板都从这里取
-  useEffect(() => { applyAppearance(appearance) }, [appearance])
   useDockerApiUrlMigrationNotice()
   useAppFonts()
   useGlobalClickSuppression()

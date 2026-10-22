@@ -45,6 +45,28 @@ export async function openImagesFolder(dir: OutputFolder = 'finished'): Promise<
   return { ok: false, webOnly: true, error: '网页版图片存在浏览器里，没有本地文件夹' }
 }
 
+/**
+ * 在资源管理器中选中某张具体的原图（「打开文件所在位置」）。
+ *
+ * 图片是存在数据目录里按 hash 分桶的，没有「一个任务一个文件夹」，
+ * 所以这里定位到那张图本身，而不是笼统地打开 data 目录。
+ * 网页版、或文件已被清理时返回 ok=false，由调用方退回打开所在文件夹。
+ */
+export async function revealImageFile(imageId: string): Promise<OpenFolderResult> {
+  if (!isTauri) {
+    return { ok: false, webOnly: true, error: '网页版图片存在浏览器里，没有本地文件' }
+  }
+  if (!imageId) return { ok: false, error: '找不到这张图对应的文件' }
+  try {
+    const { revealImage } = await import('./dbTauri')
+    const found = await revealImage(imageId)
+    if (!found) return { ok: false, error: '这张图的本地文件已被清理' }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 /** 后处理完成后，把成品图另存一份到 data/finished，方便直接去文件夹拿 */
 export async function saveFinishedCopy(name: string, dataUrl: string): Promise<void> {
   try {

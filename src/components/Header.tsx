@@ -7,7 +7,6 @@ import { isTauri } from '../lib/platform'
 import { RELEASES_PAGE_URL, shouldShowUpdate } from '../lib/releaseUpdates'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import ViewportTooltip from './ViewportTooltip'
-import GlassBackdrop from './GlassBackdrop'
 import HelpModal from './HelpModal'
 import HistoryModal from './HistoryModal'
 import { useFavoriteCollectionTitle } from './FavoriteCollections'
@@ -32,8 +31,6 @@ export default function Header() {
   const appMode = useStore((s) => s.appMode)
   const setAppMode = useStore((s) => s.setAppMode)
   const setShowSettings = useStore((s) => s.setShowSettings)
-  const appearance = useStore((s) => s.settings.appearance)
-  const setSettings = useStore((s) => s.setSettings)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const agentMobileHeaderVisible = useStore((s) => s.agentMobileHeaderVisible)
   const agentConversations = useStore((s) => s.agentConversations)
@@ -160,8 +157,7 @@ export default function Header() {
 
   return (
     <>
-      <header data-no-drag-select data-surface="header" className={`safe-area-top fixed top-0 left-0 right-0 z-40 isolate bg-white/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-200 dark:border-white/[0.08] transition-transform duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? '-translate-y-full sm:translate-y-0' : 'translate-y-0'}`}>
-        <GlassBackdrop cornerRadius={0} displacementScale={30} blurAmount={0.045} saturation={150} />
+      <header data-no-drag-select className={`safe-area-top fixed top-0 left-0 right-0 z-40 bg-white/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-200 dark:border-white/[0.08] transition-transform duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? '-translate-y-full sm:translate-y-0' : 'translate-y-0'}`}>
         <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between relative">
           <div className="flex-1 min-w-0 pr-2 flex items-center gap-2">
             <h1 className="inline-flex min-w-0 items-start relative mr-2">
@@ -340,21 +336,6 @@ export default function Header() {
                 </svg>
               </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setSettings({ appearance: appearance === 'glass' ? 'default' : 'glass' })}
-              title={appearance === 'glass' ? '当前：玻璃主题，点击切回默认' : '当前：默认主题，点击切换到玻璃'}
-              aria-label={appearance === 'glass' ? '切换到默认主题' : '切换到玻璃主题'}
-              className="rounded-lg p-2 transition-colors hover:bg-gray-100 dark:hover:bg-gray-900"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 text-gray-600 dark:text-gray-400">
-                <path
-                  d="M12 3.4c3.5 4.2 5.9 7.3 5.9 10a5.9 5.9 0 11-11.8 0c0-2.7 2.4-5.8 5.9-10z"
-                  fill={appearance === 'glass' ? 'currentColor' : 'none'}
-                  className={appearance === 'glass' ? 'text-blue-500' : undefined}
-                />
-              </svg>
-            </button>
             <div
               className="relative"
               {...settingsTooltip.handlers}

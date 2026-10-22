@@ -61,6 +61,7 @@ pub fn run() {
             storage::commands::kv_remove,
             storage::commands::storage_info,
             storage::commands::storage_open_dir,
+            storage::commands::storage_reveal_image,
             data_dir::data_dir_notice,
             data_dir::data_dir_pick,
             data_dir::data_dir_change,

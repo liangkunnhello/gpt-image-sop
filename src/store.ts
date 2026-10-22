@@ -333,6 +333,8 @@ interface AppState {
   setPromptSelection: (selection: { start: number; end: number }) => void
   inputImages: InputImage[]
   addInputImage: (img: InputImage) => void
+  /** 一次性追加多张：拖拽/粘贴大批图片时只触发一次更新，避免逐张 set 造成的连续重渲染 */
+  addInputImages: (imgs: InputImage[], limit?: number) => number
   replaceInputImage: (idx: number, img: InputImage) => void
   removeInputImage: (idx: number) => void
   clearInputImages: () => void
@@ -779,6 +781,23 @@ export const useStore = create<AppState>()(
           if (s.inputImages.find((i) => i.id === img.id)) return s
           return syncActiveInputDraft(s, { inputImages: [...s.inputImages, img] })
         }),
+      addInputImages: (imgs, limit) => {
+        let added = 0
+        set((s) => {
+          const seen = new Set(s.inputImages.map((item) => item.id))
+          const next = [...s.inputImages]
+          for (const img of imgs) {
+            if (seen.has(img.id)) continue
+            if (limit != null && next.length >= limit) break
+            seen.add(img.id)
+            next.push(img)
+            added += 1
+          }
+          if (added === 0) return s
+          return syncActiveInputDraft(s, { inputImages: next })
+        })
+        return added
+      },
       replaceInputImage: (idx, img) => {
         let removedImageId: string | null = null
         set((s) => {
@@ -5294,11 +5313,42 @@ export async function importData(input: File | File[], options: ImportOptions = 
   }
 }
 
-/** 添加图片到输入（文件上传） */
-export async function addImageFromFile(file: File): Promise<void> {
-  const image = await createInputImageFromFile(file)
-  if (!image) return
-  useStore.getState().addInputImage(image)
+/**
+ * 批量把文件转成输入图（拖拽/批量上传用）。
+ *
+ * 逐张 await 会让每张图片都走一遍「读取 → 存库 → setState → 整块重渲染」，
+ * 二三十张就是几十次全量重渲染，界面直接卡住。这里改成：
+ * 有限并发地读取转换，最后一次性追加到输入区，只触发一次更新。
+ *
+ * 单张失败不影响其他图片，失败数通过返回值里的 failed 告知调用方。
+ */
+export async function addImagesFromFiles(
+  files: File[],
+  options: { limit?: number; concurrency?: number } = {},
+): Promise<{ added: number; discarded: number; failed: number }> {
+  const { limit, concurrency = 4 } = options
+  const accepted = files.filter((file) => file.type.startsWith('image/'))
+  const discarded = files.length - accepted.length
+
+  const currentCount = useStore.getState().inputImages.length
+  const remaining = limit == null ? accepted.length : Math.max(0, limit - currentCount)
+  const toAdd = accepted.slice(0, remaining)
+  const overflow = accepted.length - toAdd.length
+
+  const created: InputImage[] = []
+  let failed = 0
+  await runWithConcurrency(toAdd, Math.max(1, concurrency), async (file) => {
+    try {
+      const image = await createInputImageFromFile(file)
+      if (image) created.push(image)
+    } catch (err) {
+      failed += 1
+      console.warn('读取图片失败', file.name, err)
+    }
+  })
+
+  const added = useStore.getState().addInputImages(created, limit)
+  return { added, discarded: discarded + overflow, failed }
 }
 
 export async function createInputImageFromFile(file: File): Promise<InputImage | null> {

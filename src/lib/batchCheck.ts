@@ -110,11 +110,11 @@ export interface SimResponse {
 }
 
 /** 把一批图交给本地服务算 CLIP 相似度，返回每张图的最近邻 */
-export async function simBatch(items: Array<{ key: string; dataUrl: string }>): Promise<SimResponse> {
+export async function simBatch(items: Array<{ key: string; dataUrl: string }>, limit = 0.92): Promise<SimResponse> {
   const res = await fetch(`${SIDECAR}/api/sim-batch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items }),
+    body: JSON.stringify({ items, limit }),
   })
   const json = await res.json()
   if (!res.ok) throw new Error(json?.error || '相似度计算失败')

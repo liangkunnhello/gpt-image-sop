@@ -212,3 +212,15 @@ pub async fn storage_open_dir(state: State<'_, StorageState>) -> Result<()> {
     })
     .await
 }
+
+/// 在资源管理器中选中某张原图（「打开文件所在位置」）。
+/// 只接受存储里真实存在的图片 id，路径由后端自己拼出来，前端无法借此打开任意路径。
+/// 文件已被清理时返回 false，由前端提示改为打开所在文件夹。
+#[tauri::command]
+pub async fn storage_reveal_image(state: State<'_, StorageState>, id: String) -> Result<bool> {
+    let path = run(state, move |s| s.image_path(&id)).await?;
+    let Some(path) = path else { return Ok(false) };
+    tauri_plugin_opener::reveal_item_in_dir(&path)
+        .map_err(|err| StorageError::new("io", format!("打开图片位置失败：{err}")))?;
+    Ok(true)
+}

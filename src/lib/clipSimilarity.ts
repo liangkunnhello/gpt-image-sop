@@ -3,16 +3,13 @@ import { create } from 'zustand'
 import type { TaskRecord } from '../types'
 import { ensureImageCached } from './imageCache'
 import { computeImageHash, hashScores } from './imageHash'
-import { qcInBrowser } from './visionQc'
+import { useInspectConfig } from './inspectConfig'
+import { qcInBrowser, type QcChecks } from './visionQc'
 import { expectFromPrompt, type ExpectText } from './batchCheck'
 
 import { SIDECAR } from './sidecar'
-/** 一次最多送多少张去算，太多会很慢 */
-const MAX_IMAGES = 36
 /** 送给 CLIP 前先缩到这个边长，既快又不影响判断 */
 const THUMB_SIZE = 384
-/** 降级质检并发数，和批次验收保持一致 */
-const QC_CONCURRENCY = 3
 
 /** 没有可对照的文案规范时，只做画面层面的合规检查 */
 const EMPTY_EXPECT: ExpectText = { mainTitle: '', tags: [], brand: [], disclaimer: [] }
@@ -97,13 +94,16 @@ export const useClipStore = create<ClipState>()((set, get) => ({
   qc: {},
   running: false,
   error: '',
-  limit: 0.92,
+  limit: useInspectConfig.getState().config.limit,
   engine: '',
   queued: 0,
 
   /** 对还没算过的任务图做一次 CLIP 相似度，结果按图片 id 缓存 */
   ensure: (tasks: TaskRecord[]) => {
     if (get().running) return
+    const config = useInspectConfig.getState().config
+    if (!config.autoDuplicate) return
+    const maxImages = config.maxImages
     const { scores } = get()
     const candidates: Array<{ imageId: string }> = []
     for (const task of tasks) {
@@ -112,9 +112,9 @@ export const useClipStore = create<ClipState>()((set, get) => ({
         if (scores[imageId]) continue
         if (candidates.some((item) => item.imageId === imageId)) continue
         candidates.push({ imageId })
-        if (candidates.length >= MAX_IMAGES) break
+        if (candidates.length >= maxImages) break
       }
-      if (candidates.length >= MAX_IMAGES) break
+      if (candidates.length >= maxImages) break
     }
     if (candidates.length < 2) return
 
@@ -181,6 +181,8 @@ export const useClipStore = create<ClipState>()((set, get) => ({
 
   /** 任务出完图就排进后台队列，一张一张串行处理 */
   enqueueTask: (task: TaskRecord, peers: TaskRecord[]) => {
+    const config = useInspectConfig.getState().config
+    if (!config.autoQc && !config.autoDuplicate) return
     const imageIds = task.outputImages.filter(Boolean)
     if (!imageIds.length) return
     // 质检要拿提示词里的「」文案当对照，降级到浏览器直连时同样适用
@@ -223,6 +225,13 @@ export function formatClipPercent(value: number | null) {
   return `${Math.round(value * 100)}%`
 }
 
+// 判定线以配置为准，改完配置后已算出的分数也会立刻按新线重新上色
+useInspectConfig.subscribe((state) => {
+  if (useClipStore.getState().limit !== state.config.limit) {
+    useClipStore.setState({ limit: state.config.limit })
+  }
+})
+
 
 /**
  * 一次调用同时做质检和重复度（后端 /api/inspect），结果按图片 id 写回 store。
@@ -234,7 +243,7 @@ export function formatClipPercent(value: number | null) {
  */
 export async function inspectImages(
   entries: Array<{ imageId: string; dataUrl: string }>,
-  options: { limit?: number; expect?: ExpectText } = {},
+  options: { limit?: number; expect?: ExpectText; manual?: boolean } = {},
 ): Promise<void> {
   const payload: Array<{ id: string; dataUrl: string }> = []
   const imageIdByIndex: string[] = []
@@ -294,26 +303,35 @@ export async function inspectImages(
       engine: 'clip',
     }))
   } catch {
-    await inspectLocally(entries, options.expect ?? EMPTY_EXPECT)
+    await inspectLocally(entries, options.expect ?? EMPTY_EXPECT, Boolean(options.manual))
   }
 }
 
 /**
  * 没有本地服务时的替代实现：
- * 质检逐张调视觉模型（并发 3），重复度用感知哈希两两比对。
+ * 质检逐张调视觉模型（并发按配置），重复度用感知哈希两两比对。
  * 两者都不依赖 Python / CLIP，桌面安装包里也能跑。
  */
 async function inspectLocally(
   entries: Array<{ imageId: string; dataUrl: string }>,
   expect: ExpectText,
+  manual = false,
 ): Promise<void> {
   // 动态导入：store 反过来依赖本模块，静态引会成环
   const { useStore } = await import('../store')
   const { settings } = useStore.getState()
   const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
+  const config = useInspectConfig.getState().config
+  const checks: QcChecks = {
+    violation: config.checkViolation,
+    text: config.checkText,
+    overlap: config.checkOverlap,
+  }
 
   const nextQc: Record<string, QcResult> = { ...useClipStore.getState().qc }
-  if (profile) {
+  // 手动检查不看自动开关，自动跑时才按配置跳过不做的项
+  const runQc = manual || (config.autoQc && (checks.violation || checks.text || checks.overlap))
+  if (profile && runQc) {
     let cursor = 0
     const worker = async () => {
       for (;;) {
@@ -321,7 +339,7 @@ async function inspectLocally(
         cursor += 1
         if (index >= entries.length) return
         const entry = entries[index]
-        const outcome = await qcInBrowser(profile, entry.dataUrl, expect)
+        const outcome = await qcInBrowser(profile, entry.dataUrl, expect, { model: config.qcModel, checks })
         nextQc[entry.imageId] = {
           // error 不是合法结论，统一记成待定，原因留在 reason 里
           verdict: outcome.verdict === 'pass' || outcome.verdict === 'fail' ? outcome.verdict : 'unsure',
@@ -330,13 +348,16 @@ async function inspectLocally(
         }
       }
     }
-    await Promise.all(Array.from({ length: Math.min(QC_CONCURRENCY, entries.length) }, worker))
+    await Promise.all(Array.from({ length: Math.min(config.qcConcurrency, entries.length) }, worker))
   }
 
   const hashes: Array<{ key: string; hash: string }> = []
-  for (const entry of entries) {
-    const hash = await computeImageHash(entry.dataUrl)
-    if (hash) hashes.push({ key: entry.imageId, hash })
+  // 自动跑时「自动算重复度」关掉就只做质检，不白算哈希
+  if (manual || config.autoDuplicate) {
+    for (const entry of entries) {
+      const hash = await computeImageHash(entry.dataUrl)
+      if (hash) hashes.push({ key: entry.imageId, hash })
+    }
   }
   const local = hashScores(hashes)
 
@@ -349,7 +370,7 @@ async function inspectLocally(
     qc: nextQc,
     scores: nextScores,
     engine: 'phash',
-    limit: state.limit,
+    limit: useInspectConfig.getState().config.limit,
   }))
 }
 
@@ -359,6 +380,7 @@ async function inspectLocally(
  */
 async function inspectOne(imageId: string, peers: TaskRecord[], expect: ExpectText) {
   try {
+    const config = useInspectConfig.getState().config
     const selfDataUrl = await ensureImageCached(imageId)
     if (!selfDataUrl) return
 
@@ -366,9 +388,9 @@ async function inspectOne(imageId: string, peers: TaskRecord[], expect: ExpectTe
     for (const peer of peers) {
       for (const id of peer.outputImages) {
         if (id !== imageId && !peerIds.includes(id)) peerIds.push(id)
-        if (peerIds.length >= 10) break
+        if (peerIds.length >= config.peerLimit) break
       }
-      if (peerIds.length >= 10) break
+      if (peerIds.length >= config.peerLimit) break
     }
 
     const entries: Array<{ imageId: string; dataUrl: string }> = [{ imageId, dataUrl: selfDataUrl }]

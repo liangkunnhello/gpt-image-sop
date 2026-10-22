@@ -21,5 +21,6 @@ data-backups/
 .tmp-verify*/
 .tmp-esbuild/
 .tmp-shots/
+.tmp-shots2/
 # 更新包签名私钥，绝对不能提交
 .signing/

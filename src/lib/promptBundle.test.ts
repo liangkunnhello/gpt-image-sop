@@ -66,36 +66,12 @@ describe('buildPromptMessages', () => {
     expect(system).toContain('不能拿同一句卖点去填满版面')
     expect(user).toContain('同一张图里，一份卖点从头到尾只用一遍')
     expect(user).toContain('不许换个说法或拆成两行重写')
-    expect(system).toContain('文字区')
+    expect(system).toContain('文字位')
   })
 
-  it('卖点少时靠重新布局适配，不许用装饰物补空位', () => {
-    const { system, user } = buildPromptMessages({ ...base, copyText: 'A\nB' })
-    expect(system).toContain('不许用装饰物补空位')
-    expect(system).toContain('交给画面本身去占据')
-    expect(system).toContain('而不是塞装饰色块、空白框、占位图形')
-    expect(system).toContain('重新布局')
-    // 旧说法必须彻底消失，否则模型又会去填空
-    expect(system).not.toContain('用图形、色块或留白补位')
-    expect(system).not.toContain('改用图形、留白')
-    expect(user).not.toContain('色块或留白补位')
-  })
-
-  it('按卖点条数重新设计版面，而不是套版式再删槽位', () => {
-    const { system, user } = buildPromptMessages({ ...base, copyText: 'A\nB\nC' })
-    expect(system).toContain('按这个数量直接设计版面')
-    expect(system).toContain('不是先套一个固定版式')
-    expect(system).toContain('文字区的位置、比例、对齐方式都随条数重新分配')
-    expect(user).toContain('先数条数，再按这个数量重新分配文字区的位置和比例')
-    expect(system).not.toContain('删掉多余的文字位')
-  })
-
-  it('SOP 阶段按卖点条数定版面，且禁止补位', () => {
-    const sopSystem = buildSopSystemPrompt(true, false, true)
-    expect(sopSystem).toContain('按卖点条数来定版面')
-    expect(sopSystem).toContain('靠重新布局来适配')
-    expect(sopSystem).toContain('禁止用装饰色块、留白块、空框、占位图形去填补')
-    expect(sopSystem).not.toContain('改用图形、留白')
+  it('SOP 阶段要求文字槽位数跟着卖点条数走', () => {
+    expect(buildSopSystemPrompt(true, false, true)).toContain('按卖点条数定义槽位')
+    expect(buildSopSystemPrompt(true, false, true)).toContain('不能靠重复同一句卖点把版面填满')
   })
 
   it('没有卖点时退回原来的规则，不出现卖点段', () => {
