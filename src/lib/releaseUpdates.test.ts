@@ -7,6 +7,7 @@ import {
   parseReleaseCache,
   parseReleasePage,
   RELEASE_CACHE_TTL_MS,
+  RELEASES_PAGE_URL,
   RELEASES_PER_PAGE,
   shouldShowUpdate,
   stripReleaseHeading,
@@ -58,8 +59,8 @@ describe('parseReleasePage', () => {
       publishedAt: '2026-10-08T12:00:00Z',
       url: 'https://github.com/CookSleep/gpt_image_playground/releases/tag/v0.8.0',
     })
-    // 非 https 的链接替换为仓库的 Release 页面
-    expect(result.releases[1].url).toBe('https://github.com/CookSleep/gpt_image_playground/releases/tag/v0.7.17')
+    // 非 https 的链接替换为仓库的 Release 页面（跟随 RELEASES_PAGE_URL，不写死仓库名）
+    expect(result.releases[1].url).toBe(`${RELEASES_PAGE_URL}/tag/v0.7.17`)
   })
 
   it('不是数组时抛出错误', () => {

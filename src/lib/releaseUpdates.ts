@@ -1,4 +1,8 @@
-export const RELEASE_REPO = 'CookSleep/gpt_image_playground'
+/**
+ * 更新与下载都指向自己的公开仓库：客户端检查更新、网页版「下载客户端」、
+ * tauri 的 updater 端点三处必须一致，否则会出现「有新版本但下载跳到别处」。
+ */
+export const RELEASE_REPO = 'liangkunnhello/gpt-image-sop'
 export const RELEASES_PAGE_URL = `https://github.com/${RELEASE_REPO}/releases`
 export const RELEASES_PER_PAGE = 10
 // GitHub API 未登录每小时限 60 次，一小时内复用本地缓存
