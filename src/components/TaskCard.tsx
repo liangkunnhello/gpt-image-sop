@@ -9,6 +9,7 @@ import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_FAL_MODEL, DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskPromptText } from '../lib/promptImageMentions'
+import { isTaskUnread } from '../lib/unread'
 import { CodeIcon, TransparentBgIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -596,6 +597,14 @@ export default function TaskCard({
                 </span>
               )}
             </>
+          )}
+          {/* 结果出来了但还没看过：右上角红点，点开详情就清掉 */}
+          {isTaskUnread(task) && (
+            <span
+              className="absolute right-1.5 top-1.5 z-10 block h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-900"
+              title="有新结果还没看过，点开详情即可清除"
+              aria-label="未读"
+            />
           )}
           {task.status === 'done' && !thumbSrc && (
             <svg

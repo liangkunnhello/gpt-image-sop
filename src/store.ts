@@ -28,6 +28,7 @@ import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPre
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { collectSopLibrary, mergeSopLibrary, useSopStore } from './lib/sopStore'
 import { channelLabel, taskMatchesChannel } from './lib/channel'
+import { isTaskUnread } from './lib/unread'
 import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
 import {
   getAllTasks,
@@ -434,6 +435,8 @@ interface AppState {
   // UI
   detailTaskId: string | null
   setDetailTaskId: (id: string | null) => void
+  /** 详情页打开后清掉未读标记；SOP / 变量卡整组一起清 */
+  markTaskDetailViewed: (id: string) => void
   lightboxImageId: string | null
   lightboxImageList: string[]
   /** 预览参考图时对应的提示词，按图片在列表中的位置取其评论；为空时不显示评论 */
@@ -1048,8 +1051,32 @@ export const useStore = create<AppState>()(
       // UI
       detailTaskId: null,
       setDetailTaskId: (detailTaskId) => {
-        if (detailTaskId) dismissAllTooltips()
+        if (detailTaskId) {
+          dismissAllTooltips()
+          get().markTaskDetailViewed(detailTaskId)
+        }
         set({ detailTaskId })
+      },
+      markTaskDetailViewed: (taskId) => {
+        const { tasks } = get()
+        const target = tasks.find((task) => task.id === taskId)
+        if (!target) return
+        // 同一份 SOP / 变量生成的多条任务在画廊里是一张卡，看过一次就整组都算看过
+        const sameCard = (task: TaskRecord) =>
+          target.sopJobId ? task.sopJobId === target.sopJobId : task.id === target.id
+        const viewedAt = Date.now()
+        const viewed: TaskRecord[] = []
+        const nextTasks = tasks.map((task) => {
+          // 已经看过的不要再写一遍，避免每次点开都刷一遍库
+          if (!sameCard(task) || !isTaskUnread(task)) return task
+          const next = { ...task, detailViewedAt: viewedAt }
+          viewed.push(next)
+          return next
+        })
+        if (!viewed.length) return
+        set({ tasks: nextTasks })
+        // 未读状态要跨重启保持，否则刷新后红点又全冒出来
+        for (const task of viewed) void putTask(task)
       },
       lightboxImageId: null,
       lightboxImageList: [],

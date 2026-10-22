@@ -30,6 +30,7 @@ export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
   const detailTaskId = useStore((s) => s.detailTaskId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
+  const markTaskDetailViewed = useStore((s) => s.markTaskDetailViewed)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
@@ -106,6 +107,16 @@ export default function DetailModal() {
       elapsed: group.reduce((sum, item) => sum + (item.elapsed ?? 0), 0),
     } as TaskRecord
   }, [rawTask, groupTasks])
+
+  /**
+   * 详情页开着的时候结果才回来：用户其实已经看到了，
+   * 这里补一次已读，避免关掉弹窗后卡片又冒出红点。
+   */
+  useEffect(() => {
+    if (!detailTaskId || task?.status !== 'done') return
+    markTaskDetailViewed(detailTaskId)
+  }, [detailTaskId, task?.status, task?.finishedAt, task?.outputImages.length, markTaskDetailViewed])
+
   const streamPreviewItems = useMemo(() => {
     const slotEntries = streamPreviewSlots
       ? Object.entries(streamPreviewSlots)

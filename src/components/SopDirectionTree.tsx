@@ -6,6 +6,7 @@ import { groupSopTasks } from '../lib/sopGroup'
 import { directionPath, useSopStore, UNASSIGNED_FILTER } from '../lib/sopStore'
 import { effectiveNodeKind, trashNodeWithTasks } from '../lib/directionTree'
 import { taskMatchesChannel } from '../lib/channel'
+import { isTaskUnread } from '../lib/unread'
 import { ensureImageCached } from '../lib/imageCache'
 import PostTemplateModal from './PostTemplateModal'
 import MoveNodeModal from './MoveNodeModal'
@@ -141,6 +142,29 @@ export default function SopDirectionTree() {
   }, [cards, directions])
 
   const unassigned = useMemo(() => cards.filter((card) => !card.sopDirectionId).length, [cards])
+
+  /**
+   * 有未读结果的归属节点。红点挂在节点名字右上角，
+   * 和卡片右上角的红点同源：点开卡片详情后两边一起消失。
+   */
+  const unreadNodeIds = useMemo(() => {
+    const set = new Set<string>()
+    for (const card of cards) {
+      if (card.sopDirectionId && isTaskUnread(card)) set.add(card.sopDirectionId)
+    }
+    return set
+  }, [cards])
+
+  /** 名字右上角的小红点：跟着文字末尾走，不占后面数字的位置 */
+  const unreadDot = (nodeId: string) => (
+    unreadNodeIds.has(nodeId) ? (
+      <span
+        title="这个归属下有未读结果"
+        aria-label="有未读结果"
+        className="absolute -right-1 -top-0.5 block h-1.5 w-1.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-900"
+      />
+    ) : null
+  )
   const matches = useMemo(() => {
     const keyword = search.trim().toLowerCase()
     if (!keyword) return []
@@ -400,7 +424,12 @@ export default function SopDirectionTree() {
           className={rowClass({ current: isCurrent, selected: activeFilterId === node.id })}
         >
           {isCurrent && currentBar}
-          <span className="min-w-0 flex-1 truncate">{node.name}</span>
+          <span className="min-w-0 flex-1">
+            <span className="relative inline-block max-w-full align-middle">
+              <span className="block truncate">{node.name}</span>
+              {unreadDot(node.id)}
+            </span>
+          </span>
           {isCurrent && currentDot}
           {counts.get(node.id) ? tailBadge(counts.get(node.id) ?? 0) : <span className="shrink-0 text-[11px] tabular-nums text-gray-300">0</span>}
         </button>
@@ -582,7 +611,12 @@ export default function SopDirectionTree() {
                         className={rowClass({ selected: activeFilterId === category.id, onPath: currentPathIds.has(category.id) })}
                       >
                         <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                        <span className="min-w-0 flex-1 truncate">{category.name}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="relative inline-block max-w-full align-middle">
+                            <span className="block truncate">{category.name}</span>
+                            {unreadDot(category.id)}
+                          </span>
+                        </span>
                         {tailBadge(counts.get(category.id) ?? 0)}
                       </button>
                       {/* 悬停直接给个「加产品」，不用记着去右键 */}
@@ -622,7 +656,12 @@ export default function SopDirectionTree() {
                                   className={rowClass({ selected: activeFilterId === product.id, onPath: currentPathIds.has(product.id) })}
                                 >
                                   <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                                  <span className="min-w-0 flex-1 truncate">{product.name}</span>
+                                  <span className="min-w-0 flex-1">
+                                    <span className="relative inline-block max-w-full align-middle">
+                                      <span className="block truncate">{product.name}</span>
+                                      {unreadDot(product.id)}
+                                    </span>
+                                  </span>
                                   {promptCount(product.id) > 0 && promptBadge(promptCount(product.id))}
                                   {tailBadge(counts.get(product.id) ?? 0)}
                                 </button>

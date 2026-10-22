@@ -309,6 +309,11 @@ export interface TaskRecord {
   /** 本次生成开始时间，重试时不改变原始创建时间 */
   startedAt?: number
   finishedAt: number | null
+  /**
+   * 详情页最近一次被打开的时间。
+   * 为空或早于 finishedAt 表示结果还没看过，任务卡与归属节点会显示未读红点。
+   */
+  detailViewedAt?: number
   /** 总耗时毫秒 */
   elapsed: number | null
   /** 是否收藏 */

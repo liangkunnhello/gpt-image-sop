@@ -1,4 +1,5 @@
 import type { TaskRecord } from '../types'
+import { isTaskUnread } from './unread'
 
 /**
  * 把同一份 SOP 生成的任务合并成一张卡。
@@ -30,6 +31,16 @@ export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
     const rep = sorted[0]
     const anyRunning = sorted.some((task) => task.status === 'running')
     const allError = sorted.every((task) => task.status === 'error')
+    /**
+     * 未读按整组算：组里任意一条没看过，这张卡就该提示未读。
+     * 代表任务的 detailViewedAt 只属于它自己，所以这里按组重写一遍——
+     * 组内全看过时取最晚的完成时间，保证后面再单独完成某条也能正确判定。
+     */
+    const cardUnread = sorted.some(isTaskUnread)
+    const latestFinishedAt = sorted.reduce(
+      (latest, task) => Math.max(latest, task.finishedAt ?? task.createdAt),
+      0,
+    )
     out.push({
       ...rep,
       prompt: `${rep.sopName || 'SOP'} · ${sorted.length} 条提示词`,
@@ -37,6 +48,7 @@ export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
       outputErrors: sorted.flatMap((task) => task.outputErrors ?? []),
       status: anyRunning ? 'running' : allError ? 'error' : 'done',
       elapsed: sorted.reduce((sum, task) => sum + (task.elapsed ?? 0), 0),
+      detailViewedAt: cardUnread ? undefined : Math.max(rep.detailViewedAt ?? 0, latestFinishedAt),
     })
   }
 
