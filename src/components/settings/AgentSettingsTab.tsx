@@ -1,10 +1,13 @@
+import { useEffect, useState } from 'react'
+
 import {
   DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   type AgentApiConfigMode,
   type ApiProfile,
   type AppSettings,
 } from '../../types'
-import { normalizeAgentMaxToolRounds } from '../../lib/apiProfiles'
+import { normalizeAgentMaxToolRounds, splitModelList } from '../../lib/apiProfiles'
+import { applyAgentTextModel } from '../../lib/agentTextModel'
 import { isPresetAgentFieldLocked } from '../../lib/presetConfig'
 import Select from '../Select'
 
@@ -17,6 +20,10 @@ interface AgentSettingsTabProps {
   draft: AppSettings
   agentMaxToolRoundsInput: string
   agentTextProfileOptions: SelectOption[]
+  /** 当前选中的「配置::模型」组合值 */
+  agentTextSelectionValue: string
+  /** 当前生效的文本模型 */
+  agentTextModel: string
   agentImageProfileOptions: SelectOption[]
   selectedAgentTextProfile: ApiProfile | null
   selectedAgentImageProfile: ApiProfile | null
@@ -32,6 +39,8 @@ export default function AgentSettingsTab({
   draft,
   agentMaxToolRoundsInput,
   agentTextProfileOptions,
+  agentTextSelectionValue,
+  agentTextModel,
   agentImageProfileOptions,
   selectedAgentTextProfile,
   selectedAgentImageProfile,
@@ -42,6 +51,27 @@ export default function AgentSettingsTab({
   commitSettings,
   commitAgentMaxToolRounds,
 }: AgentSettingsTabProps) {
+  // 文本模型允许直接改：配置里已有的模型可以点选，也可以填一个新的加进去
+  const [modelInput, setModelInput] = useState(agentTextModel)
+  useEffect(() => {
+    setModelInput(agentTextModel)
+  }, [agentTextModel])
+
+  const commitModel = () => {
+    const model = modelInput.trim()
+    if (!selectedAgentTextProfile) return
+    if (!model) {
+      setModelInput(agentTextModel)
+      return
+    }
+    if (model === agentTextModel) return
+    const next = applyAgentTextModel(selectedAgentTextProfile, model)
+    commitSettings({
+      ...draft,
+      profiles: draft.profiles.map((profile) => (profile.id === selectedAgentTextProfile.id ? next : profile)),
+    })
+  }
+
   return (
     <div className="space-y-4">
       <div className="block">
@@ -78,9 +108,19 @@ export default function AgentSettingsTab({
               <div className="w-40 shrink-0">
                 {agentTextProfileOptions.length > 0 ? (
                   <Select
-                    value={selectedAgentTextProfile?.id ?? '请选择配置'}
+                    value={agentTextSelectionValue || '请选择配置'}
                     disabled={isPresetAgentFieldLocked('textProfileId')}
-                    onChange={(value) => commitSettings({ ...draft, agentTextProfileId: String(value) })}
+                    onChange={(value) => {
+                      const [profileId, model] = String(value).split('::')
+                      if (!profileId) return
+                      commitSettings({
+                        ...draft,
+                        agentTextProfileId: profileId,
+                        profiles: draft.profiles.map((profile) => (
+                          profile.id === profileId && model ? { ...profile, selectedModel: model } : profile
+                        )),
+                      })
+                    }}
                     options={agentTextProfileOptions}
                     showValueTooltips
                     className="w-full px-3 py-1.5 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.07] dark:hover:bg-white/[0.1] text-xs transition-all duration-200 text-gray-700 dark:text-gray-200 outline-none"
@@ -103,6 +143,33 @@ export default function AgentSettingsTab({
                 ? '用于对话和调用工具，仅支持 Responses API 配置。'
                 : '当前没有「接口模式 = Responses API」的配置，所以这里为空。点右侧按钮会用当前配置的地址与密钥新建一份；画廊出图用的 Images API 配置不会出现在这里。'}
             </div>
+            {selectedAgentTextProfile && (
+              <>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="block text-sm text-gray-600 dark:text-gray-300">文本模型</span>
+                  <input
+                    list="agent-text-model-options"
+                    value={modelInput}
+                    disabled={isPresetAgentFieldLocked('textProfileId')}
+                    onChange={(e) => setModelInput(e.target.value)}
+                    onBlur={commitModel}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitModel()
+                    }}
+                    placeholder={agentTextModel || '输入模型 ID'}
+                    className="w-40 shrink-0 rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 text-xs text-gray-700 outline-none transition-all duration-200 hover:bg-black/[0.07] focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"
+                  />
+                  <datalist id="agent-text-model-options">
+                    {splitModelList(selectedAgentTextProfile.model).map((model) => (
+                      <option key={model} value={model} />
+                    ))}
+                  </datalist>
+                </div>
+                <div data-selectable-text className="mt-1 text-xs text-gray-500 dark:text-gray-500">
+                  可点候选或直接输入模型 ID；填的模型不在这份配置里时会自动追加进模型列表。
+                </div>
+              </>
+            )}
           </div>
 
           {draft.agentApiConfigMode === 'hybrid' && (

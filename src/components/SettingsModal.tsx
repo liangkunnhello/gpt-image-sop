@@ -28,6 +28,8 @@ import {
   normalizeCustomProviderDefinition,
   normalizeSettings,
   normalizeStreamPartialImages,
+  resolveApiProfileModel,
+  splitModelList,
   switchApiProfileProvider,
 } from '../lib/apiProfiles'
 import {
@@ -315,10 +317,20 @@ export default function SettingsModal() {
     ?? null
   const selectedAgentImageProfile = agentProfiles.find((profile) => profile.id === draft.agentImageProfileId)
     ?? null
-  const agentTextProfileOptions = agentTextProfiles.map((profile) => ({
-    label: `${profile.name} · ${profile.model || DEFAULT_RESPONSES_MODEL}`,
-    value: profile.id,
-  }))
+  // 每份文本配置有几个模型就展开成几项，避免下拉里只有「配置名」、想换模型却无处可选
+  const agentTextProfileOptions = agentTextProfiles.flatMap((profile) => {
+    const models = splitModelList(profile.model)
+    return (models.length ? models : [profile.model || DEFAULT_RESPONSES_MODEL]).map((model) => ({
+      label: `${profile.name} · ${model}`,
+      value: `${profile.id}::${model}`,
+    }))
+  })
+  const selectedAgentTextModel = selectedAgentTextProfile
+    ? resolveApiProfileModel(selectedAgentTextProfile).model || DEFAULT_RESPONSES_MODEL
+    : ''
+  const selectedAgentTextValue = selectedAgentTextProfile
+    ? `${selectedAgentTextProfile.id}::${selectedAgentTextModel}`
+    : ''
   const agentImageProfileOptions = agentProfiles.map((profile) => ({
     label: `${profile.name} · ${getApiProviderLabel(draft, profile.provider)} · ${profile.model}`,
     value: profile.id,
@@ -1282,6 +1294,8 @@ export default function SettingsModal() {
                 draft={draft}
                 agentMaxToolRoundsInput={agentMaxToolRoundsInput}
                 agentTextProfileOptions={agentTextProfileOptions}
+                agentTextSelectionValue={selectedAgentTextValue}
+                agentTextModel={selectedAgentTextModel}
                 agentImageProfileOptions={agentImageProfileOptions}
                 canCreateAgentTextProfile={!presetConfigOnly && activeProfile.provider === 'openai'}
                 createAgentTextProfile={createAgentTextProfile}
