@@ -38,6 +38,11 @@ export interface PostTemplate {
   /** 目标画布尺寸；出图比例要能对上才会套用 */
   width: number
   height: number
+  /**
+   * 投放渠道（取值见 lib/channel 的 CHANNELS）。
+   * 空表示通用：任何渠道都能套用，同渠道的模板优先。
+   */
+  channel?: string
   /** 是否启用 */
   enabled: boolean
   /** 同比例有多套时，默认这套优先；都没设默认则随机取 */
@@ -70,21 +75,33 @@ export function createPostTemplate(width: number, height: number, label: string)
  * 按原图比例挑选模板：
  * 只认比例对得上的（2% 容差）；有默认用默认，没有就随机。
  * 没有匹配项时返回 null —— 调用方保持原图不动。
+ *
+ * 指定渠道时只在该渠道的模板与通用模板里挑：同渠道优先，其次通用；
+ * 两样都没有就不套（模板被标到别的渠道，说明尺寸口径本来就不一样，硬套会出错）。
  */
 export function pickTemplateForImage(
   templates: PostTemplate[],
   srcWidth: number,
   srcHeight: number,
+  channel?: string,
 ): PostTemplate | null {
   if (!(srcWidth > 0 && srcHeight > 0)) return null
   const ratio = srcWidth / srcHeight
-  const matches = templates.filter((item) => (
+  const ratioMatches = templates.filter((item) => (
     item.enabled
     && item.width > 0
     && item.height > 0
     && Math.abs(item.width / item.height - ratio) / ratio <= POST_RATIO_TOLERANCE + 1e-6
   ))
+  if (!ratioMatches.length) return null
+
+  let matches = ratioMatches
+  if (channel) {
+    const sameChannel = ratioMatches.filter((item) => item.channel === channel)
+    matches = sameChannel.length ? sameChannel : ratioMatches.filter((item) => !item.channel)
+  }
   if (!matches.length) return null
+
   const preferred = matches.find((item) => item.isDefault)
   if (preferred) return preferred
   return matches[Math.floor(Math.random() * matches.length)]
@@ -99,6 +116,21 @@ export const POST_SIZE_PRESETS: Array<{ label: string; width: number; height: nu
   { label: '4:5  1638×2048', width: 1638, height: 2048 },
   { label: '3:4  1536×2048', width: 1536, height: 2048 },
 ]
+
+/** 模板按比例归组用的筛选项；和新建时的预设保持一致 */
+export const POST_RATIO_FILTERS: Array<{ value: string; ratio: number }> = POST_SIZE_PRESETS.map((preset) => ({
+  value: preset.label.split('  ')[0]!,
+  ratio: preset.width / preset.height,
+}))
+
+/** 模板属于哪个比例档；不在预设里的归到 other，筛选时单独一档 */
+export function postTemplateRatioKey(template: { width: number; height: number }): string {
+  if (!(template.width > 0 && template.height > 0)) return 'other'
+  const ratio = template.width / template.height
+  return POST_RATIO_FILTERS.find(
+    (item) => Math.abs(item.ratio - ratio) / item.ratio <= POST_RATIO_TOLERANCE + 1e-6,
+  )?.value ?? 'other'
+}
 
 export function newPostElement(kind: PostElementKind, index: number): PostElement {
   return kind === 'text'

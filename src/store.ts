@@ -2257,7 +2257,7 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
     const appliedIndexes: number[] = []
     finalImages = await Promise.all(images.map(async (url, index) => {
       const size = imageSizeFromDataUrl(url)
-      const template = size ? pickTemplateForImage(postTemplates, size.width, size.height) : null
+      const template = size ? pickTemplateForImage(postTemplates, size.width, size.height, task.channel) : null
       if (!template) return url
       try {
         const output = await applyPostTemplate(url, template)

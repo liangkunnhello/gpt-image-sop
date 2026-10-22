@@ -118,6 +118,17 @@ describe('pickAvoidTemplate', () => {
   it('未启用的模板不参与避让', () => {
     expect(pickAvoidTemplate([make(1440, 2560, { enabled: false })], '1440x2560')).toBeNull()
   })
+
+  it('传到渠道时按渠道挑，避让区跟实际套用的模板对得上', () => {
+    const universal = make(1440, 2560, { label: '通用' })
+    const gdt = make(1440, 2560, { label: '广点通', channel: 'gdt' })
+    expect(pickAvoidTemplate([universal, gdt], '1440x2560', [], 'gdt')?.label).toBe('广点通')
+    expect(pickAvoidTemplate([universal, gdt], '1440x2560', [], 'toutiao')?.label).toBe('通用')
+  })
+
+  it('比例未知时，指定渠道也不会拿别的渠道模板硬猜', () => {
+    expect(pickAvoidTemplate([make(1440, 2560, { channel: 'toutiao' })], 'auto', [], 'gdt')).toBeNull()
+  })
 })
 
 describe('buildAvoidHintForTask', () => {

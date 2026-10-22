@@ -1,16 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { buildAvoidHint, collectAvoidZones } from '../lib/postReserve'
+import { CHANNELS, NO_CHANNEL, channelLabel } from '../lib/channel'
 import {
   POST_FONT_STACK,
+  POST_RATIO_FILTERS,
   POST_SIZE_PRESETS,
   clamp01,
   createPostTemplate,
   newPostElement,
+  postTemplateRatioKey,
   type PostElement,
   type PostTemplate,
 } from '../lib/postTemplate'
 import { useSopStore } from '../lib/sopStore'
+
+/** 筛选条上的小胶囊，和画廊的渠道筛选保持同一种观感 */
+function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-2 py-0.5 text-[11px] transition-colors ${
+        active
+          ? 'bg-blue-500 text-white'
+          : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.12]'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
 
 interface Props {
   productId: string
@@ -27,6 +47,9 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
   const [templates, setTemplates] = useState<PostTemplate[]>(() => stored ?? [])
   const [activeId, setActiveId] = useState<string>(() => stored?.[0]?.id ?? '')
   const [selectedId, setSelectedId] = useState<string>('')
+  /** 列表筛选：渠道 + 尺寸（按比例归组）。只影响列表显示，不改模板本身 */
+  const [channelFilter, setChannelFilter] = useState<string>('all')
+  const [ratioFilter, setRatioFilter] = useState<string>('all')
   const [previewWidth, setPreviewWidth] = useState(0)
   const stageRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
@@ -137,6 +160,24 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     [active, selectedId],
   )
 
+  const visibleTemplates = useMemo(
+    () => templates.filter((item) => {
+      if (ratioFilter !== 'all' && postTemplateRatioKey(item) !== ratioFilter) return false
+      if (channelFilter === 'all') return true
+      if (channelFilter === NO_CHANNEL) return !item.channel
+      return item.channel === channelFilter
+    }),
+    [templates, channelFilter, ratioFilter],
+  )
+
+  // 筛选把正在编辑的模板挡掉了就切到第一套可见的，否则右侧改的是看不见的模板
+  useEffect(() => {
+    if (!visibleTemplates.length) return
+    if (visibleTemplates.some((item) => item.id === active?.id)) return
+    setActiveId(visibleTemplates[0]!.id)
+    setSelectedId('')
+  }, [visibleTemplates, active?.id])
+
   const patchActive = (next: Partial<PostTemplate>, options?: { coalesceKey?: string; record?: boolean }) => applyTemplates(
     (prev) => prev.map((item) => (item.id === active?.id ? { ...item, ...next } : item)),
     options,
@@ -156,9 +197,15 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
   )
 
   const addTemplate = (width: number, height: number, label: string) => {
-    const template = { ...createPostTemplate(width, height, label), enabled: true }
-    // 同比例还没有默认的，就把新的一套设为默认
-    const hasDefault = templatesRef.current.some((item) => item.isDefault && Math.abs(item.width / item.height - width / height) < 0.02)
+    // 筛选的是具体渠道，新建的模板就归到这个渠道；筛「全部 / 通用」时建通用模板
+    const channel = channelFilter !== 'all' && channelFilter !== NO_CHANNEL ? channelFilter : undefined
+    const template = { ...createPostTemplate(width, height, label), enabled: true, channel }
+    // 同渠道、同比例还没有默认的，就把新的一套设为默认
+    const hasDefault = templatesRef.current.some(
+      (item) => item.isDefault
+        && (item.channel ?? '') === (channel ?? '')
+        && Math.abs(item.width / item.height - width / height) < 0.02,
+    )
     template.isDefault = !hasDefault
     applyTemplates((prev) => [...prev, template])
     setActiveId(template.id)
@@ -326,6 +373,33 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
           <button type="button" onClick={save} className="rounded-lg bg-blue-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-600">保存</button>
         </div>
 
+        {/* 模板筛选：渠道 + 尺寸（按比例归组），只筛列表，不影响按比例自动套用 */}
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-gray-200 px-4 py-2 dark:border-white/[0.08]">
+          <span className="mr-0.5 text-[10px] text-gray-400">渠道</span>
+          <FilterChip active={channelFilter === 'all'} onClick={() => setChannelFilter('all')}>全部</FilterChip>
+          <FilterChip active={channelFilter === NO_CHANNEL} onClick={() => setChannelFilter(NO_CHANNEL)}>通用</FilterChip>
+          {CHANNELS.map((item) => (
+            <FilterChip key={item.value} active={channelFilter === item.value} onClick={() => setChannelFilter(item.value)}>
+              {item.label}
+            </FilterChip>
+          ))}
+          <span className="mx-1.5 h-4 w-px bg-gray-200 dark:bg-white/10" />
+          <span className="mr-0.5 text-[10px] text-gray-400">尺寸</span>
+          <FilterChip active={ratioFilter === 'all'} onClick={() => setRatioFilter('all')}>全部</FilterChip>
+          {POST_RATIO_FILTERS.map((item) => (
+            <FilterChip key={item.value} active={ratioFilter === item.value} onClick={() => setRatioFilter(item.value)}>
+              {item.value}
+            </FilterChip>
+          ))}
+          {templates.some((item) => postTemplateRatioKey(item) === 'other') && (
+            <FilterChip active={ratioFilter === 'other'} onClick={() => setRatioFilter('other')}>其他</FilterChip>
+          )}
+          <div className="flex-1" />
+          <span className="text-[10px] tabular-nums text-gray-400">
+            显示 {visibleTemplates.length} / {templates.length} 套
+          </span>
+        </div>
+
         <div className="flex min-h-0 flex-1">
           {/* 画布预览 */}
           <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-gray-100 p-4 dark:bg-black/30">
@@ -430,7 +504,7 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
           <div className="flex w-80 shrink-0 flex-col overflow-y-auto border-l border-gray-200 p-3 dark:border-white/[0.08]">
             <div className="mb-2 text-[11px] font-medium text-gray-500 dark:text-gray-400">模板（按出图比例自动选）</div>
             <div className="mb-2 space-y-1">
-              {templates.map((item) => (
+              {visibleTemplates.map((item) => (
                 <div
                   key={item.id}
                   className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] ${active?.id === item.id ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.04]'}`}
@@ -438,6 +512,11 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                   <button type="button" onClick={() => { setActiveId(item.id); setSelectedId('') }} className="min-w-0 flex-1 truncate text-left">
                     {item.label}
                     <span className="ml-1 text-gray-400">{item.width}×{item.height}</span>
+                    {item.channel && (
+                      <span className="ml-1 rounded bg-gray-100 px-1 text-[10px] text-gray-500 dark:bg-white/10 dark:text-gray-400">
+                        {channelLabel(item.channel)}
+                      </span>
+                    )}
                     {item.isDefault && <span className="ml-1 rounded bg-blue-100 px-1 text-[10px] text-blue-600 dark:bg-blue-500/20 dark:text-blue-300">默认</span>}
                   </button>
                   <label className="flex shrink-0 items-center gap-0.5 text-[10px] text-gray-400" title="启用后参与自动套用">
@@ -454,7 +533,11 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                     title="设为默认"
                     onClick={() => applyTemplates((prev) => prev.map((t) => {
                       if (t.id === item.id) return { ...t, isDefault: true }
-                      return Math.abs(t.width / t.height - item.width / item.height) < 0.02 ? { ...t, isDefault: false } : t
+                      // 默认是「同渠道 + 同比例」范围内唯一，别把别的渠道默认也清掉
+                      const sameChannel = (t.channel ?? '') === (item.channel ?? '')
+                      return sameChannel && Math.abs(t.width / t.height - item.width / item.height) < 0.02
+                        ? { ...t, isDefault: false }
+                        : t
                     }))}
                     className={`shrink-0 rounded px-1 ${item.isDefault ? 'text-blue-500' : 'text-gray-300 hover:text-blue-500'}`}
                   >
@@ -463,7 +546,11 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                   <button type="button" onClick={() => removeTemplate(item.id)} className="shrink-0 text-gray-300 hover:text-red-500">✕</button>
                 </div>
               ))}
-              {!templates.length && <p className="px-1 py-1 text-[11px] text-gray-400">还没有模板</p>}
+              {!visibleTemplates.length && (
+                <p className="px-1 py-1 text-[11px] text-gray-400">
+                  {templates.length ? '没有符合筛选的模板' : '还没有模板'}
+                </p>
+              )}
             </div>
 
             <div className="mb-3">
@@ -506,6 +593,20 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                       className="w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                     />
                   </div>
+                </div>
+
+                <div className="mb-2">
+                  <div className="mb-1 text-[10px] text-gray-400">投放渠道（通用模板任何渠道都能套）</div>
+                  <select
+                    value={active.channel ?? ''}
+                    onChange={(e) => patchActive({ channel: e.target.value || undefined })}
+                    className="w-full rounded border border-gray-200 bg-white px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                  >
+                    <option value="">通用（不限定渠道）</option>
+                    {CHANNELS.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div className="mb-2 flex gap-1">

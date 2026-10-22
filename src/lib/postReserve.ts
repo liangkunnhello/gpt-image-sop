@@ -108,11 +108,17 @@ export function pickAvoidTemplate(
   templates: PostTemplate[],
   size: string | undefined,
   referenceDataUrls: string[] = [],
+  channel?: string,
 ): PostTemplate | null {
   const enabled = templates.filter((item) => item.enabled)
   if (!enabled.length) return null
   const resolved = resolveOutputSize(size, referenceDataUrls)
-  if (resolved) return pickTemplateForImage(enabled, resolved.width, resolved.height)
+  if (resolved) return pickTemplateForImage(enabled, resolved.width, resolved.height, channel)
+  // 比例拿不到时只在一套模板里猜：指定渠道就只看该渠道 + 通用，避免套到别的渠道口径
+  if (channel) {
+    const scoped = enabled.filter((item) => !item.channel || item.channel === channel)
+    return scoped.length === 1 ? scoped[0] : null
+  }
   return enabled.length === 1 ? enabled[0] : null
 }
 
@@ -121,11 +127,11 @@ export function pickAvoidTemplate(
  * 任务没归属方向、方向所属产品没配模板、或模板关了自动避让时都返回空串。
  */
 export function buildAvoidHintForTask(
-  task: Pick<TaskRecord, 'sopDirectionId' | 'params'>,
+  task: Pick<TaskRecord, 'sopDirectionId' | 'params' | 'channel'>,
   templates: PostTemplate[],
   referenceDataUrls: string[] = [],
 ): string {
   if (!templates.length) return ''
-  const template = pickAvoidTemplate(templates, task.params?.size, referenceDataUrls)
+  const template = pickAvoidTemplate(templates, task.params?.size, referenceDataUrls, task.channel)
   return buildAvoidHint(template)
 }
