@@ -3,6 +3,7 @@
  * tauri 的 updater 端点三处必须一致，否则会出现「有新版本但下载跳到别处」。
  */
 export const RELEASE_REPO = 'liangkunnhello/gpt-image-sop'
+export const RELEASE_REPO_URL = `https://github.com/${RELEASE_REPO}`
 export const RELEASES_PAGE_URL = `https://github.com/${RELEASE_REPO}/releases`
 export const RELEASES_PER_PAGE = 10
 // GitHub API 未登录每小时限 60 次，一小时内复用本地缓存
@@ -91,7 +92,16 @@ export function mergeReleasePage(cache: ReleaseCache | null, page: number, resul
   }
 }
 
-/** 从本地存储恢复缓存，格式不对时视为没有缓存 */
+/**
+ * 缓存的链接必须指向本仓库。
+ * 换过发布源之后，旧缓存里可能还留着上游仓库的 Release 地址，
+ * 不拦掉的话「检查更新」看起来是自己的，点进去却跳到别人的仓库。
+ */
+export function isOwnRepoUrl(url: string) {
+  return typeof url === 'string' && url.startsWith(`${RELEASE_REPO_URL}/`)
+}
+
+/** 从本地存储恢复缓存，格式不对或链接不属于本仓库时视为没有缓存 */
 export function parseReleaseCache(raw: string | null): ReleaseCache | null {
   if (!raw) return null
   try {
@@ -102,7 +112,9 @@ export function parseReleaseCache(raw: string | null): ReleaseCache | null {
       body: item?.body,
       published_at: item?.publishedAt,
       html_url: item?.url,
-    }))).releases
+    }))).releases.filter((item) => isOwnRepoUrl(item.url))
+    // 一条都不属于本仓库时整份作废，下一轮会重新请求
+    if (!releases.length) return null
     return { fetchedAt: data.fetchedAt, pages: data.pages, hasMore: data.hasMore === true, releases }
   } catch {
     return null

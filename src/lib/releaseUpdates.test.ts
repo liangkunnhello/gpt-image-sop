@@ -17,7 +17,7 @@ const rawRelease = (tag: string, extra: Record<string, unknown> = {}) => ({
   tag_name: tag,
   body: `## ${tag}`,
   published_at: '2026-10-08T12:00:00Z',
-  html_url: `https://github.com/CookSleep/gpt_image_playground/releases/tag/${tag}`,
+  html_url: `${RELEASES_PAGE_URL}/tag/${tag}`,
   ...extra,
 })
 
@@ -57,7 +57,7 @@ describe('parseReleasePage', () => {
       version: '0.8.0',
       body: '## v0.8.0',
       publishedAt: '2026-10-08T12:00:00Z',
-      url: 'https://github.com/CookSleep/gpt_image_playground/releases/tag/v0.8.0',
+      url: `${RELEASES_PAGE_URL}/tag/v0.8.0`,
     })
     // 非 https 的链接替换为仓库的 Release 页面（跟随 RELEASES_PAGE_URL，不写死仓库名）
     expect(result.releases[1].url).toBe(`${RELEASES_PAGE_URL}/tag/v0.7.17`)
@@ -100,8 +100,31 @@ describe('Release 缓存', () => {
     expect(parseReleaseCache(JSON.stringify({ fetchedAt: '1', pages: 1, releases: [] }))).toBeNull()
   })
 
-  it('一小时内有效，过期、未来时间或没有数据时失效', () => {
-    const cache = { fetchedAt: 10_000, pages: 1, hasMore: false, releases: [] }
+  it('缓存里指向上游仓库的条目会被丢弃', () => {
+    const stale = JSON.stringify({
+      fetchedAt: 1000,
+      pages: 1,
+      hasMore: false,
+      releases: [
+        { tag: 'v0.8.0', version: '0.8.0', body: '', publishedAt: '', url: 'https://github.com/CookSleep/gpt_image_playground/releases/tag/v0.8.0' },
+      ],
+    })
+    // 一条都不属于本仓库时整份作废，避免点「更新日志」跳到别人的仓库
+    expect(parseReleaseCache(stale)).toBeNull()
+
+    const mixed = JSON.stringify({
+      fetchedAt: 1000,
+      pages: 1,
+      hasMore: false,
+      releases: [
+        { tag: 'v1.0.1', version: '1.0.1', body: '', publishedAt: '', url: `${RELEASES_PAGE_URL}/tag/v1.0.1` },
+        { tag: 'v0.8.0', version: '0.8.0', body: '', publishedAt: '', url: 'https://github.com/CookSleep/gpt_image_playground/releases/tag/v0.8.0' },
+      ],
+    })
+    expect(parseReleaseCache(mixed)?.releases.map((item) => item.tag)).toEqual(['v1.0.1'])
+  })
+
+  it('一小时内有效，过期、未来时间或没有数据时失效', () => {    const cache = { fetchedAt: 10_000, pages: 1, hasMore: false, releases: [] }
     expect(isReleaseCacheFresh(cache, 10_000)).toBe(true)
     expect(isReleaseCacheFresh(cache, 10_000 + RELEASE_CACHE_TTL_MS - 1)).toBe(true)
     expect(isReleaseCacheFresh(cache, 10_000 + RELEASE_CACHE_TTL_MS)).toBe(false)

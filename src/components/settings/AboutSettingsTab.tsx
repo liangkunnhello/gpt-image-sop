@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { checkForUpdates, setUpdateModalOpen, useReleaseUpdates } from '../../hooks/useReleaseUpdates'
-import { compareVersions, MANUAL_CHECK_MIN_INTERVAL_MS } from '../../lib/releaseUpdates'
+import { compareVersions, MANUAL_CHECK_MIN_INTERVAL_MS, RELEASE_REPO } from '../../lib/releaseUpdates'
 import { useStore } from '../../store'
 import { ChevronRightIcon, ExternalLinkIcon, GithubIcon, HistoryIcon, RefreshIcon } from '../icons'
 
@@ -123,30 +123,55 @@ export default function AboutSettingsTab({ onOpenFontLicenses }: { onOpenFontLic
         <div className="min-w-0 flex-1">
           <h4 className="text-base font-bold text-gray-800 dark:text-gray-100">
             <a
-              href="https://github.com/CookSleep/gpt_image_playground"
+              href="https://github.com/liangkunnhello/gpt-image-sop"
               target="_blank"
               rel="noopener noreferrer"
               className="rounded outline-none underline-offset-2 hover:underline focus-visible:underline focus-visible:ring-2 focus-visible:ring-blue-500/40"
             >
-              GPT Image Playground
+              GPT Image SOP
             </a>
           </h4>
           <p className="mt-0.5 text-[13px] text-gray-500 dark:text-gray-400">
             <a
-              href="https://github.com/CookSleep"
+              href="https://github.com/liangkunnhello"
               target="_blank"
               rel="noopener noreferrer"
               className="rounded outline-none underline-offset-2 transition-colors hover:text-gray-700 hover:underline focus-visible:text-gray-700 focus-visible:underline focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:hover:text-gray-200 dark:focus-visible:text-gray-200"
             >
-              @CookSleep
+              @liangkunnhello
             </a>
           </p>
           <p data-selectable-text className="mt-3 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
             本项目的成长离不开每一位用户的使用、反馈、贡献与支持，感谢一路有你。
           </p>
+          {/* MIT 许可要求保留原始出处与作者署名，二次发行也必须带着这句 */}
+          <p data-selectable-text className="mt-2 text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+            基于
+            {' '}
+            <a
+              href="https://github.com/CookSleep/gpt_image_playground"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 hover:text-gray-600 dark:hover:text-gray-300"
+            >
+              GPT Image Playground
+            </a>
+            {' '}
+            修改，原作者
+            {' '}
+            <a
+              href="https://github.com/CookSleep"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 hover:text-gray-600 dark:hover:text-gray-300"
+            >
+              @CookSleep
+            </a>
+            ，遵循 MIT 许可。
+          </p>
         </div>
         <a
-          href="https://github.com/CookSleep/gpt_image_playground"
+          href="https://github.com/liangkunnhello/gpt-image-sop"
           target="_blank"
           rel="noopener noreferrer"
           aria-label="GitHub 仓库"
@@ -176,7 +201,7 @@ export default function AboutSettingsTab({ onOpenFontLicenses }: { onOpenFontLic
           <AboutRow
             icon={<RefreshIcon className={`h-4 w-4 ${checking ? 'animate-spin' : ''}`} />}
             title="检查更新"
-            subtitle={checkError && !checking ? checkError : `当前版本 v${__APP_VERSION__}`}
+            subtitle={checkError && !checking ? checkError : `当前版本 v${__APP_VERSION__} · 更新源 ${RELEASE_REPO}`}
             onClick={() => void handleCheck()}
             disabled={checking}
             right={checkStatus}
@@ -214,7 +239,7 @@ export default function AboutSettingsTab({ onOpenFontLicenses }: { onOpenFontLic
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
             </svg>
           )}
-          title="赞助作者"
+          title="赞助原作者"
           href="https://www.ifdian.net/a/cooksleep"
           right={EXTERNAL}
         />

@@ -5,7 +5,8 @@ import { getReleasesApiUrl, isReleaseCacheFresh, RELEASE_CACHE_TTL_MS, mergeRele
 import { readLocal, writeLocal } from '../lib/localRecord'
 import { apiFetch } from '../lib/platform'
 
-const CACHE_KEY = 'release-cache-v1'
+// v2：换发布源后旧的缓存可能指向上游仓库，升版本号让它整体作废一次
+const CACHE_KEY = 'release-cache-v2'
 const IGNORED_KEY = 'ignored-release-version'
 
 interface ReleaseUpdatesState {

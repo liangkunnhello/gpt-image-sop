@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "cargo_toml"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82f4b26e751e711a5302649417f2da046dce6391b2ea30a4820f37462314f0b9"
 dependencies = [
@@ -1555,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "gpt-image-playground"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "log",
  "percent-encoding",
@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "ident_case"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 

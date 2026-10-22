@@ -169,22 +169,22 @@ export default function Header() {
                 <>
                   <span className="min-w-0 truncate text-[17px] font-bold tracking-tight text-gray-800 dark:text-gray-100 sm:hidden" title={favoriteCollectionTitle}>{favoriteCollectionTitle}</span>
                   <a
-                    href="https://github.com/CookSleep/gpt_image_playground"
+                    href="https://github.com/liangkunnhello/gpt-image-sop"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="hidden text-lg font-bold tracking-tight text-gray-800 transition-colors hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300 sm:inline"
                   >
-                    GPT Image Playground
+                    GPT Image SOP
                   </a>
                 </>
               ) : (
                 <a
-                  href="https://github.com/CookSleep/gpt_image_playground"
+                  href="https://github.com/liangkunnhello/gpt-image-sop"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[17px] sm:text-lg font-bold tracking-tight text-gray-800 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
                 >
-                  GPT Image Playground
+                  GPT Image SOP
                 </a>
               )}
               {/* 透明伪元素把点击区域扩大到 32px 以上，外观不变 */}
