@@ -144,6 +144,8 @@ import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { useSopStore } from './lib/sopStore'
+import { groupSopTasks } from './lib/sopGroup'
 
 const commitTaskDeletionImplementation = vi.mocked(commitTaskDeletion).getMockImplementation()!
 const deleteDbImageImplementation = vi.mocked(deleteDbImage).getMockImplementation()!
@@ -541,6 +543,76 @@ describe('task retry', () => {
     expect(useStore.getState().tasks[1]).toEqual(original)
     request.resolve({ images: [], actualParams: {}, actualParamsList: [], revisedPrompts: [] })
     await vi.waitFor(() => expect(useStore.getState().tasks[0].status).toBe('done'))
+  })
+})
+
+describe('plain mode batch grouping', () => {
+  const pngRef = (id: string) => ({ id, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' })
+
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    vi.mocked(callImageApi).mockReset().mockImplementation(() => new Promise(() => {}))
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, baseUrl: 'https://api.example.com/v1', apiKey: 'test-key' },
+      appMode: 'gallery',
+      tasks: [],
+      prompt: '一只猫',
+      inputImages: [],
+      fixedImages: [],
+      params: { ...DEFAULT_PARAMS, size: 'auto', n: 1 },
+      plainImageMode: 'batch',
+      batchProgress: null,
+      detailTaskId: null,
+      showToast: vi.fn(),
+    })
+    useSopStore.setState({ sopMode: false, variableMode: false })
+  })
+
+  it('把同一批批量请求聚合成一张任务卡，而不是每张图一张卡', async () => {
+    useStore.setState({
+      inputImages: Array.from({ length: 10 }, (_, index) => pngRef(`plain-${index}`)),
+      params: { ...DEFAULT_PARAMS, size: 'auto', n: 10 },
+    })
+
+    void submitTask()
+    await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(10))
+
+    const tasks = useStore.getState().tasks
+    // 10 个请求共享同一个分组 id，画廊据此聚合成一张卡
+    expect(new Set(tasks.map((item) => item.sopJobId)).size).toBe(1)
+    expect(groupSopTasks(tasks)).toHaveLength(1)
+    // 没有 SOP 正文时标题按张图算
+    expect(groupSopTasks(tasks)[0].prompt).toBe('批量 · 10 张图')
+    expect(groupSopTasks(tasks)[0].sopText).toBeUndefined()
+  })
+
+  it('融图模式同样聚合成一张卡，标题写融图', async () => {
+    useStore.setState({
+      plainImageMode: 'merge',
+      inputImages: Array.from({ length: 4 }, (_, index) => pngRef(`merge-${index}`)),
+      params: { ...DEFAULT_PARAMS, size: 'auto', n: 2 },
+    })
+
+    void submitTask()
+    await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(2))
+
+    const tasks = useStore.getState().tasks
+    expect(groupSopTasks(tasks)).toHaveLength(1)
+    expect(groupSopTasks(tasks)[0].prompt).toBe('融图 · 2 张图')
+  })
+
+  it('尺寸 auto 且参考图比例一致时不改写尺寸', async () => {
+    useStore.setState({
+      // 两张 1×1 的 PNG 头，比例相同
+      inputImages: Array.from({ length: 2 }, (_, index) => pngRef(`same-${index}`)),
+      params: { ...DEFAULT_PARAMS, size: 'auto', n: 2 },
+    })
+
+    void submitTask()
+    await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(2))
+
+    expect(useStore.getState().tasks.every((item) => item.params.size === 'auto')).toBe(true)
   })
 })
 
