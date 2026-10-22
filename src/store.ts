@@ -2012,8 +2012,10 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       const unused = useStore.getState().plainImageMode === 'batch'
         ? Math.max(0, new Set(orderedInputImages.map((item) => item.id)).size - plainPlan.length)
         : 0
+      // 尺寸被逐个改写时要说一句，否则用户会疑惑「明明选了自动」
+      const sizeNote = sizeOverrides ? '；参考图横竖比例不同，已按各图比例取 2K 尺寸' : ''
       useStore.getState().showToast(
-        `已提交 ${plainPlan.length} 个请求（${modeLabel}，共 ${usedCount} 张图）${unused > 0 ? `；还有 ${unused} 张图没用上，调高数量或切融图` : ''}`,
+        `已提交 ${plainPlan.length} 个请求（${modeLabel}，共 ${usedCount} 张图）${unused > 0 ? `；还有 ${unused} 张图没用上，调高数量或切融图` : ''}${sizeNote}`,
         'success',
       )
     }
