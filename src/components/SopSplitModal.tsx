@@ -9,6 +9,8 @@ import { effectiveNodeKind } from '../lib/directionTree'
 export interface SopRunOptions {
   directionId: string
   systemPromptText: string
+  /** 选中的系统提示词名称；选「不使用」时为空，任务上用来追溯用了哪份 */
+  systemPromptName?: string
   groupCount: number
   promptsPerGroup: number
   ignoreCompliance: boolean
@@ -277,6 +279,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             onClick={() => onConfirm({
               directionId: currentDirectionId,
               systemPromptText: systemPromptText.trim(),
+              systemPromptName: selectedPrompt?.name ?? '不使用',
               groupCount,
               promptsPerGroup,
               ignoreCompliance,

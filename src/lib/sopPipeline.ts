@@ -302,6 +302,8 @@ export interface SopJobRequest {
   imageIds?: string[]
   /** 系统提示词 + 卖点 + 风格合成的一份 Markdown */
   systemPromptText: string
+  /** 选中的系统提示词名称，写入任务卡供详情页追溯 */
+  systemPromptName?: string
   /** 卖点原文：写提示词阶段要再单独喂一次，保证图上文字逐字来自这里 */
   copyText?: string
   promptsPerGroup: number
@@ -376,7 +378,10 @@ async function runJob(job: SopJobRequest) {
     void submitSopTasks({
       sopJobId,
       sopName: sopTitleOf(sop, job.label),
-      systemPromptName: job.systemPromptText.split('\n')[0].slice(0, 24) || '系统提示词',
+      systemPromptName: job.systemPromptName?.trim()
+        // 老数据没有名字时退回第一行，至少能看出是哪种提示词
+        || job.systemPromptText.split('\n')[0].slice(0, 24)
+        || '系统提示词',
       sopText: sop,
       directionId: job.directionId,
       referenceImageIds: job.imageIds,

@@ -1148,6 +1148,16 @@ export default function DetailModal() {
                   {channelLabel(task.channel)}
                 </span>
               </span>
+              {/* 用了哪份系统提示词：只在记录的是名字时才显示，老任务存的是提示词正文首行，跳过 */}
+              {task.sopSystemPrompt && !/^[>#]/.test(task.sopSystemPrompt) && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-600">·</span>
+                  <span>
+                    {task.variableMode ? '变量提示词' : '系统提示词'}：
+                    <span className="font-medium text-gray-500 dark:text-gray-400">{task.sopSystemPrompt}</span>
+                  </span>
+                </>
+              )}
             </div>
             {task.sopText && (
               <div className="mb-4 overflow-hidden rounded-lg border border-gray-200 dark:border-white/[0.08]">

@@ -598,6 +598,7 @@ export default function InputBar() {
       imageDataUrls: group.map((img) => img.dataUrl),
       imageIds: group.map((img) => img.id),
       systemPromptText: bundle.merged,
+      systemPromptName: options.systemPromptName,
       copyText: bundle.copyText,
       promptsPerGroup: options.promptsPerGroup,
       directionId: options.directionId,
