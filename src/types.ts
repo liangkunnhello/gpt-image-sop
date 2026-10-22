@@ -139,6 +139,9 @@ export interface BatchProgress {
 /** 批量提交模式：排队逐条执行，或按并发数同时执行 */
 export type BatchPromptMode = 'queue' | 'concurrent'
 
+/** 界面主题：默认外观 / 液态玻璃 */
+export type AppearanceTheme = 'default' | 'glass'
+
 export interface AppSettings {
   /** 旧版单配置字段：保留用于导入/查询参数兼容，实际请求以 active profile 为准 */
   baseUrl: string
@@ -164,6 +167,8 @@ export interface AppSettings {
   /** 仅客户端：把警告和错误写入日志文件 */
   writeLogFile: boolean
   enterSubmit: boolean
+  /** 界面主题：default 保持现有外观，glass 为液态玻璃质感 */
+  appearance: AppearanceTheme
   uiFont: FontMode
   /** uiFont 为 custom 时使用的本机字体名称 */
   uiFontName: string

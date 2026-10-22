@@ -20,5 +20,6 @@ data-backups/
 # 临时验证打包输出与 esbuild 临时目录（沙箱下 dist 不可清空时用）
 .tmp-verify*/
 .tmp-esbuild/
+.tmp-shots/
 # 更新包签名私钥，绝对不能提交
 .signing/

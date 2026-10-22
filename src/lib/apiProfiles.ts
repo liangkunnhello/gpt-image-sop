@@ -746,6 +746,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     autoCheckUpdate: typeof record.autoCheckUpdate === 'boolean' ? record.autoCheckUpdate : true,
     writeLogFile: typeof record.writeLogFile === 'boolean' ? record.writeLogFile : true,
     enterSubmit: typeof record.enterSubmit === 'boolean' ? record.enterSubmit : false,
+    appearance: record.appearance === 'glass' ? 'glass' : 'default',
     uiFont: normalizeFontMode(record.uiFont),
     uiFontName: typeof record.uiFontName === 'string' ? record.uiFontName.trim() : '',
     monoFont: normalizeFontMode(record.monoFont),

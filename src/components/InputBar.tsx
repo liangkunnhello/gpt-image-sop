@@ -21,6 +21,7 @@ import { downloadImageEntriesAsZip, downloadImageIds, downloadTaskCardsToFolders
 import { pickSaveDir } from '../lib/saveFile'
 import { isTauri } from '../lib/platform'
 import SizePickerModal from './SizePickerModal'
+import GlassBackdrop from './GlassBackdrop'
 import AssignDirectionModal from './AssignDirectionModal'
 import SopSplitModal, { type SopRunOptions } from './SopSplitModal'
 import VariableRunModal, { type VariableRunOptions } from './VariableRunModal'
@@ -1910,7 +1911,8 @@ export default function InputBar() {
             onDeleteSelected={handleDeleteSelected}
           />
         </div>
-        <div ref={cardRef} className={`bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10${promptExpanded ? ' flex min-h-0 flex-1 flex-col' : ''}`}>
+        <div ref={cardRef} data-surface="composer" className={`relative isolate bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10${promptExpanded ? ' flex min-h-0 flex-1 flex-col' : ''}`}>
+          <GlassBackdrop cornerRadius={24} displacementScale={38} blurAmount={0.05} saturation={160} />
           {/* 移动端拖动条 */}
           <div
             ref={handleRef}

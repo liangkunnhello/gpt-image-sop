@@ -404,6 +404,7 @@ export default function TaskCard({
 
       <div
         ref={cardRef}
+        data-surface="card"
         className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer touch-pan-y will-change-transform duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
           isSwiping ? '!bg-white dark:!bg-gray-900' : ''
         } ${
