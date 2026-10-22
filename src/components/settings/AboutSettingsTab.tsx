@@ -205,7 +205,7 @@ export default function AboutSettingsTab({ onOpenFontLicenses }: { onOpenFontLic
             </svg>
           )}
           title="反馈问题"
-          href="https://github.com/CookSleep/gpt_image_playground/issues"
+          href="https://github.com/liangkunnhello/gpt-image-sop/issues"
           right={EXTERNAL}
         />
         <AboutRow
