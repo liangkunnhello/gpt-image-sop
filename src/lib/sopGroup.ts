@@ -36,7 +36,7 @@ export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
      * 代表任务的 detailViewedAt 只属于它自己，所以这里按组重写一遍——
      * 组内全看过时取最晚的完成时间，保证后面再单独完成某条也能正确判定。
      */
-    const cardUnread = sorted.some(isTaskUnread)
+    const cardUnread = sorted.some((task) => isTaskUnread(task))
     const latestFinishedAt = sorted.reduce(
       (latest, task) => Math.max(latest, task.finishedAt ?? task.createdAt),
       0,

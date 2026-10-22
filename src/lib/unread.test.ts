@@ -121,7 +121,19 @@ describe('未读跟随 SOP 卡聚合', () => {
 
   it('没有 SOP 的普通任务各自判断', () => {
     const cards = groupSopTasks([makeTask('a'), makeTask('b', { detailViewedAt: FINISHED_AT + 1 })])
-    expect(cards.filter(isTaskUnread).map((task) => task.id)).toEqual(['a'])
+    expect(cards.filter((task) => isTaskUnread(task)).map((task) => task.id)).toEqual(['a'])
+  })
+})
+
+describe('首次启用前的历史任务不补红点', () => {
+  it('完成时间早于基线就按已读处理', () => {
+    const old = makeTask('old')
+    expect(isTaskUnread(old, FINISHED_AT + 1)).toBe(false)
+    expect(isTaskUnread(old, FINISHED_AT)).toBe(true)
+  })
+
+  it('基线之后完成、且没看过，才算未读', () => {
+    expect(isTaskUnread(makeTask('new', { finishedAt: FINISHED_AT + 5_000 }), FINISHED_AT)).toBe(true)
   })
 })
 
