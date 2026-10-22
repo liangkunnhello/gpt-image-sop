@@ -11,10 +11,40 @@
  * "归属那个方向的任务卡不见了"，体验上等同于数据丢失。
  */
 
-import type { TaskRecord } from '../types'
+import type { SopDirectionNode, TaskRecord } from '../types'
 import { purgeTrashTasks, useStore } from '../store'
 import { putTask } from '../lib/db'
 import { useSopStore } from './sopStore'
+
+/**
+ * 节点在树里的「实际身份」。
+ *
+ * 为什么不信 kind 字段：老版本建的节点 kind 可能写错（历史数据里出现过
+ * 挂在类目下的产品被记成 direction），而右键菜单是按 kind 给操作的——
+ * 一旦 kind 不对，产品行右键就不出现「新建方向」，用户直接卡住。
+ * 树本身是按 parentId 渲染的，所以身份也按层级算：深度 0=类目、1=产品、2+=方向。
+ */
+export function effectiveNodeKind(
+  nodes: Array<{ id: string; parentId: string | null }>,
+  nodeId: string,
+): SopDirectionNode['kind'] {
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const seen = new Set<string>([nodeId])
+  let depth = 0
+  let cursor = byId.get(nodeId)
+  while (cursor?.parentId) {
+    // 防御脏数据里父子成环，避免死循环
+    if (seen.has(cursor.parentId)) break
+    const parent = byId.get(cursor.parentId)
+    if (!parent) break
+    seen.add(parent.id)
+    cursor = parent
+    depth += 1
+    if (depth >= 2) return 'direction'
+  }
+  if (depth === 0) return 'category'
+  return 'product'
+}
 
 /** 某个节点及其全部子孙的 id（含已进回收站的，保证一次处理干净） */
 export function subtreeIds(nodes: Array<{ id: string; parentId: string | null }>, rootId: string): Set<string> {

@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashTask } from '../store'
+import { taskMatchesChannel } from '../lib/channel'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { isTauri } from '../lib/platform'
 import { getIndexesInRect } from '../lib/virtualGrid'
@@ -40,6 +41,7 @@ export default function TaskGrid() {
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
   const activeFilterId = useSopStore((s) => s.activeFilterId)
+  const channelFilter = useStore((s) => s.channelFilter)
   const sopDirections = useSopStore((s) => s.directions)
   const directionFilter = useMemo(
     () => (activeFilterId && activeFilterId !== UNASSIGNED_FILTER ? collectSubtreeIds(sopDirections, activeFilterId) : null),
@@ -51,6 +53,8 @@ export default function TaskGrid() {
     const q = searchQuery.trim().toLowerCase()
     
     return sorted.filter((t) => {
+      // 渠道与业务树是两个独立维度，同时生效（取交集）
+      if (!taskMatchesChannel(t, channelFilter)) return false
       if (activeFilterId === UNASSIGNED_FILTER) {
         if (t.sopDirectionId) return false
       } else if (directionFilter) {
@@ -63,7 +67,7 @@ export default function TaskGrid() {
       if (!taskMatchesFilterStatus(t, filterStatus)) return false
       return taskMatchesSearchQuery(t, q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId, defaultFavoriteCollectionId, directionFilter, activeFilterId])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId, defaultFavoriteCollectionId, directionFilter, activeFilterId, channelFilter])
   // 同一份 SOP 生成的多个任务合并成一张卡，其余任务原样展示
   const displayTasks = useMemo(() => groupSopTasks(filteredTasks), [filteredTasks])
 

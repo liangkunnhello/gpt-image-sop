@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
+import { effectiveNodeKind } from './directionTree'
 import { useSopStore } from './sopStore'
 
 /** 每个用例都从一棵干净的三级树开始 */
@@ -32,6 +33,32 @@ describe('节点新增', () => {
   it('可以建顶层类目', () => {
     const id = useSopStore.getState().addNode(null, '新业务线', 'category')
     expect(node(id)).toMatchObject({ parentId: null, kind: 'category' })
+  })
+})
+
+describe('节点实际身份按层级算', () => {
+  const nodes = [
+    { id: 'c1', parentId: null, kind: 'category' as const },
+    { id: 'p1', parentId: 'c1', kind: 'product' as const },
+    { id: 'd1', parentId: 'p1', kind: 'direction' as const },
+    { id: 'd2', parentId: 'd1', kind: 'direction' as const },
+    // 老数据：挂在类目下的产品被记成了 direction
+    { id: 'p-legacy', parentId: 'c1', kind: 'direction' as const },
+  ]
+
+  it('顶层是类目、第二层是产品、更深都是方向', () => {
+    expect(effectiveNodeKind(nodes, 'c1')).toBe('category')
+    expect(effectiveNodeKind(nodes, 'p1')).toBe('product')
+    expect(effectiveNodeKind(nodes, 'd1')).toBe('direction')
+    expect(effectiveNodeKind(nodes, 'd2')).toBe('direction')
+  })
+
+  it('kind 写错时以层级为准，保证右键能新建方向', () => {
+    expect(effectiveNodeKind(nodes, 'p-legacy')).toBe('product')
+  })
+
+  it('找不到节点时不会崩', () => {
+    expect(effectiveNodeKind(nodes, 'missing')).toBe('category')
   })
 })
 

@@ -343,6 +343,11 @@ export interface TaskRecord {
   sopText?: string
   /** 归属的「产品-方向」节点 id，用于左侧栏筛选；空表示未归属 */
   sopDirectionId?: string
+  /**
+   * 投放渠道（ai-original / gdt / toutiao / baidu / vendor）。
+   * 与业务归属是两个独立维度：同一方向下可以有多个渠道的卡片，筛选取交集。
+   */
+  channel?: string
   /** SOP 模式：反推 SOP 期间插入的占位卡，拿到提示词后会被删除 */
   sopPlaceholder?: boolean
   /** SOP 模式：本轮使用的参考图 id，复用配置时回填输入框 */

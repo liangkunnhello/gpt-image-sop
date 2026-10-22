@@ -1,18 +1,22 @@
 import { useMemo, useState } from 'react'
 
 import { useSopStore } from '../lib/sopStore'
+import { CHANNELS } from '../lib/channel'
 import type { SopDirectionNode } from '../types'
 
 interface Props {
   count: number
   onClose: () => void
-  onConfirm: (directionId: string | null) => void
+  /** channel 为 undefined 表示不改动渠道；null 表示清空 */
+  onConfirm: (directionId: string | null, channel?: string | null) => void
 }
 
-/** 批量把选中的任务归到某个「产品-方向」下 */
+/** 批量把选中的任务归到某个「产品-方向」下，并可选设置渠道 */
 export default function AssignDirectionModal({ count, onClose, onConfirm }: Props) {
   const directions = useSopStore((s) => s.directions)
   const [pickedId, setPickedId] = useState<string | null>(null)
+  /** undefined = 不修改渠道；null = 清空 */
+  const [channel, setChannel] = useState<string | null | undefined>(undefined)
 
   const rows = useMemo(() => {
     const out: Array<{ node: SopDirectionNode; depth: number }> = []
@@ -82,11 +86,46 @@ export default function AssignDirectionModal({ count, onClose, onConfirm }: Prop
           ))}
         </div>
 
+        {/* 渠道与归属是并列的两个维度，放同一个弹窗里一次设完 */}
+        <div className="shrink-0 border-t border-gray-200 px-4 py-2.5 dark:border-white/[0.08]">
+          <div className="mb-1.5 flex items-center gap-2">
+            <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400">渠道</span>
+            <span className="text-[10px] text-gray-400">可不选，表示不改动</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            <button
+              type="button"
+              onClick={() => setChannel(null)}
+              className={`rounded-lg px-2 py-1 text-[11px] transition-colors ${
+                channel === null
+                  ? 'bg-blue-50 font-medium text-blue-600 dark:bg-blue-500/[0.18] dark:text-blue-300'
+                  : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-white/[0.06]'
+              }`}
+            >
+              清空渠道
+            </button>
+            {CHANNELS.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() => setChannel(item.value)}
+                className={`rounded-lg px-2 py-1 text-[11px] transition-colors ${
+                  channel === item.value
+                    ? 'bg-blue-50 font-medium text-blue-600 dark:bg-blue-500/[0.18] dark:text-blue-300'
+                    : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-white/[0.06]'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="flex items-center justify-between border-t border-gray-200 px-5 py-3 dark:border-white/[0.08]">
           <span className="text-[11px] text-gray-400">可以选类目或产品，筛选时整棵子树都会包含。</span>
           <button
             type="button"
-            onClick={() => onConfirm(pickedId)}
+            onClick={() => onConfirm(pickedId, channel)}
             className="rounded-lg bg-blue-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-600"
           >
             确定

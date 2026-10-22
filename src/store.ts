@@ -27,6 +27,7 @@ import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgen
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { collectSopLibrary, mergeSopLibrary, useSopStore } from './lib/sopStore'
+import { channelLabel, taskMatchesChannel } from './lib/channel'
 import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
 import {
   getAllTasks,
@@ -412,6 +413,11 @@ interface AppState {
   setSearchQuery: (q: string) => void
   filterStatus: 'all' | 'running' | 'done' | 'error'
   setFilterStatus: (status: AppState['filterStatus']) => void
+  /**
+   * 渠道筛选：null 表示不限。与业务树筛选（sopStore.activeFilterId）互相独立，取交集。
+   */
+  channelFilter: string | null
+  setChannelFilter: (channel: string | null) => void
   filterFavorite: boolean
   setFilterFavorite: (f: boolean) => void
 
@@ -1002,6 +1008,8 @@ export const useStore = create<AppState>()(
       setSearchQuery: (searchQuery) => set({ searchQuery }),
       filterStatus: 'all',
       setFilterStatus: (filterStatus) => set({ filterStatus }),
+      channelFilter: null,
+      setChannelFilter: (channelFilter) => set({ channelFilter }),
       filterFavorite: false,
       setFilterFavorite: (filterFavorite) => set(filterFavorite ? { filterFavorite, selectedTaskIds: [], selectedFavoriteCollectionIds: [] } : { filterFavorite, activeFavoriteCollectionId: null, selectedTaskIds: [], selectedFavoriteCollectionIds: [] }),
 
@@ -4647,9 +4655,31 @@ export async function assignTasksDirection(taskIds: string[], directionId: strin
   return changed.length
 }
 
+/** 批量设置渠道；传 null 表示清空（未指定） */
+export async function assignTasksChannel(taskIds: string[], channel: string | null) {
+  if (!taskIds.length) return 0
+  const idSet = new Set(taskIds)
+  const changed: TaskRecord[] = []
+  useStore.setState((state) => ({
+    tasks: state.tasks.map((task) => {
+      if (!idSet.has(task.id)) return task
+      const next = { ...task, channel: channel ?? undefined }
+      changed.push(next)
+      return next
+    }),
+  }))
+  for (const task of changed) await putTask(task)
+  useStore.getState().showToast(
+    channel
+      ? `已把 ${changed.length} 个任务设为「${channelLabel(channel)}」`
+      : `已清空 ${changed.length} 个任务的渠道`,
+    'success',
+  )
+  return changed.length
+}
+
 /** 删除所有失败任务 */
-export async function clearFailedTasks(taskIds?: string[]) {
-  const targetTaskIds = taskIds ? new Set(taskIds) : null
+export async function clearFailedTasks(taskIds?: string[]) {  const targetTaskIds = taskIds ? new Set(taskIds) : null
   const failedTasks = useStore.getState().tasks
     .filter((task) => taskMatchesFilterStatus(task, 'error') && (!targetTaskIds || targetTaskIds.has(task.id)))
   const failedTaskIds = failedTasks

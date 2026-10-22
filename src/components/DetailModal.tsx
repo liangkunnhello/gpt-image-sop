@@ -4,6 +4,7 @@ import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
 import { directionPath, useSopStore } from '../lib/sopStore'
+import { channelLabel } from '../lib/channel'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
@@ -1122,6 +1123,19 @@ export default function DetailModal() {
                 {getTaskPromptText(task.prompt, task.inputImageIds.length) || '(无提示词)'}
               </p>
             )}
+            {/* 渠道独立展示：不依赖有没有 SOP 正文，普通任务也要能看到 */}
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
+              <span>
+                归属：{task.sopDirectionId ? (directionPath(sopDirections, task.sopDirectionId) || '未归属') : '未归属'}
+              </span>
+              <span className="text-gray-300 dark:text-gray-600">·</span>
+              <span>
+                渠道：
+                <span className={task.channel ? 'font-medium text-blue-600 dark:text-blue-400' : 'text-gray-400'}>
+                  {channelLabel(task.channel)}
+                </span>
+              </span>
+            </div>
             {task.sopText && (
               <div className="mb-4 overflow-hidden rounded-lg border border-gray-200 dark:border-white/[0.08]">
                 <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 dark:bg-white/[0.04]">

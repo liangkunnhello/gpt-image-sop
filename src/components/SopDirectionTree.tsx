@@ -4,7 +4,8 @@ import type { SopDirectionNode } from '../types'
 import { useStore } from '../store'
 import { groupSopTasks } from '../lib/sopGroup'
 import { directionPath, useSopStore, UNASSIGNED_FILTER } from '../lib/sopStore'
-import { trashNodeWithTasks } from '../lib/directionTree'
+import { effectiveNodeKind, trashNodeWithTasks } from '../lib/directionTree'
+import { taskMatchesChannel } from '../lib/channel'
 import { ensureImageCached } from '../lib/imageCache'
 import PostTemplateModal from './PostTemplateModal'
 import MoveNodeModal from './MoveNodeModal'
@@ -39,6 +40,7 @@ export default function SopDirectionTree() {
   const renameNode = useSopStore((s) => s.renameNode)
   const setTrashOpen = useSopStore((s) => s.setTrashOpen)
   const tasks = useStore((s) => s.tasks)
+  const channelFilter = useStore((s) => s.channelFilter)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
 
@@ -111,12 +113,17 @@ export default function SopDirectionTree() {
     return () => clearTimeout(timer)
   }, [activeDirectionId, currentPathIds])
 
-  const categories = useMemo(() => directions.filter((node) => node.kind === 'category' && !node.deletedAt), [directions])
+  // 顶层节点就算 kind 写错过也得能显示出来，否则节点在树里「消失」
+  const categories = useMemo(() => directions.filter((node) => !node.parentId && !node.deletedAt), [directions])
   const childrenOf = (id: string) => directions.filter((node) => node.parentId === id && !node.deletedAt)
   const promptCount = (productId: string) => systemPrompts.filter((item) => item.productId === productId).length
 
   // 数量统一按「任务卡」算：SOP 一卡多条提示词也只算一张，跟画廊里看到的卡片数一致
-  const cards = useMemo(() => groupSopTasks(tasks), [tasks])
+  // 并且跟随渠道筛选：否则选了渠道后，左边数字和右边列表对不上
+  const cards = useMemo(
+    () => groupSopTasks(tasks.filter((task) => taskMatchesChannel(task, channelFilter))),
+    [tasks, channelFilter],
+  )
 
   const counts = useMemo(() => {
     const map = new Map<string, number>()
@@ -161,13 +168,21 @@ export default function SopDirectionTree() {
     setAddingUnder({ parentId, kind })
     setDraft('')
     setAdding(true)
-    // 新建在多层级下，需要先展开父级，否则输入框藏在折叠里
-    if (parentId) setFolded((prev) => {
-      if (!prev.has(parentId)) return prev
-      const next = new Set(prev)
-      next.delete(parentId)
-      return next
-    })
+    // 新建在多层级下，需要先展开父级和它的祖先，否则输入框藏在折叠里
+    if (parentId) {
+      setFolded((prev) => {
+        const next = new Set(prev)
+        let cursorId: string | null = parentId
+        let guard = 0
+        while (cursorId && guard < 10) {
+          next.delete(cursorId)
+          const current: SopDirectionNode | undefined = directions.find((item) => item.id === cursorId)
+          cursorId = current?.parentId ?? null
+          guard += 1
+        }
+        return next.size === prev.size ? prev : next
+      })
+    }
   }
 
   const submitDraft = () => {
@@ -181,6 +196,46 @@ export default function SopDirectionTree() {
     setDraft('')
     setAdding(false)
     setAddingUnder(null)
+  }
+
+  /**
+   * 新建输入框：直接渲染在目标节点下方。
+   * 早先统一放在列表最底部，从右键菜单点「新建方向」后输入框在看不见的地方，
+   * 用户会以为没有反应 —— 所以这里跟着父节点走。
+   */
+  const renderAddInput = (parentId: string | null) => {
+    const target = addingUnder?.parentId ?? null
+    if (!adding || target !== parentId) return null
+    const parentName = parentId ? directions.find((node) => node.id === parentId)?.name ?? '' : ''
+    const placeholder = !addingUnder || addingUnder.parentId === null
+      ? '新建业务线（类目），回车确认'
+      : `在「${parentName}」下新建${addingUnder.kind === 'product' ? '产品' : '方向'}`
+    return (
+      <div className="mt-1 mb-0.5 px-1">
+        <input
+          key={parentId ?? '__root__'}
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submitDraft()
+            if (e.key === 'Escape') {
+              setAdding(false)
+              setAddingUnder(null)
+            }
+          }}
+          onBlur={() => {
+            if (!draft.trim()) {
+              setAdding(false)
+              setAddingUnder(null)
+            }
+          }}
+          onFocus={(e) => e.currentTarget.scrollIntoView({ block: 'nearest' })}
+          placeholder={placeholder}
+          className="w-full rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700 placeholder:text-gray-300 focus:border-blue-400 focus:outline-none dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+        />
+      </div>
+    )
   }
 
   /** 删除：二次确认 → 节点连子孙 + 归属它的任务卡一起进回收站，可整批恢复 */
@@ -234,12 +289,16 @@ export default function SopDirectionTree() {
     showToast('已移动', 'success')
   }
 
+  /** 节点在树里的实际身份：按层级算，不信可能写错的 kind 字段（见 effectiveNodeKind） */
+  const kindOf = (node: SopDirectionNode) => effectiveNodeKind(directions, node.id)
+
   /** 右键菜单项：按节点类型给可用操作 */
   const menuItemsOf = (node: SopDirectionNode) => {
     const items: Array<{ label: string; danger?: boolean; onSelect: () => void }> = []
-    if (node.kind === 'category') {
+    const kind = kindOf(node)
+    if (kind === 'category') {
       items.push({ label: '新建产品', onSelect: () => beginAdd(node.id, 'product') })
-    } else if (node.kind === 'product') {
+    } else if (kind === 'product') {
       items.push({ label: '新建方向', onSelect: () => beginAdd(node.id, 'direction') })
       items.push({
         label: '后处理模板',
@@ -253,7 +312,7 @@ export default function SopDirectionTree() {
         if (next?.trim()) renameNode(node.id, next)
       },
     })
-    if (node.kind !== 'category') {
+    if (kind !== 'category') {
       items.push({ label: '移动到…', onSelect: () => setMoveTarget(node) })
     }
     items.push({ label: '删除', danger: true, onSelect: () => trashNode(node) })
@@ -328,7 +387,7 @@ export default function SopDirectionTree() {
   const renderDirection = (node: SopDirectionNode) => {
     const isCurrent = node.id === activeDirectionId
     return (
-      <div key={node.id} className="flex items-center pl-8">
+      <div key={node.id} className="group flex items-center pl-8">
         <button
           type="button"
           data-current={isCurrent || undefined}
@@ -508,7 +567,7 @@ export default function SopDirectionTree() {
                 const isFolded = folded.has(category.id)
                 return (
                   <div key={category.id} className="mb-0.5">
-                    <div className="flex items-center">
+                    <div className="group flex items-center">
                       <button type="button" onClick={() => toggle(category.id)} className="flex h-7 w-5 shrink-0 items-center justify-center text-gray-400">
                         <Chevron open={!isFolded} />
                       </button>
@@ -526,6 +585,20 @@ export default function SopDirectionTree() {
                         <span className="min-w-0 flex-1 truncate">{category.name}</span>
                         {tailBadge(counts.get(category.id) ?? 0)}
                       </button>
+                      {/* 悬停直接给个「加产品」，不用记着去右键 */}
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          beginAdd(category.id, 'product')
+                        }}
+                        title="在这个业务线下新建产品"
+                        className="ml-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-gray-300 hover:bg-gray-100 hover:text-gray-700 group-hover:flex dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3 w-3">
+                          <path strokeLinecap="round" d="M12 5v14M5 12h14" />
+                        </svg>
+                      </button>
                     </div>
 
                     {!isFolded && (
@@ -534,7 +607,7 @@ export default function SopDirectionTree() {
                           const productFolded = folded.has(product.id)
                           return (
                             <div key={product.id} className="mb-0.5">
-                              <div className="flex items-center">
+                              <div className="group flex items-center">
                                 <button type="button" onClick={() => toggle(product.id)} className="flex h-7 w-5 shrink-0 items-center justify-center text-gray-400">
                                   <Chevron open={!productFolded} />
                                 </button>
@@ -553,51 +626,38 @@ export default function SopDirectionTree() {
                                   {promptCount(product.id) > 0 && promptBadge(promptCount(product.id))}
                                   {tailBadge(counts.get(product.id) ?? 0)}
                                 </button>
+                                {/* 悬停直接给个「加方向」，不用记着去右键 */}
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    beginAdd(product.id, 'direction')
+                                  }}
+                                  title="在这个产品下新建方向"
+                                  className="ml-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-gray-300 hover:bg-gray-100 hover:text-gray-700 group-hover:flex dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
+                                >
+                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3 w-3">
+                                    <path strokeLinecap="round" d="M12 5v14M5 12h14" />
+                                  </svg>
+                                </button>
                               </div>
                               {!productFolded && (
                                 <div className="ml-[13px] border-l border-gray-100 pl-2 dark:border-white/[0.06]">
                                   {childrenOf(product.id).map(renderDirection)}
+                                  {renderAddInput(product.id)}
                                 </div>
                               )}
                             </div>
                           )
                         })}
+                        {renderAddInput(category.id)}
                       </div>
                     )}
                   </div>
                 )
               })}
 
-              {adding && (
-                <div className="mt-2 px-1">
-                  <input
-                    autoFocus
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') submitDraft()
-                      if (e.key === 'Escape') {
-                        setAdding(false)
-                        setAddingUnder(null)
-                      }
-                    }}
-                    onBlur={() => {
-                      if (!draft.trim()) {
-                        setAdding(false)
-                        setAddingUnder(null)
-                      }
-                    }}
-                    placeholder={
-                      !addingUnder || addingUnder.parentId === null
-                        ? '新建业务线（类目），回车确认'
-                        : `在「${directions.find((n) => n.id === addingUnder.parentId)?.name ?? ''}」下新建${
-                          addingUnder.kind === 'product' ? '产品' : '方向'
-                        }`
-                    }
-                    className="w-full rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700 placeholder:text-gray-300 focus:border-blue-400 focus:outline-none dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
-                  />
-                </div>
-              )}
+              {renderAddInput(null)}
             </div>
           </>
         )}

@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, assignTasksDirection, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
+import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, assignTasksDirection, assignTasksChannel, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
 import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
@@ -29,6 +29,7 @@ import SopSystemPromptPicker from './SopSystemPromptPicker'
 import VariablePromptPicker from './VariablePromptPicker'
 import { useSopStore } from '../lib/sopStore'
 import { buildPromptBundle } from '../lib/promptBundle'
+import { taskMatchesChannel } from '../lib/channel'
 import { enqueueSopJobs, splitEven } from '../lib/sopPipeline'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
@@ -132,12 +133,15 @@ export default function InputBar() {
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const openFavoritePicker = useStore((s) => s.openFavoritePicker)
   const searchQuery = useStore((s) => s.searchQuery)
+  const channelFilter = useStore((s) => s.channelFilter)
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
     const q = searchQuery.trim().toLowerCase()
     
     return sorted.filter((t) => {
+      // 渠道筛选与业务树筛选并列生效
+      if (!taskMatchesChannel(t, channelFilter)) return false
       if (filterFavorite) {
         if (!t.isFavorite) return false
         if (activeFavoriteCollectionId && activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(t, defaultFavoriteCollectionId).includes(activeFavoriteCollectionId)) return false
@@ -145,7 +149,7 @@ export default function InputBar() {
       if (!taskMatchesFilterStatus(t, filterStatus)) return false
       return taskMatchesSearchQuery(t, q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId, defaultFavoriteCollectionId])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId, defaultFavoriteCollectionId, channelFilter])
 
   const inCollectionOverview = filterFavorite && !activeFavoriteCollectionId
 
@@ -223,9 +227,11 @@ export default function InputBar() {
     setAssignOpen(true)
   }, [])
 
-  const handleConfirmAssign = useCallback((directionId: string | null) => {
+  const handleConfirmAssign = useCallback((directionId: string | null, channel?: string | null) => {
     setAssignOpen(false)
     void assignTasksDirection(selectedTaskIds, directionId)
+    // undefined = 用户没碰渠道区，不要误清空；null = 明确要清空
+    if (channel !== undefined) void assignTasksChannel(selectedTaskIds, channel)
   }, [selectedTaskIds])
 
   const handleDownloadSelected = useCallback(async () => {

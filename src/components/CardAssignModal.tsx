@@ -1,4 +1,4 @@
-import { assignTasksDirection, useStore } from '../store'
+import { assignTasksChannel, assignTasksDirection, useStore } from '../store'
 import { useSopStore } from '../lib/sopStore'
 import AssignDirectionModal from './AssignDirectionModal'
 
@@ -24,13 +24,15 @@ export default function CardAssignModal() {
     <AssignDirectionModal
       count={taskIds.length}
       onClose={closeAssignPicker}
-      onConfirm={(directionId) => {
+      onConfirm={(directionId, channel) => {
         if (directionId && !aliveIds.has(directionId)) {
           showToast('这个方向已被删除，请另选一个', 'error')
           return
         }
         closeAssignPicker()
         void assignTasksDirection(taskIds, directionId)
+        // undefined = 用户没碰渠道区，不要误清空；null = 明确要清空
+        if (channel !== undefined) void assignTasksChannel(taskIds, channel)
       }}
     />
   )
