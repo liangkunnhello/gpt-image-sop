@@ -11,6 +11,8 @@ export interface PersistedAppState {
   dismissedPresetProfileIds?: string[]
   dismissedPresetProviderIds?: string[]
   params: TaskParams
+  /** 普通模式的发图方式，默认批量 */
+  plainImageMode?: 'merge' | 'batch'
   prompt?: string
   inputImages?: InputImage[]
   dismissedCodexCliPrompts: string[]
@@ -48,6 +50,7 @@ export type NormalizedPersistedAppState = PersistedAppState & {
   previousPresetConfig: PresetConfig | null
   dismissedPresetProfileIds: string[]
   dismissedPresetProviderIds: string[]
+  plainImageMode: 'merge' | 'batch'
   prompt: string
   inputImages: InputImage[]
   maskDraft: MaskDraft | null
@@ -98,6 +101,7 @@ export function createPersistedState(state: PersistedStateSource, includeLegacyA
     dismissedPresetProfileIds: state.dismissedPresetProfileIds ?? [],
     dismissedPresetProviderIds: state.dismissedPresetProviderIds ?? [],
     params: state.params,
+    plainImageMode: state.plainImageMode ?? 'batch',
     ...(settings.persistInputOnRestart && (state.appMode === 'gallery' || galleryInputDraft)
       ? {
           prompt: galleryInputDraft?.prompt ?? '',
@@ -204,6 +208,7 @@ export function normalizePersistedState(
       dismissedPresetProfileIds: normalizeStringArray(persistedState.dismissedPresetProfileIds, fallback.dismissedPresetProfileIds ?? []),
       dismissedPresetProviderIds: normalizeStringArray(persistedState.dismissedPresetProviderIds, fallback.dismissedPresetProviderIds ?? []),
       params: normalizeParams(persistedState.params, fallback.params),
+      plainImageMode: persistedState.plainImageMode === 'merge' ? 'merge' : 'batch',
       dismissedCodexCliPrompts: normalizeStringArray(persistedState.dismissedCodexCliPrompts, fallback.dismissedCodexCliPrompts),
       appMode,
       galleryInputDraft: galleryInputDraft && !isEmptyAgentInputDraft(galleryInputDraft) ? galleryInputDraft : null,

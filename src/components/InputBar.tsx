@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, assignTasksDirection, assignTasksChannel, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
+import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, createInputImageFromFile, removeMultipleTasks, assignTasksDirection, assignTasksChannel, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
 import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
@@ -28,6 +28,7 @@ import VariableRunModal, { type VariableRunOptions } from './VariableRunModal'
 import SopPresetPicker, { resolvePickedPreset } from './SopPresetPicker'
 import SopSystemPromptPicker from './SopSystemPromptPicker'
 import VariablePromptPicker from './VariablePromptPicker'
+import PlainImageModeSwitch from './PlainImageModeSwitch'
 import { useSopStore } from '../lib/sopStore'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { buildPromptBundle } from '../lib/promptBundle'
@@ -515,6 +516,15 @@ export default function InputBar() {
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
   const sopMode = useSopStore((s) => s.sopMode)
   const variableMode = useSopStore((s) => s.variableMode)
+  /** 普通模式：既不跑 SOP 也不跑变量，手写提示词直接出图 */
+  const plainMode = !sopMode && !variableMode
+  const plainImageMode = useStore((s) => s.plainImageMode)
+  const fixedImages = useStore((s) => s.fixedImages)
+  const addFixedImage = useStore((s) => s.addFixedImage)
+  const removeFixedImage = useStore((s) => s.removeFixedImage)
+  const clearFixedImages = useStore((s) => s.clearFixedImages)
+  // 固定图只在普通模式的融图下有意义；批量模式所有图都是变量图
+  const showFixedImages = plainMode && plainImageMode === 'merge'
   // 批量进行中暂停画廊和 Agent 的提交，需等待完成或停止后再提交
   const batchRunning = Boolean(batchProgress)
   // SOP / 变量模式靠参考图与提示词驱动，输入框可以为空，发送按钮常亮（缺图时点一下会提示）
@@ -638,8 +648,13 @@ export default function InputBar() {
       setSopSplitOpen(true)
       return
     }
-    void submitTask()
-  }, [appMode, sopMode, variableMode, inputImages.length])
+    // 普通模式：选中的卖点 / 风格拼在提示词前面一起发出去
+    const presetPrefix = [
+      pickedPoint?.content ? `卖点：${pickedPoint.content}` : '',
+      pickedStyle?.content ? `风格：${pickedStyle.content}` : '',
+    ].filter(Boolean).join('\n')
+    void submitTask({ promptPrefix: presetPrefix })
+  }, [appMode, sopMode, variableMode, inputImages.length, pickedPoint, pickedStyle])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -1813,6 +1828,66 @@ export default function InputBar() {
     )
   }
 
+  /**
+   * 固定图：普通模式 + 融图时才有意义，融图拆分组时每个请求都会带上这几张。
+   * 批量模式下所有图都是变量图，这个区不显示。
+   */
+  const renderFixedImages = () => {
+    if (!showFixedImages) return null
+    return (
+      <div className="mb-3">
+        <div className="mb-1 flex items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
+          <span className="font-medium text-gray-500 dark:text-gray-400">固定图</span>
+          <span>融图时每个请求都会带上</span>
+          {fixedImages.length > 0 && (
+            <button type="button" onClick={clearFixedImages} className="ml-auto text-gray-400 hover:text-red-500">
+              清空
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {fixedImages.map((img, idx) => (
+            <div
+              key={img.id}
+              className="group relative h-[52px] w-[52px] shrink-0 overflow-hidden rounded-xl border border-gray-200 dark:border-white/10"
+            >
+              <img src={img.dataUrl} alt={`固定图 ${idx + 1}`} className="h-full w-full object-cover" />
+              <button
+                type="button"
+                onClick={() => removeFixedImage(idx)}
+                title="移除"
+                className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-bl bg-black/60 text-[10px] leading-none text-white opacity-0 transition-opacity group-hover:opacity-100"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <label
+            className="flex h-[52px] w-[52px] shrink-0 cursor-pointer items-center justify-center rounded-xl border border-dashed border-gray-300 text-gray-400 transition-colors hover:border-blue-300 hover:text-blue-500 dark:border-white/[0.12] dark:text-gray-500"
+            title="添加固定图"
+          >
+            <span className="text-lg leading-none">+</span>
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = [...(e.target.files ?? [])]
+                e.target.value = ''
+                for (const file of files) {
+                  void createInputImageFromFile(file).then((image) => {
+                    if (image) addFixedImage(image)
+                  })
+                }
+              }}
+            />
+          </label>
+        </div>
+      </div>
+    )
+  }
+
   const renderParams = () => (
     <InputParamsPanel
       params={params}
@@ -1947,6 +2022,7 @@ export default function InputBar() {
               renderImageThumbs()
             )
           )}
+          {renderFixedImages()}
 
           {sopMode && currentDirection && currentProduct && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -1961,6 +2037,19 @@ export default function InputBar() {
               <VariablePromptPicker scopeIds={sopScopeIds} directionId={currentDirection.id} />
               <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} scopeIds={sopScopeIds} />
               <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} scopeIds={sopScopeIds} />
+            </div>
+          )}
+          {/* 普通模式：卖点 / 风格保留，系统提示词的位置换成「融图 / 批量」切换。
+              模式切换不依赖业务归属，没选方向也能先定发图方式。 */}
+          {plainMode && (
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <PlainImageModeSwitch />
+              {currentDirection && currentProduct && (
+                <>
+                  <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} scopeIds={sopScopeIds} />
+                  <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} scopeIds={sopScopeIds} />
+                </>
+              )}
             </div>
           )}
 

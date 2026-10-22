@@ -28,6 +28,7 @@ import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPre
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { collectSopLibrary, mergeSopLibrary, useSopStore } from './lib/sopStore'
 import { channelLabel, taskMatchesChannel } from './lib/channel'
+import { planPlainRequests, type PlainImageMode } from './lib/plainImagePlan'
 import { isTaskUnread } from './lib/unread'
 import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
 import {
@@ -336,6 +337,18 @@ interface AppState {
   clearInputImages: () => void
   setInputImages: (imgs: InputImage[], options?: { equivalentImageIds?: Record<string, string> }) => void
   moveInputImage: (fromIdx: number, toIdx: number) => void
+  /**
+   * 普通模式的发图方式：
+   * batch = 每张变量图各发一次请求；merge = 一次请求带上整组图。
+   * 默认 batch，和「三模式」里的普通模式定位一致。
+   */
+  plainImageMode: PlainImageMode
+  setPlainImageMode: (mode: PlainImageMode) => void
+  /** 固定图：融图模式下每个请求都会带上；批量模式不参与 */
+  fixedImages: InputImage[]
+  addFixedImage: (img: InputImage) => void
+  removeFixedImage: (idx: number) => void
+  clearFixedImages: () => void
   maskDraft: MaskDraft | null
   setMaskDraft: (draft: MaskDraft | null) => void
   clearMaskDraft: () => void
@@ -748,6 +761,18 @@ export const useStore = create<AppState>()(
       promptSelection: null,
       setPromptSelection: (selection) => set((s) => ({ promptSelection: { ...selection, prompt: s.prompt } })),
       inputImages: [],
+      plainImageMode: 'batch',
+      setPlainImageMode: (plainImageMode) => set({ plainImageMode }),
+      fixedImages: [],
+      addFixedImage: (img) =>
+        set((s) => (s.fixedImages.some((item) => item.id === img.id) ? s : { fixedImages: [...s.fixedImages, img] })),
+      removeFixedImage: (idx) =>
+        set((s) => ({ fixedImages: s.fixedImages.filter((_, i) => i !== idx) })),
+      clearFixedImages: () =>
+        set((s) => {
+          for (const img of s.fixedImages) deleteCachedImage(img.id)
+          return { fixedImages: [] }
+        }),
       addInputImage: (img) =>
         set((s) => {
           if (s.inputImages.find((i) => i.id === img.id)) return s
@@ -1766,7 +1791,7 @@ export async function initStore() {
 }
 
 /** 提交新任务 */
-export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
+export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean; promptPrefix?: string } = {}) {
   const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, reusedTaskApiModel, showToast, setConfirmDialog } =
     useStore.getState()
 
@@ -1871,20 +1896,23 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState().setParams(normalizedParamPatch)
   }
 
-  const startTask = async (taskPrompt: string) => {
-    const transparentMeta = taskParams.transparent_output && activeProfile.transparentBackgroundMethod === 'local'
+  // 普通模式拆请求时也要算进批量：否则 10 个请求会弹 10 次完成提示、自动打开 10 次详情
+  let requestBatchId = batchId
+  const startTask = async (taskPrompt: string, images: InputImage[] = orderedInputImages, n?: number) => {
+    const paramsForTask = n == null ? taskParams : { ...taskParams, n }
+    const transparentMeta = paramsForTask.transparent_output && activeProfile.transparentBackgroundMethod === 'local'
       ? createTransparentOutputMeta(taskPrompt)
       : null
     const task: TaskRecord = {
       id: genId(),
       prompt: taskPrompt,
-      params: taskParams,
+      params: paramsForTask,
       apiProvider: activeProfile.provider,
       apiProfileId: activeProfile.id,
       apiProfileName: activeProfile.name,
       apiMode: activeProfile.apiMode,
       apiModel: activeProfile.model,
-      inputImageIds: orderedInputImages.map((i) => i.id),
+      inputImageIds: images.map((i) => i.id),
       maskTargetImageId,
       maskImageId,
       transparentOutput: transparentMeta?.transparentOutput,
@@ -1900,16 +1928,76 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
     useStore.getState().setTasks([task, ...useStore.getState().tasks])
     await putTask(task)
-    if (batchId) batchTaskIds.add(task.id)
+    if (requestBatchId) batchTaskIds.add(task.id)
     // 异步调用 API
     executeTask(task.id)
     return task.id
   }
 
+  // 普通模式：数量 = 请求次数。融图把变量图切成 N 组、每组再带全部固定图；
+  // 批量每个请求一张变量图，不够就循环取。批量提示词模式不叠加这套拆分。
+  const finalPrompt = options.promptPrefix?.trim()
+    ? `${options.promptPrefix.trim()}\n\n${prompt.trim()}`
+    : prompt.trim()
+  const sopState = useSopStore.getState()
+  const plainPlan = !sopState.sopMode && !sopState.variableMode && !batchPrompts.length
+    ? planPlainRequests({
+        mode: useStore.getState().plainImageMode,
+        count: taskParams.n,
+        variableImages: orderedInputImages,
+        fixedImages: useStore.getState().fixedImages,
+      })
+    : null
+
+  if (plainPlan) {
+    const planBatchId = beginBatch(plainPlan.length)
+    requestBatchId = planBatchId
+    const limit = normalizedSettings.batchPromptConcurrencyLimited
+      ? Math.max(1, normalizedSettings.batchPromptConcurrency)
+      : plainPlan.length
+    let settled = 0
+    useStore.getState().setBatchProgress({ total: plainPlan.length, started: 0, finished: 0 })
+    await runWithConcurrency(
+      plainPlan,
+      limit,
+      async (item) => {
+        try {
+          const taskId = await startTask(finalPrompt, item.images, 1)
+          await waitForTaskSettled(taskId, () => planBatchId !== activeBatchId)
+        } catch (err) {
+          console.error('提交图片请求失败', err)
+        }
+        settled += 1
+        useStore.getState().setBatchProgress({ total: plainPlan.length, started: settled, finished: settled })
+      },
+      () => planBatchId !== activeBatchId,
+    )
+    if (planBatchId === activeBatchId) {
+      endBatch(planBatchId)
+      const modeLabel = useStore.getState().plainImageMode === 'merge' ? '融图' : '批量'
+      const usedCount = plainPlan.reduce((sum, item) => sum + item.images.length, 0)
+      // 批量模式下数量就是请求次数，图多出来时要说清楚，否则像是把图吞了
+      const unused = useStore.getState().plainImageMode === 'batch'
+        ? Math.max(0, new Set(orderedInputImages.map((item) => item.id)).size - plainPlan.length)
+        : 0
+      useStore.getState().showToast(
+        `已提交 ${plainPlan.length} 个请求（${modeLabel}，共 ${usedCount} 张图）${unused > 0 ? `；还有 ${unused} 张图没用上，调高数量或切融图` : ''}`,
+        'success',
+      )
+    }
+    if (settings.clearInputAfterSubmit) {
+      useStore.getState().setPrompt('')
+      useStore.getState().clearInputImages()
+      useStore.getState().clearFixedImages()
+    }
+    useStore.getState().setReusedTaskApiProfile(null)
+    return
+  }
+
   if (batchPrompts.length) {
     useStore.getState().showToast(`已开始批量提交 ${batchPrompts.length} 条提示词`, 'success')
   } else {
-    await startTask(prompt.trim())
+    await startTask(finalPrompt)
     useStore.getState().showToast('任务已提交', 'success')
   }
 
@@ -2332,6 +2420,8 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
   for (const img of inputImages) stillUsed.add(img.id)
+  // 固定图还在输入栏里等着用，别当孤儿图清掉
+  for (const img of useStore.getState().fixedImages) stillUsed.add(img.id)
   // 后处理模板的预览底图是用户挑的，被引用的图不能被当孤儿清掉
   for (const byRatio of Object.values(useSopStore.getState().postPreviewImages)) {
     for (const imgId of Object.values(byRatio)) stillUsed.add(imgId)
