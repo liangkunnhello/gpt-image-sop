@@ -27,7 +27,7 @@ export default function ChannelFilterBar() {
   }`
 
   return (
-    <div data-no-drag-select className="mb-3 flex flex-wrap items-center gap-1">
+    <div data-no-drag-select className="flex flex-wrap items-center gap-1">
       <span className="shrink-0 pr-1 text-[11px] text-gray-400 dark:text-gray-500">渠道</span>
 
       {CHANNELS.map((item) => (

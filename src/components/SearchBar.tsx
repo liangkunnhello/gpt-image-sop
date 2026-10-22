@@ -132,8 +132,6 @@ export default function SearchBar() {
 
   return (
     <div ref={rootRef} data-no-drag-select className="mt-6 mb-4">
-      {/* 渠道筛选：横排标签，与侧栏业务树并列、取交集 */}
-      <ChannelFilterBar />
       <div className="flex gap-3">
       <div className="flex gap-2 flex-shrink-0 z-20">
         <SearchActionButton
@@ -209,6 +207,11 @@ export default function SearchBar() {
           className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
         />
       </div>
+      </div>
+      {/* 渠道筛选：横排标签，与侧栏业务树并列、取交集。
+          放在搜索行下方，让搜索框留在最顶端，筛选器紧贴它作用的卡片列表 */}
+      <div className="mt-2.5">
+        <ChannelFilterBar />
       </div>
     </div>
   )
