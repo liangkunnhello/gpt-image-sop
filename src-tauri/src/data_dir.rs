@@ -1153,7 +1153,7 @@ mod dialog {
 
     use super::{Choice, Problem, Progress, COMMITTED};
 
-    const TITLE: &str = "GPT Image Playground";
+    const TITLE: &str = "GPT Image SOP";
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(Some(0)).collect()
