@@ -553,7 +553,7 @@ export default function InputBar() {
   const promptPlaceholder = variableMode
     ? '变量模式：可留空，拖入参考图后直接发送...'
     : sopMode
-    ? 'SOP 模式：可留空，拖入参考图后直接发送...'
+    ? 'SOP 模式：可留空，拖入参考图或直接靠卖点发送...'
     : batchEnabled
     ? '每条提示词之间空两行分隔，可输入 @ 来指定参考图...'
     : '描述你想生成的图片，可输入 @ 来指定参考图...'
@@ -588,13 +588,13 @@ export default function InputBar() {
   /** 只负责把任务卡推进后台队列，立即返回，不阻塞输入和其他操作 */
   const runSop = useCallback((options: SopRunOptions) => {
     setSopSplitOpen(false)
-    if (!inputImages.length) return
     // 三个板块合成一份再发：卖点排最前并写死优先级，避免被系统提示词里的文案盖掉
     const bundle = buildPromptBundle({
       systemPrompt: options.systemPromptText,
       point: pickedPoint?.content,
       style: pickedStyle?.content,
     })
+    // 没有参考图时 splitEven 会返回一个空组：这一组只靠系统提示词与卖点反推文字版 SOP
     const groups = splitEven(inputImages, options.groupCount)
     enqueueSopJobs(groups.map((group, index) => ({
       label: `第 ${index + 1}/${groups.length} 张卡`,
@@ -645,10 +645,7 @@ export default function InputBar() {
       return
     }
     if (sopMode) {
-      if (!inputImages.length) {
-        useStore.getState().showToast('SOP 模式需要先拖入参考图', 'error')
-        return
-      }
+      // 参考图可以没有：只靠系统提示词与卖点也能反推一份文字版 SOP
       setSopSplitOpen(true)
       return
     }

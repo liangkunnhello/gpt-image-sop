@@ -77,11 +77,14 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const promptsPerGroup = useSopStore((s) => s.promptsPerGroup)
   const setPromptsPerGroup = useSopStore((s) => s.setPromptsPerGroup)
 
-  const groupCount = mode === 'one'
+  const hasImages = imageCount > 0
+  const groupCount = !hasImages
     ? 1
-    : mode === 'perImage'
-      ? imageCount
-      : Math.max(1, Math.min(Number(customCount) || 1, imageCount))
+    : mode === 'one'
+      ? 1
+      : mode === 'perImage'
+        ? imageCount
+        : Math.max(1, Math.min(Number(customCount) || 1, imageCount))
 
   const preview = splitEven(Array.from({ length: imageCount }, (_, i) => i + 1), groupCount)
     .map((group) => group.length)
@@ -97,8 +100,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
     }
   }, [postTemplates, productId])
 
-  // 系统提示词在外面选，这里不再拦截；有方向有图就能跑
-  const canRun = Boolean(currentDirectionId && imageCount > 0)
+  // 系统提示词在外面选，这里不再拦截；有方向就能跑，参考图可以没有（纯卖点生图）
+  const canRun = Boolean(currentDirectionId)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-6" onClick={onClose}>
@@ -156,42 +159,48 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             <span className="shrink-0 text-[11px] text-gray-400">在输入框上方切换</span>
           </div>
 
-          <div>
-            <div className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">分成几个任务卡</div>
-            <div className="flex flex-wrap gap-2">
-              {([
-                ['one', '1 张卡（共用一份 SOP）'],
-                ['perImage', `每张参考图一张卡（${imageCount} 张）`],
-                ['custom', '自定义'],
-              ] as Array<[SplitMode, string]>).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setMode(value)}
-                  className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
-                    mode === value
-                      ? 'border-blue-500 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'
-                      : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/[0.06]'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-              {mode === 'custom' && (
-                <input
-                  type="number"
-                  min={1}
-                  max={imageCount}
-                  value={customCount}
-                  onChange={(e) => setCustomCount(e.target.value)}
-                  className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
-                />
-              )}
+          {hasImages ? (
+            <div>
+              <div className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">分成几个任务卡</div>
+              <div className="flex flex-wrap gap-2">
+                {([
+                  ['one', '1 张卡（共用一份 SOP）'],
+                  ['perImage', `每张参考图一张卡（${imageCount} 张）`],
+                  ['custom', '自定义'],
+                ] as Array<[SplitMode, string]>).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setMode(value)}
+                    className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                      mode === value
+                        ? 'border-blue-500 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'
+                        : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/[0.06]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+                {mode === 'custom' && (
+                  <input
+                    type="number"
+                    min={1}
+                    max={imageCount}
+                    value={customCount}
+                    onChange={(e) => setCustomCount(e.target.value)}
+                    className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                  />
+                )}
+              </div>
+              <div className="mt-1.5 text-[11px] text-gray-400">
+                共 {groupCount} 张卡，参考图分配：{preview || '—'}
+              </div>
             </div>
-            <div className="mt-1.5 text-[11px] text-gray-400">
-              共 {groupCount} 张卡，参考图分配：{preview || '—'}
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+              没有参考图：将只依据系统提示词与卖点反推一份文字版 SOP，再按它写提示词。只能出 1 张卡。
             </div>
-          </div>
+          )}
 
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-gray-500 dark:text-gray-400">每张卡出几张图</span>
@@ -272,7 +281,9 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-gray-200 px-5 py-3 dark:border-white/[0.08]">
-          <span className="text-[11px] text-gray-400">参考图只用于反推 SOP，不参与最终生图。</span>
+          <span className="text-[11px] text-gray-400">
+            {hasImages ? '参考图只用于反推 SOP，不参与最终生图。' : '无参考图：只靠系统提示词与卖点反推 SOP。'}
+          </span>
           <button
             type="button"
             disabled={!canRun}

@@ -39,36 +39,61 @@ export function shrinkToDataUrl(dataUrl: string, max: number): Promise<string> {
 }
 
 /** 一轮纯文本/多模态对话，返回助手消息正文 */
-async function chat(profile: ApiProfile, messages: unknown[], timeoutSeconds = 240): Promise<string> {
+async function chat(
+  profile: ApiProfile,
+  messages: unknown[],
+  timeoutSeconds = 240,
+  /** 输出上限：写提示词时按条数放大，避免大数量被截断 */
+  maxTokens = 4000,
+): Promise<string> {
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const url = buildApiUrl(profile.baseUrl, 'chat/completions', proxyConfig, useApiProxy)
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000)
-  try {
-    const res = await apiFetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${profile.apiKey}` },
-      cache: 'no-store',
-      body: JSON.stringify({
-        // 优先用配置里指定的反推/写提示词模型
-        model: profile.sopTextModel || SOP_TEXT_MODEL,
-        messages,
-        temperature: 0.4,
-        max_tokens: 4000,
-        stream: false,
-        thinking: { type: 'disabled' },
-      }),
-      signal: controller.signal,
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}：${await getApiErrorMessage(res)}`)
-    const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
-    const content = String(json.choices?.[0]?.message?.content ?? '').trim()
-    if (!content) throw new Error('模型返回了空内容')
-    return content
-  } finally {
-    clearTimeout(timer)
+
+  /** 发一轮请求；max_tokens 被上游判超限时返回 400，由调用方决定是否降级 */
+  const send = async (limit: number) => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000)
+    try {
+      return await apiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${profile.apiKey}` },
+        cache: 'no-store',
+        body: JSON.stringify({
+          // 优先用配置里指定的反推/写提示词模型
+          model: profile.sopTextModel || SOP_TEXT_MODEL,
+          messages,
+          temperature: 0.4,
+          max_tokens: limit,
+          stream: false,
+          thinking: { type: 'disabled' },
+        }),
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(timer)
+    }
   }
+
+  let res = await send(maxTokens)
+  // 有些渠道认死的输出上限比我们要求的小，按原值再要一次会一直 400；降级到保守值重试一次
+  if (res.status === 400 && maxTokens > 4000) res = await send(4000)
+  if (!res.ok) throw new Error(`HTTP ${res.status}：${await getApiErrorMessage(res)}`)
+  const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
+  const content = String(json.choices?.[0]?.message?.content ?? '').trim()
+  if (!content) throw new Error('模型返回了空内容')
+  return content
+}
+
+/** 写提示词时每条预留的输出预算（中文提示词一条约 150~250 字，留足余量） */
+const TOKENS_PER_PROMPT = 500
+/** 单次请求的输出上限天花板，超过这个值很多渠道会直接 400 */
+const MAX_OUTPUT_TOKENS = 16000
+
+/** 按要写的条数算出这次请求的输出上限，条数越多给得越多 */
+export function tokensForPrompts(count: number): number {
+  const need = Math.max(1, Math.round(count) || 1) * TOKENS_PER_PROMPT
+  return Math.min(MAX_OUTPUT_TOKENS, Math.max(4000, need))
 }
 
 /** 把列表尽量平均分成 groups 组，先分的组多分余数 */
@@ -86,12 +111,9 @@ export function splitEven<T>(items: T[], groups: number): T[][] {
   return out
 }
 
-/** 反推 SOP 的系统提示词；单独导出便于测试哪些规则被写进去了 */
-export function buildSopSystemPrompt(ignoreCompliance: boolean, useImageSellingPoints: boolean, avoidCta = false) {
+/** 反推 SOP 的公共规则；有图/无图两种来源共用，避免两份规则写岔 */
+function sopRuleLines(ignoreCompliance: boolean, useImageSellingPoints: boolean, avoidCta = false) {
   return [
-    '你是广告设计团队的资深生图指导。用户会给你若干张参考图，你要从这些图里反推出一套可复用的「生图 SOP」。',
-    'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
-    '只描述你从参考图里真实观察到的规律，不要编造参考图里没有的品牌、价格或功效。',
     ignoreCompliance
       ? '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要写进 SOP，也不要要求在生成的图上出现。'
       : '',
@@ -102,8 +124,36 @@ export function buildSopSystemPrompt(ignoreCompliance: boolean, useImageSellingP
       ? '参考图里的按钮、悬浮球、进度条、返回箭头、开关、卡片跳转等「仿系统界面 / 可点击」的设计元素，一律不要写进 SOP；SOP 里要明确列为禁忌：不画按钮、不画手指点击示意、不加指向性的箭头或手势，也不写「立即领取」「点击查看」「滑动解锁」「下载App」这类引导点击的文案。'
       : '',
     '文字规范要按卖点条数定义槽位：有几条卖点就排几个文字位，不要设计固定数量的装饰性文字位；卖点少于槽位时删掉多余槽位或改用图形、留白，不能靠重复同一句卖点把版面填满。',
-    '输出 Markdown，包含以下小节：## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌。',
-    '不要输出任何解释性开场白。',
+  ].filter(Boolean)
+}
+
+const SOP_TAIL_LINES = [
+  '输出 Markdown，包含以下小节：## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌。',
+  '不要输出任何解释性开场白。',
+]
+
+/** 反推 SOP 的系统提示词；单独导出便于测试哪些规则被写进去了 */
+export function buildSopSystemPrompt(ignoreCompliance: boolean, useImageSellingPoints: boolean, avoidCta = false) {
+  return [
+    '你是广告设计团队的资深生图指导。用户会给你若干张参考图，你要从这些图里反推出一套可复用的「生图 SOP」。',
+    'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
+    '只描述你从参考图里真实观察到的规律，不要编造参考图里没有的品牌、价格或功效。',
+    ...sopRuleLines(ignoreCompliance, useImageSellingPoints, avoidCta),
+    ...SOP_TAIL_LINES,
+  ].filter(Boolean).join('\n')
+}
+
+/**
+ * 没有参考图时的 SOP 系统提示词：只凭卖点与风格要求设计一份文字版 SOP。
+ * 与有图版本的差别只在「来源」——规则与输出格式完全一致，保证后续写提示词不用分叉。
+ */
+export function buildTextSopSystemPrompt(ignoreCompliance: boolean, useImageSellingPoints: boolean, avoidCta = false) {
+  return [
+    '你是广告设计团队的资深生图指导。本次用户没有提供参考图，只给了卖点文案与风格要求，你要仅凭这些文字设计出一套可复用的「生图 SOP」。',
+    'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
+    '所有画面设定都必须能用用户给的卖点与风格要求推出来，不要编造用户没提到的品牌、价格、功效、认证或数据。',
+    ...sopRuleLines(ignoreCompliance, useImageSellingPoints, avoidCta),
+    ...SOP_TAIL_LINES,
   ].filter(Boolean).join('\n')
 }
 
@@ -168,6 +218,25 @@ export async function generateSop(
 ): Promise<string> {
   const maxSide = imageDataUrls.length > MANY_IMAGE_THRESHOLD ? 768 : MODEL_MAX_SIDE
   const images = await Promise.all(imageDataUrls.map((url) => shrinkToDataUrl(url, maxSide)))
+
+  // 没有参考图：仅凭系统提示词与卖点反推文字版 SOP，规则与有图版一致
+  if (!images.length) {
+    return chat(profile, [
+      { role: 'system', content: buildTextSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta) },
+      {
+        role: 'user',
+        content: [
+          '根据下面的要求与卖点，设计一套生图 SOP。',
+          systemPrompt.trim() ? `\n【用户给定的要求与文案】\n${systemPrompt.trim()}` : '',
+          copyText.trim()
+            ? '\n注意：「文案」那一段是要印在图上、必须逐字使用的文字，请原样抄进 SOP 的文字规范里，不要改写或省略。'
+            : '',
+          '\n本次没有任何参考图，请完全依据上面的文字设计 SOP。',
+        ].filter(Boolean).join('\n'),
+      },
+    ])
+  }
+
   const content: Array<Record<string, unknown>> = [
     {
       type: 'text',
@@ -266,10 +335,16 @@ export async function generatePrompts(
   avoidCta = false,
 ): Promise<string[]> {
   const messages = buildPromptMessages({ sopText, count, ignoreCompliance, avoidHint, copyText, avoidCta })
-  const raw = await chat(profile, [
-    { role: 'system', content: messages.system },
-    { role: 'user', content: messages.user },
-  ])
+  const raw = await chat(
+    profile,
+    [
+      { role: 'system', content: messages.system },
+      { role: 'user', content: messages.user },
+    ],
+    // 条数多时写得更久，超时要跟着放宽，否则正常的长输出会被中断
+    240,
+    tokensForPrompts(count),
+  )
   const prompts = parseNumberedList(raw)
   // 规则层要求「同一张图里每种卖点只出现一次」，但模型可能写重；
   // 这里做确定性兜底：同一句卖点在一张图里重复出现时，只保留第一次。
