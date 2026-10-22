@@ -107,6 +107,14 @@ interface SopState {
   avoidOverlay: boolean
   /** 按产品存的后处理模板，同一产品可以有多套（按比例匹配） */
   postTemplates: Record<string, PostTemplate[]>
+  /**
+   * 后处理模板预览用的底图：productId → 比例档 → imageId。
+   * 同一比例的多套模板共用一张底图；没设置时预览用默认白底，
+   * 不再自动拿生成出来的作品当底图（那种图往往还没排版，容易误判效果）。
+   */
+  postPreviewImages: Record<string, Record<string, string>>
+  /** 设置 / 清除某个比例档的预览底图，传 null 表示恢复默认 */
+  setPostPreviewImage: (productId: string, ratioKey: string, imageId: string | null) => void
   /** 提示词库弹窗当前打开的分组，null 表示关闭。运行时状态，不落盘 */
   libraryTab: SopLibraryTab | null
   /** 回收站弹窗是否打开。运行时状态，不落盘 */
@@ -182,6 +190,7 @@ export const useSopStore = create<SopState>()(
       variablesPerCard: 5,
       avoidOverlay: true,
       postTemplates: {},
+      postPreviewImages: {},
       libraryTab: null,
       trashOpen: false,
       setTrashOpen: (value) => set({ trashOpen: value }),
@@ -194,6 +203,17 @@ export const useSopStore = create<SopState>()(
       setPostTemplates: (productId, templates) => set((state) => ({
         postTemplates: { ...state.postTemplates, [productId]: templates },
       })),
+      setPostPreviewImage: (productId, ratioKey, imageId) => set((state) => {
+        const current = state.postPreviewImages[productId] ?? {}
+        const next = { ...current }
+        if (imageId) next[ratioKey] = imageId
+        else delete next[ratioKey]
+        const all = { ...state.postPreviewImages }
+        // 清空后把产品这一层也删掉，避免存档里堆一堆空对象
+        if (Object.keys(next).length) all[productId] = next
+        else delete all[productId]
+        return { postPreviewImages: all }
+      }),
       setIgnoreCompliance: (value) => set({ ignoreCompliance: value }),
       setUseImageSellingPoints: (value) => set({ useImageSellingPoints: value }),
       setAvoidCtaDesign: (value) => set({ avoidCtaDesign: value }),
@@ -483,7 +503,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates }),
+      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages }),
     },
   ),
 )

@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
+import { useStore } from '../store'
 import { buildAvoidHint, collectAvoidZones } from '../lib/postReserve'
 import { CHANNELS, NO_CHANNEL, channelLabel } from '../lib/channel'
+import { ensureImageCached, ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
+import { storeImage } from '../lib/db'
 import {
   POST_FONT_STACK,
   POST_RATIO_FILTERS,
@@ -32,17 +35,52 @@ function FilterChip({ active, onClick, children }: { active: boolean; onClick: (
   )
 }
 
+/** 底图候选：只读取缩略图，避免为了挑一张图把原图全解出来 */
+function PreviewThumb({ imageId, active, onPick }: { imageId: string; active: boolean; onPick: () => void }) {
+  const [src, setSrc] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    const apply = (thumbnail: { src: string }) => {
+      if (!cancelled) setSrc(thumbnail.src)
+    }
+    const unsubscribe = subscribeImageThumbnail(imageId, apply)
+    ensureImageThumbnailCached(imageId).then((thumbnail) => {
+      if (thumbnail) apply(thumbnail)
+    }).catch(() => {})
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [imageId])
+
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      title="用这张图当预览底图"
+      className={`relative h-20 overflow-hidden rounded-lg border bg-gray-50 transition-shadow hover:shadow-md dark:bg-white/[0.04] ${
+        active ? 'border-blue-500 ring-2 ring-blue-500' : 'border-gray-200 dark:border-white/10'
+      }`}
+    >
+      {src
+        ? <img src={src} alt="" loading="lazy" className="h-full w-full object-cover" />
+        : <span className="flex h-full w-full items-center justify-center text-[10px] text-gray-300">加载中</span>}
+    </button>
+  )
+}
+
 interface Props {
   productId: string
   productName: string
-  /** 预览用的底图（一般是这个产品最近一张成品图） */
-  previewSrc: string
   onClose: () => void
 }
 
-export default function PostTemplateModal({ productId, productName, previewSrc, onClose }: Props) {
+export default function PostTemplateModal({ productId, productName, onClose }: Props) {
   const stored = useSopStore((s) => s.postTemplates[productId])
   const setPostTemplates = useSopStore((s) => s.setPostTemplates)
+  const setPostPreviewImage = useSopStore((s) => s.setPostPreviewImage)
+  const directions = useSopStore((s) => s.directions)
+  const tasks = useStore((s) => s.tasks)
 
   const [templates, setTemplates] = useState<PostTemplate[]>(() => stored ?? [])
   const [activeId, setActiveId] = useState<string>(() => stored?.[0]?.id ?? '')
@@ -50,6 +88,16 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
   /** 列表筛选：渠道 + 尺寸（按比例归组）。只影响列表显示，不改模板本身 */
   const [channelFilter, setChannelFilter] = useState<string>('all')
   const [ratioFilter, setRatioFilter] = useState<string>('all')
+  /**
+   * 预览底图：比例档 → imageId。只影响预览，不参与出图。
+   * 跟模板一样本地编辑、点保存才落盘，取消就还原。
+   */
+  const [previewMap, setPreviewMap] = useState<Record<string, string>>(
+    () => ({ ...(useSopStore.getState().postPreviewImages[productId] ?? {}) }),
+  )
+  /** 底图解码后的 dataUrl；空表示用默认底色 */
+  const [previewSrc, setPreviewSrc] = useState('')
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [previewWidth, setPreviewWidth] = useState(0)
   const stageRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
@@ -159,6 +207,68 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
     () => active?.elements.find((item) => item.id === selectedId) ?? null,
     [active, selectedId],
   )
+
+  /** 底图按比例档存：同比例的多套模板共用一张，换模板时不用重选 */
+  const activeRatioKey = active ? postTemplateRatioKey(active) : ''
+  const previewImageId = activeRatioKey ? previewMap[activeRatioKey] ?? '' : ''
+
+  useEffect(() => {
+    setPreviewSrc('')
+    if (!previewImageId) return
+    let cancelled = false
+    ensureImageCached(previewImageId).then((url) => {
+      if (!cancelled && url) setPreviewSrc(url)
+    }).catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [previewImageId])
+
+  /** 可选底图：这个产品下面已完成的成品图，最近完成的排前面 */
+  const previewCandidates = useMemo(() => {
+    const subtree = new Set([productId])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const node of directions) {
+        if (node.parentId && subtree.has(node.parentId) && !subtree.has(node.id)) {
+          subtree.add(node.id)
+          grew = true
+        }
+      }
+    }
+    const seen = new Set<string>()
+    const list: string[] = []
+    const ordered = [...tasks].sort((a, b) => (b.finishedAt ?? b.createdAt) - (a.finishedAt ?? a.createdAt))
+    for (const task of ordered) {
+      if (task.status !== 'done' || !task.sopDirectionId || !subtree.has(task.sopDirectionId)) continue
+      for (const imageId of task.outputImages) {
+        if (!imageId || seen.has(imageId)) continue
+        seen.add(imageId)
+        list.push(imageId)
+        if (list.length >= 60) return list
+      }
+    }
+    return list
+  }, [tasks, directions, productId])
+
+  /** 选一张本地图当底图：先入图片库拿 id，和成品图走同一套引用 */
+  const uploadPreviewImage = async (file: File) => {
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result || ''))
+        reader.onerror = () => reject(new Error('读取失败'))
+        reader.readAsDataURL(file)
+      })
+      if (!dataUrl) return
+      const imageId = await storeImage(dataUrl, 'upload')
+      setPreviewMap((prev) => (activeRatioKey ? { ...prev, [activeRatioKey]: imageId } : prev))
+      setPickerOpen(false)
+    } catch (err) {
+      console.error(err)
+    }
+  }
 
   const visibleTemplates = useMemo(
     () => templates.filter((item) => {
@@ -317,6 +427,13 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
 
   const save = () => {
     setPostTemplates(productId, templates)
+    // 底图只写有变化的档位，顺便把本次清空的档位删掉
+    const prev = useSopStore.getState().postPreviewImages[productId] ?? {}
+    const keys = new Set([...Object.keys(prev), ...Object.keys(previewMap)])
+    for (const key of keys) {
+      const next = previewMap[key] ?? null
+      if ((prev[key] ?? null) !== next) setPostPreviewImage(productId, key, next)
+    }
     onClose()
   }
 
@@ -402,7 +519,42 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
 
         <div className="flex min-h-0 flex-1">
           {/* 画布预览 */}
-          <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-gray-100 p-4 dark:bg-black/30">
+          <div className="relative flex min-w-0 flex-1 flex-col bg-gray-100 dark:bg-black/30">
+            {/* 底图按比例档存：不给就一直是默认底色，不会自动拿成品图来顶 */}
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-gray-200 px-3 py-1.5 dark:border-white/[0.06]">
+              <span className="text-[10px] text-gray-400">预览底图</span>
+              <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-white/10 dark:text-gray-300">
+                {activeRatioKey === 'other' ? '其他比例' : activeRatioKey || '—'}
+              </span>
+              <span className="text-[10px] text-gray-400">{previewImageId ? '已设置' : '默认底色'}</span>
+              <div className="flex-1" />
+              <button
+                type="button"
+                onClick={() => setPickerOpen(true)}
+                disabled={!active}
+                className="rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] text-gray-600 hover:border-blue-300 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:bg-gray-800 dark:text-gray-300"
+              >
+                选择底图…
+              </button>
+              {previewImageId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!activeRatioKey) return
+                    setPreviewMap((prev) => {
+                      const next = { ...prev }
+                      delete next[activeRatioKey]
+                      return next
+                    })
+                  }}
+                  className="rounded px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-red-500"
+                >
+                  用默认
+                </button>
+              )}
+            </div>
+
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
             {active ? (
               <div
                 ref={stageRef}
@@ -416,8 +568,8 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
                 {previewSrc ? (
                   <img src={previewSrc} alt="" className="absolute inset-0 h-full w-full object-cover" />
                 ) : (
-                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-200 to-gray-300 text-xs text-gray-500 dark:from-gray-800 dark:to-gray-700">
-                    这个产品还没有成品图，先按白底排版
+                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-200 to-gray-300 px-6 text-center text-xs text-gray-500 dark:from-gray-800 dark:to-gray-700">
+                    未设置预览底图，按默认底色排版
                   </div>
                 )}
 
@@ -496,6 +648,80 @@ export default function PostTemplateModal({ productId, productName, previewSrc, 
               <div className="text-center text-sm text-gray-500 dark:text-gray-400">
                 还没有模板
                 <div className="mt-1 text-xs">右边选一个比例新建一套</div>
+              </div>
+            )}
+            </div>
+
+            {/* 底图选择：列出这个产品下的成品图，也可以传自己的图 */}
+            {pickerOpen && active && (
+              <div className="absolute inset-0 z-20 flex flex-col bg-white/95 dark:bg-gray-900/95">
+                <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-gray-200 px-3 py-2 dark:border-white/10">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-gray-700 dark:text-gray-200">
+                      选择 {activeRatioKey === 'other' ? '该比例' : activeRatioKey} 的预览底图
+                    </div>
+                    <div className="text-[10px] text-gray-400">只影响预览，不参与出图；保存后才生效</div>
+                  </div>
+                  <div className="flex-1" />
+                  <label className="cursor-pointer rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-300">
+                    上传图片
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (file) void uploadPreviewImage(file)
+                        e.target.value = ''
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setPickerOpen(false)}
+                    className="rounded px-1.5 py-0.5 text-[10px] text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10"
+                  >
+                    关闭
+                  </button>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-auto p-3">
+                  <div className="grid grid-cols-4 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreviewMap((prev) => {
+                          const next = { ...prev }
+                          delete next[activeRatioKey]
+                          return next
+                        })
+                        setPickerOpen(false)
+                      }}
+                      className={`flex h-20 flex-col items-center justify-center gap-1 rounded-lg border border-dashed text-[10px] ${
+                        previewImageId
+                          ? 'border-gray-300 text-gray-400 hover:border-blue-300 hover:text-blue-600 dark:border-white/15'
+                          : 'border-blue-500 text-blue-600 ring-2 ring-blue-500'
+                      }`}
+                    >
+                      <span className="text-[11px] font-medium">默认底色</span>
+                      <span>不用底图</span>
+                    </button>
+                    {previewCandidates.map((imageId) => (
+                      <PreviewThumb
+                        key={imageId}
+                        imageId={imageId}
+                        active={imageId === previewImageId}
+                        onPick={() => {
+                          setPreviewMap((prev) => ({ ...prev, [activeRatioKey]: imageId }))
+                          setPickerOpen(false)
+                        }}
+                      />
+                    ))}
+                  </div>
+                  {!previewCandidates.length && (
+                    <p className="mt-3 text-center text-[11px] text-gray-400">这个产品还没有成品图，可以点右上角上传一张</p>
+                  )}
+                </div>
               </div>
             )}
           </div>

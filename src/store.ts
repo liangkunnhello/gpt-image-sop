@@ -2332,6 +2332,10 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
   for (const img of inputImages) stillUsed.add(img.id)
+  // 后处理模板的预览底图是用户挑的，被引用的图不能被当孤儿清掉
+  for (const byRatio of Object.values(useSopStore.getState().postPreviewImages)) {
+    for (const imgId of Object.values(byRatio)) stillUsed.add(imgId)
+  }
 
   for (const imgId of candidates) {
     if (stillUsed.has(imgId)) continue

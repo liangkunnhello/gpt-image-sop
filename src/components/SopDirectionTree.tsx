@@ -8,7 +8,6 @@ import { effectiveNodeKind, trashNodeWithTasks } from '../lib/directionTree'
 import { nearestScopeId } from '../lib/sopScope'
 import { taskMatchesChannel } from '../lib/channel'
 import { isTaskUnread } from '../lib/unread'
-import { ensureImageCached } from '../lib/imageCache'
 import PostTemplateModal from './PostTemplateModal'
 import MoveNodeModal from './MoveNodeModal'
 
@@ -47,7 +46,6 @@ export default function SopDirectionTree() {
   const showToast = useStore((s) => s.showToast)
 
   const [postTarget, setPostTarget] = useState<{ id: string; name: string } | null>(null)
-  const [postPreview, setPostPreview] = useState('')
   const [folded, setFolded] = useState<Set<string>>(new Set())
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
@@ -57,26 +55,9 @@ export default function SopDirectionTree() {
   const [menu, setMenu] = useState<{ x: number; y: number; node: SopDirectionNode | null } | null>(null)
   const [moveTarget, setMoveTarget] = useState<SopDirectionNode | null>(null)
 
-  const openPostTemplate = async (product: SopDirectionNode) => {
+  // 预览底图由弹窗里自己选（按比例存、默认底色），这里只负责打开
+  const openPostTemplate = (product: SopDirectionNode) => {
     setPostTarget({ id: product.id, name: product.name })
-    setPostPreview('')
-    const subtree = new Set([product.id])
-    let grew = true
-    while (grew) {
-      grew = false
-      for (const node of directions) {
-        if (node.parentId && subtree.has(node.parentId) && !subtree.has(node.id)) {
-          subtree.add(node.id)
-          grew = true
-        }
-      }
-    }
-    const latest = [...tasks]
-      .filter((task) => task.status === 'done' && task.outputImages.length && task.sopDirectionId && subtree.has(task.sopDirectionId))
-      .sort((a, b) => b.createdAt - a.createdAt)[0]
-    if (!latest) return
-    const dataUrl = await ensureImageCached(latest.outputImages[0])
-    if (dataUrl) setPostPreview(dataUrl)
   }
   const [search, setSearch] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -761,7 +742,6 @@ export default function SopDirectionTree() {
         <PostTemplateModal
           productId={postTarget.id}
           productName={postTarget.name}
-          previewSrc={postPreview}
           onClose={() => setPostTarget(null)}
         />,
         document.body,
