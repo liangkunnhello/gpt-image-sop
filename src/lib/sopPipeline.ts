@@ -204,6 +204,44 @@ export async function rewriteText(
   return { name: nameLine, content }
 }
 
+/**
+ * SOP 的「AI 修改」：按一句话要求改写整份 SOP 正文。
+ *
+ * 和 rewriteText 的区别：SOP 本身是一份带「## SOP 名称」小节的 Markdown，
+ * 名称就写在正文里，不能套用「第一行名称 + 空行 + 正文」的输出约定
+ * （那样解析出来的名称行会被当成正文的一部分，标题被消掉或写重复）。
+ * 所以这里只要求返回正文，名称沿用原文里那一节。
+ */
+export async function rewriteSopText(
+  profile: ApiProfile,
+  original: string,
+  instruction: string,
+): Promise<string> {
+  const system = [
+    '你是广告设计团队的资深生图指导。用户会给你一份「生图 SOP」（Markdown）和一条修改要求，你要按要求改写这份 SOP。',
+    '必须保持原有的小节结构（## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌），小节标题一个字都不要改。',
+    '只输出改写后的完整 SOP 正文，从「## SOP 名称」这一行开始，不要写任何解释、开场白或结束语，也不要用代码块包裹。',
+    '除非修改要求明确要求增删，否则保留原文里已有的具体数值、比例、字号和禁忌条目。',
+  ].join('\n')
+  const user = [
+    `【原文】\n${original.trim()}`,
+    `【修改要求】\n${instruction.trim()}`,
+  ].join('\n\n')
+
+  const raw = await chat(profile, [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ])
+
+  // 模型偶尔会用代码块包一层，去掉再判断
+  let content = raw.trim().replace(/^```(?:markdown|md)?\s*/i, '').replace(/```\s*$/, '').trim()
+  // 没输出小节结构时退回原文，避免把一份好 SOP 换成一段散文
+  if (!/^#{1,3}\s*SOP\s*名称/m.test(content) && !/^#{1,3}\s+/m.test(content)) {
+    throw new Error('模型返回的内容不像 SOP，已放弃这次改动')
+  }
+  return content
+}
+
 export async function generateSop(
   profile: ApiProfile,
   /** 系统提示词 + 卖点 + 风格合成的一份文档 */
