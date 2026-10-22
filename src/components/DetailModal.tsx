@@ -102,7 +102,10 @@ export default function DetailModal() {
     const allError = group.every((item) => item.status === 'error')
     return {
       ...leader,
-      prompt: `${leader.sopName || 'SOP'} · ${group.length} 条提示词`,
+      // 普通模式的批量 / 融图没有 SOP 正文，标题按「张图」算
+      prompt: leader.sopText
+        ? `${leader.sopName || 'SOP'} · ${group.length} 条提示词`
+        : `${leader.sopName || '批量'} · ${group.length} 张图`,
       outputImages: group.flatMap((item) => item.outputImages),
       status: anyRunning ? 'running' : allError ? 'error' : 'done',
       elapsed: group.reduce((sum, item) => sum + (item.elapsed ?? 0), 0),

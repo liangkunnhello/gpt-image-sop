@@ -77,7 +77,8 @@ import { cleanStaleAgentInputDrafts, clearInputDraftState, isEmptyAgentInputDraf
 import { ALL_FAVORITES_COLLECTION_ID, DEFAULT_FAVORITE_COLLECTION_ID, createDefaultFavoriteCollection, deleteFavoriteCollectionState, ensureDefaultFavoriteCollection, getTaskFavoriteCollectionIds, mergeFavoriteCollections, normalizeFavoriteCollectionIds, normalizeFavoriteCollectionName, normalizeFavoriteCollections, normalizeFavoritePatch, normalizeLoadedFavoriteState, resolveDefaultFavoriteCollectionId, sameFavoriteCollectionIds } from './lib/favoriteState'
 import { createPersistedState, mergePersistedAgentConversations, migratePersistedState, normalizePersistedState } from './lib/persistedState'
 import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
-import { stripInjectedCodexCliSizePrompt, withAspectRatioHint } from './lib/size'
+import { stripInjectedCodexCliSizePrompt, withAspectRatioHint, normalizeCodexCliImageSize } from './lib/size'
+import { sizeOverridesForMixedRatios } from './lib/referenceSize'
 import { applyPostTemplate, productIdForDirection } from './lib/applyPostTemplate'
 import { buildAvoidHintForTask, withAvoidHint } from './lib/postReserve'
 import { imageSizeFromDataUrl } from './lib/imageDimensions'
@@ -1898,8 +1899,20 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
   // 普通模式拆请求时也要算进批量：否则 10 个请求会弹 10 次完成提示、自动打开 10 次详情
   let requestBatchId = batchId
-  const startTask = async (taskPrompt: string, images: InputImage[] = orderedInputImages, n?: number) => {
-    const paramsForTask = n == null ? taskParams : { ...taskParams, n }
+  const startTask = async (
+    taskPrompt: string,
+    images: InputImage[] = orderedInputImages,
+    n?: number,
+    /** 拆分出来的请求共享一个 sopJobId，画廊里才会聚合成一张任务卡 */
+    meta?: Pick<TaskRecord, 'sopJobId' | 'sopPromptIndex' | 'sopName'>,
+    /** 单个请求的尺寸覆盖：批量模式按各自参考图比例取基准尺寸 */
+    sizeOverride?: string,
+  ) => {
+    const paramsForTask: TaskParams = {
+      ...(n == null ? taskParams : { ...taskParams, n }),
+      // codex CLI 渠道本来就会被压到 1K，覆盖值也照它的规则收一次，别塞超限尺寸
+      ...(sizeOverride ? { size: activeProfile.codexCli ? normalizeCodexCliImageSize(sizeOverride) : sizeOverride } : {}),
+    }
     const transparentMeta = paramsForTask.transparent_output && activeProfile.transparentBackgroundMethod === 'local'
       ? createTransparentOutputMeta(taskPrompt)
       : null
@@ -1924,6 +1937,11 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       finishedAt: null,
       elapsed: null,
       sopDirectionId: useSopStore.getState().activeFilterId || undefined,
+      ...(meta ? {
+        sopJobId: meta.sopJobId,
+        sopPromptIndex: meta.sopPromptIndex,
+        sopName: meta.sopName,
+      } : {}),
     }
 
     useStore.getState().setTasks([task, ...useStore.getState().tasks])
@@ -1952,6 +1970,15 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   if (plainPlan) {
     const planBatchId = beginBatch(plainPlan.length)
     requestBatchId = planBatchId
+    // 同一批拆分请求共用一个 jobId，画廊与详情页按它聚合成一张任务卡
+    const planJobId = `plain-${genId()}`
+    const planModeLabel = useStore.getState().plainImageMode === 'merge' ? '融图' : '批量'
+    // 批量模式每个请求只带一张参考图。尺寸填 auto 又横竖混排时，渠道会把画幅统一成一个，
+    // 所以同批参考图比例不一致时，按各请求自己那张图的比例取 2K 基准尺寸；
+    // 比例都一样就保持 auto 不动。融图一个请求里有多张图，比例不唯一，也保持 auto。
+    const sizeOverrides = planModeLabel === '批量' && taskParams.size === 'auto'
+      ? sizeOverridesForMixedRatios(plainPlan.map((item) => item.images[0]?.dataUrl ?? ''))
+      : null
     const limit = normalizedSettings.batchPromptConcurrencyLimited
       ? Math.max(1, normalizedSettings.batchPromptConcurrency)
       : plainPlan.length
@@ -1960,9 +1987,14 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     await runWithConcurrency(
       plainPlan,
       limit,
-      async (item) => {
+      async (item, index) => {
         try {
-          const taskId = await startTask(finalPrompt, item.images, 1)
+          const sizeOverride = sizeOverrides ? sizeOverrides[index] : undefined
+          const taskId = await startTask(finalPrompt, item.images, 1, {
+            sopJobId: planJobId,
+            sopPromptIndex: index + 1,
+            sopName: planModeLabel,
+          }, sizeOverride)
           await waitForTaskSettled(taskId, () => planBatchId !== activeBatchId)
         } catch (err) {
           console.error('提交图片请求失败', err)
@@ -1974,7 +2006,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     )
     if (planBatchId === activeBatchId) {
       endBatch(planBatchId)
-      const modeLabel = useStore.getState().plainImageMode === 'merge' ? '融图' : '批量'
+      const modeLabel = planModeLabel
       const usedCount = plainPlan.reduce((sum, item) => sum + item.images.length, 0)
       // 批量模式下数量就是请求次数，图多出来时要说清楚，否则像是把图吞了
       const unused = useStore.getState().plainImageMode === 'batch'

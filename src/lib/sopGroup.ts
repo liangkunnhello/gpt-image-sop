@@ -41,9 +41,13 @@ export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
       (latest, task) => Math.max(latest, task.finishedAt ?? task.createdAt),
       0,
     )
+    // 普通模式拆出来的请求没有 SOP 正文，标题按「张图」算，别写成「条提示词」
+    const plainBatch = !rep.sopText
     out.push({
       ...rep,
-      prompt: `${rep.sopName || 'SOP'} · ${sorted.length} 条提示词`,
+      prompt: plainBatch
+        ? `${rep.sopName || '批量'} · ${sorted.length} 张图`
+        : `${rep.sopName || 'SOP'} · ${sorted.length} 条提示词`,
       outputImages: sorted.flatMap((task) => task.outputImages),
       outputErrors: sorted.flatMap((task) => task.outputErrors ?? []),
       status: anyRunning ? 'running' : allError ? 'error' : 'done',
