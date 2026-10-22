@@ -4,6 +4,7 @@ import type { SopDirectionNode } from '../types'
 import { useStore } from '../store'
 import { groupSopTasks } from '../lib/sopGroup'
 import { directionPath, useSopStore, UNASSIGNED_FILTER } from '../lib/sopStore'
+import { resolveTreeRowHighlight, resolveViewToggleHighlight, type TreeRowHighlight } from '../lib/treeHighlight'
 import { effectiveNodeKind, trashNodeWithTasks } from '../lib/directionTree'
 import { nearestScopeId } from '../lib/sopScope'
 import { taskMatchesChannel } from '../lib/channel'
@@ -377,14 +378,25 @@ export default function SopDirectionTree() {
 
   /**
    * 行样式分三档，优先级从高到低：
-   * - current：当前归属，新生成的图会归到这里 → 蓝色主色 + 左侧竖条
-   * - selected：正在筛选这一层 → 中性灰底
-   * - onPath：属于当前归属的祖先链 → 淡底，让整条路径连起来
+   * - selected：正在筛选这一行 → 唯一的蓝色实底
+   * - current：当前归属，新图归到这里 → 蓝字 + 左侧竖条，不铺底色
+   * - onPath：当前归属的祖先链 → 淡灰底，让整条路径连起来
+   *
+   * 只有一档会用实底。原来 current 也是蓝色实底，和 selected 撞在一起，
+   * 导致「全部任务」选中后（activeFilterId 已是 null）归属方向还蓝着，
+   * 看着像两个方向同时被选中。
    */
-  const rowClass = (state: { current?: boolean; selected?: boolean; onPath?: boolean }) => {
+  const rowHighlight = (nodeId: string) => resolveTreeRowHighlight({
+    nodeId,
+    activeFilterId,
+    activeDirectionId,
+    currentPathIds,
+  })
+
+  const rowClass = (state: TreeRowHighlight) => {
     const base = 'group relative flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors'
-    if (state.current) return `${base} bg-blue-50 font-semibold text-blue-700 dark:bg-blue-500/[0.18] dark:text-blue-200`
-    if (state.selected) return `${base} bg-gray-100 font-medium text-gray-900 dark:bg-white/[0.08] dark:text-white`
+    if (state.selected) return `${base} bg-blue-50 font-semibold text-blue-700 dark:bg-blue-500/[0.18] dark:text-blue-200`
+    if (state.current) return `${base} font-semibold text-blue-600 dark:text-blue-300`
     if (state.onPath) return `${base} bg-gray-50 font-medium text-gray-800 dark:bg-white/[0.04] dark:text-gray-100`
     return `${base} text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.04]`
   }
@@ -407,11 +419,14 @@ export default function SopDirectionTree() {
   )
 
   const renderDirection = (node: SopDirectionNode) => {
+    const highlight = rowHighlight(node.id)
     const isCurrent = node.id === activeDirectionId
     return (
       <div key={node.id} className="group flex items-center pl-8">
         <button
           type="button"
+          // data-current 只做「自动滚动到这里」的锚点，跟视觉高亮无关：
+          // 选了全部任务时树不该亮，但归属节点仍然要能被滚到视野里
           data-current={isCurrent || undefined}
           onClick={() => setActiveFilter(node.id)}
           onContextMenu={(event) => {
@@ -419,9 +434,9 @@ export default function SopDirectionTree() {
             setMenu({ x: event.clientX, y: event.clientY, node })
           }}
           title={isCurrent ? '当前归属：新生成的图会归到这个方向（右键：更多操作）' : '点击设为当前归属并筛选（右键：更多操作）'}
-          className={rowClass({ current: isCurrent, selected: activeFilterId === node.id })}
+          className={rowClass(highlight)}
         >
-          {isCurrent && currentBar}
+          {highlight.current && currentBar}
           <span className="min-w-0 flex-1">
             <span className="relative inline-block max-w-full align-middle">
               <span className="block truncate">{node.name}</span>
@@ -451,6 +466,7 @@ export default function SopDirectionTree() {
     <div className="mt-1 space-y-0.5">
       {matches.length === 0 && <p className="px-2 py-3 text-xs text-gray-400">没有匹配的项目</p>}
       {matches.map((node) => {
+        const highlight = rowHighlight(node.id)
         const isCurrent = node.id === activeDirectionId
         return (
           <button
@@ -462,9 +478,9 @@ export default function SopDirectionTree() {
               setSearch('')
             }}
             title={isCurrent ? '当前归属：新生成的图会归到这个方向' : '点击设为当前归属并筛选'}
-            className={rowClass({ current: isCurrent, selected: activeFilterId === node.id })}
+            className={rowClass(highlight)}
           >
-            {isCurrent && currentBar}
+            {highlight.current && currentBar}
             <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
             <span className="min-w-0 flex-1 truncate">
               <span className="text-gray-400">{directionPath(directions, node.id).replace(/\/\s*[^/]+$/, '').replace(/\/$/, '')} / </span>
@@ -495,19 +511,24 @@ export default function SopDirectionTree() {
             />
           </div>
 
-          {/* 当前归属常驻显示：树折叠或滚走了也能一眼看到现在归到哪 */}
+          {/*
+            默认归属常驻显示：树折叠或滚走了也能一眼看到现在归到哪。
+            用中性卡而不是蓝色实底 —— 蓝色实底会被误读成「这个方向正被选中」，
+            点了「全部任务」之后尤其明显。这里只表示新图会归到哪，点击才去筛选它。
+          */}
           {currentNode && (
             <button
               type="button"
               onClick={() => setActiveFilter(activeDirectionId)}
-              title={`${sopStyleMode ? '当前归属' : '默认归属'}：${currentPath}（点击只看这个方向）`}
-              className="mb-2 flex w-full min-w-0 flex-col gap-0.5 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-left transition-colors hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/[0.14] dark:hover:bg-blue-500/20"
+              title={`${sopStyleMode ? '当前归属' : '默认归属'}：${currentPath}（新生成的图归到这里，点击只看这个方向）`}
+              className="mb-2 flex w-full min-w-0 flex-col gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-left transition-colors hover:border-gray-300 hover:bg-gray-100 dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
             >
-              <span className="flex items-center gap-1 text-[10px] font-medium text-blue-600 dark:text-blue-300">
+              <span className="flex items-center gap-1 text-[10px] font-medium text-gray-500 dark:text-gray-400">
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500 dark:bg-blue-400" />
                 {sopStyleMode ? '当前归属' : '默认归属'}
+                <span className="font-normal text-gray-400 dark:text-gray-500">· 新图归到这里</span>
               </span>
-              <span className="min-w-0 truncate text-[12px] font-semibold text-blue-800 dark:text-blue-100">{currentPath}</span>
+              <span className="min-w-0 truncate text-[12px] font-semibold text-gray-700 dark:text-gray-100">{currentPath}</span>
             </button>
           )}
         </div>
@@ -519,11 +540,20 @@ export default function SopDirectionTree() {
         ) : (
           <>
             <div className="shrink-0">
-              <button type="button" onClick={() => setActiveFilter(null)} className={`${rowClass({ selected: activeFilterId === null })} mb-0.5`}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0 text-gray-400">
+              {/*
+                「全部任务」「未归属」是最外层的两个视图开关，不是树节点。
+                选中态用主色描边 + 加粗，和树里「正在筛选这一行」（灰底）区分开，
+                这样点完全部任务，能明确看出「现在什么都没筛」。
+              */}
+              <button
+                type="button"
+                onClick={() => setActiveFilter(null)}
+                className={`${rowClass(resolveViewToggleHighlight(activeFilterId === null))} mb-0.5 ${activeFilterId === null ? 'ring-1 ring-inset ring-blue-300 dark:ring-blue-400/40' : ''}`}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={`h-4 w-4 shrink-0 ${activeFilterId === null ? 'text-blue-500 dark:text-blue-400' : 'text-gray-400'}`}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 7l8-4 8 4-8 4-8-4zm0 5l8 4 8-4M4 17l8 4 8-4" />
                 </svg>
-                <span className="min-w-0 flex-1 truncate">全部任务</span>
+                <span className={`min-w-0 flex-1 truncate ${activeFilterId === null ? 'font-semibold text-blue-600 dark:text-blue-300' : ''}`}>全部任务</span>
                 {tailBadge(cards.length)}
               </button>
 
@@ -531,15 +561,15 @@ export default function SopDirectionTree() {
                 <button
                   type="button"
                   onClick={() => setActiveFilter(UNASSIGNED_FILTER)}
-                  className={`${rowClass({ selected: activeFilterId === UNASSIGNED_FILTER })} mb-0.5`}
+                  className={`${rowClass(resolveViewToggleHighlight(activeFilterId === UNASSIGNED_FILTER))} mb-0.5 ${activeFilterId === UNASSIGNED_FILTER ? 'ring-1 ring-inset ring-blue-300 dark:ring-blue-400/40' : ''}`}
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0 text-gray-400">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={`h-4 w-4 shrink-0 ${activeFilterId === UNASSIGNED_FILTER ? 'text-blue-500 dark:text-blue-400' : 'text-gray-400'}`}>
                     <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
                     <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
                     <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
                     <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
                   </svg>
-                  <span className="min-w-0 flex-1 truncate">未归属</span>
+                  <span className={`min-w-0 flex-1 truncate ${activeFilterId === UNASSIGNED_FILTER ? 'font-semibold text-blue-600 dark:text-blue-300' : ''}`}>未归属</span>
                   {tailBadge(unassigned)}
                 </button>
               )}
@@ -604,7 +634,7 @@ export default function SopDirectionTree() {
                           setMenu({ x: event.clientX, y: event.clientY, node: category })
                         }}
                         title="右键：新建产品 / 重命名 / 删除"
-                        className={rowClass({ selected: activeFilterId === category.id, onPath: currentPathIds.has(category.id) })}
+                        className={rowClass(rowHighlight(category.id))}
                       >
                         <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
                         <span className="min-w-0 flex-1">
@@ -649,7 +679,7 @@ export default function SopDirectionTree() {
                                     setMenu({ x: event.clientX, y: event.clientY, node: product })
                                   }}
                                   title="右键：新建方向 / 后处理模板 / 移动到 / 删除"
-                                  className={rowClass({ selected: activeFilterId === product.id, onPath: currentPathIds.has(product.id) })}
+                                  className={rowClass(rowHighlight(product.id))}
                                 >
                                   <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
                                   <span className="min-w-0 flex-1">
