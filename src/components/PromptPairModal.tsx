@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { TaskRecord } from '../types'
 import { useSopStore } from '../lib/sopStore'
 import { useStore } from '../store'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
-import { CloseIcon } from './icons'
+import { ChevronLeftIcon, CloseIcon } from './icons'
 
 interface Props {
   /** 同一张卡（同一 sopJobId）下的全部任务，已经按 sopPromptIndex 排好 */
@@ -78,7 +79,7 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
 
   const imageCount = rows.reduce((sum, row) => sum + row.images.length, 0)
 
-  return (
+  const modal = (
     <div
       className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-3 sm:p-6"
       onClick={onClose}
@@ -87,7 +88,16 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
         onClick={(event) => event.stopPropagation()}
         className="flex h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-white/10 dark:bg-gray-900"
       >
-        <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-5 py-3 dark:border-white/[0.06]">
+        <div className="flex shrink-0 items-center gap-2 border-b border-gray-100 px-3 py-2.5 dark:border-white/[0.06] sm:px-4">
+          <button
+            type="button"
+            onClick={onClose}
+            title="返回详情（Esc）"
+            className="flex shrink-0 items-center gap-0.5 rounded-lg px-1.5 py-1 text-xs font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-100"
+          >
+            <ChevronLeftIcon className="h-4 w-4" />
+            返回
+          </button>
           <h2 className="min-w-0 truncate text-sm font-semibold text-gray-900 dark:text-white">
             图片与提示词对照
           </h2>
@@ -105,7 +115,7 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {!rows.length && (
             <p className="px-4 py-16 text-center text-sm text-gray-400">这张卡下还没有提示词</p>
           )}
@@ -192,6 +202,11 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
       </div>
     </div>
   )
+
+  // 详情页卡片带 backdrop-blur 和 overflow-hidden：fixed 子元素会以卡片为容器定位，
+  // 顶栏（返回 / 关闭）与底部一起被裁掉，滚动区高度也算错，看着就是「没法滚」。
+  // 挂到 body 上才是视口级弹层。
+  return createPortal(modal, document.body)
 }
 
 /** 缩略图单独订阅，避免整表渲染时把几十张大图全拉进内存 */
