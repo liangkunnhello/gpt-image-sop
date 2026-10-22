@@ -99,6 +99,7 @@ export default function TaskCard({
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
   const clipScores = useClipStore((s) => s.scores)
   const clipLimit = useClipStore((s) => s.limit)
+  const clipEngine = useClipStore((s) => s.engine)
   const clipQc = useClipStore((s) => s.qc)
   const qcWorst = (() => {
     const list = task.outputImages.map((id) => clipQc[id]).filter(Boolean)
@@ -404,7 +405,6 @@ export default function TaskCard({
 
       <div
         ref={cardRef}
-        data-surface="card"
         className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer touch-pan-y will-change-transform duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
           isSwiping ? '!bg-white dark:!bg-gray-900' : ''
         } ${
@@ -585,7 +585,7 @@ export default function TaskCard({
                       className={`rounded px-1 py-0.5 text-[10px] font-medium text-white ${
                         clipAverage > clipLimit ? 'bg-red-500/85' : 'bg-black/60'
                       }`}
-                      title={`平均重复度 ${Math.round(clipAverage * 100)}%（详情里可看单张）`}
+                      title={`平均重复度 ${Math.round(clipAverage * 100)}%（详情里可看单张）${clipEngine === 'phash' ? '，按画面近似度计算' : ''}`}
                     >
                       重复 {Math.round(clipAverage * 100)}%
                     </span>

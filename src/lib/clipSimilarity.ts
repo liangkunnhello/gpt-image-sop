@@ -2,12 +2,20 @@ import { create } from 'zustand'
 
 import type { TaskRecord } from '../types'
 import { ensureImageCached } from './imageCache'
+import { computeImageHash, hashScores } from './imageHash'
+import { qcInBrowser } from './visionQc'
+import { expectFromPrompt, type ExpectText } from './batchCheck'
 
 import { SIDECAR } from './sidecar'
 /** 一次最多送多少张去算，太多会很慢 */
 const MAX_IMAGES = 36
 /** 送给 CLIP 前先缩到这个边长，既快又不影响判断 */
 const THUMB_SIZE = 384
+/** 降级质检并发数，和批次验收保持一致 */
+const QC_CONCURRENCY = 3
+
+/** 没有可对照的文案规范时，只做画面层面的合规检查 */
+const EMPTY_EXPECT: ExpectText = { mainTitle: '', tags: [], brand: [], disclaimer: [] }
 
 export type QcVerdict = 'pass' | 'fail' | 'unsure'
 
@@ -32,6 +40,12 @@ interface ClipState {
   running: boolean
   error: string
   limit: number
+  /**
+   * 重复度由谁算出来的：
+   * clip = 本地服务的 CLIP 语义相似度；phash = 没有本地服务时的画面近似度。
+   * 两种口径不能混着比，所以只记最近一次用的引擎。
+   */
+  engine: 'clip' | 'phash' | ''
   ensure: (tasks: TaskRecord[]) => void
   scoreOfTask: (task: TaskRecord) => number | null
   /** 任务出完图后调用：后台串行跑质检 + 重复度；peers 是同方向的历史任务 */
@@ -84,6 +98,7 @@ export const useClipStore = create<ClipState>()((set, get) => ({
   running: false,
   error: '',
   limit: 0.92,
+  engine: '',
   queued: 0,
 
   /** 对还没算过的任务图做一次 CLIP 相似度，结果按图片 id 缓存 */
@@ -105,8 +120,9 @@ export const useClipStore = create<ClipState>()((set, get) => ({
 
     set({ running: true, error: '' })
     void (async () => {
+      // payload 提到 try 外：降级算哈希时还要用它
+      const payload: Array<{ index: number; dataUrl: string }> = []
       try {
-        const payload: Array<{ index: number; dataUrl: string }> = []
         for (let i = 0; i < candidates.length; i += 1) {
           const dataUrl = await ensureImageCached(candidates[i].imageId)
           if (!dataUrl) continue
@@ -142,8 +158,22 @@ export const useClipStore = create<ClipState>()((set, get) => ({
           const nearest = payload[nearestIndex] ? candidates[payload[nearestIndex].index].imageId : undefined
           next[imageId] = { mean: score.mean, max: score.max, nearest }
         }
-        set({ scores: next, running: false, limit: json.limit ?? get().limit })
+        set({ scores: next, running: false, limit: json.limit ?? get().limit, engine: 'clip' })
       } catch (err) {
+        // 桌面安装版没有挂在 dev server 上的本地服务，CLIP 不可用；
+        // 退到浏览器内算画面近似度，至少能把「几乎一样」的图挑出来。
+        const hashes: Array<{ key: string; hash: string }> = []
+        for (const item of payload) {
+          const imageId = candidates[item.index]?.imageId
+          if (!imageId) continue
+          const hash = await computeImageHash(item.dataUrl)
+          if (hash) hashes.push({ key: imageId, hash })
+        }
+        const local = hashScores(hashes)
+        if (Object.keys(local).length) {
+          set({ scores: { ...get().scores, ...local }, running: false, engine: 'phash', error: '' })
+          return
+        }
         set({ running: false, error: err instanceof Error ? err.message : 'CLIP 计算失败' })
       }
     })()
@@ -153,12 +183,14 @@ export const useClipStore = create<ClipState>()((set, get) => ({
   enqueueTask: (task: TaskRecord, peers: TaskRecord[]) => {
     const imageIds = task.outputImages.filter(Boolean)
     if (!imageIds.length) return
+    // 质检要拿提示词里的「」文案当对照，降级到浏览器直连时同样适用
+    const expect = expectFromPrompt(task.prompt || '')
     set((s) => ({ queued: s.queued + imageIds.length }))
     enqueue(async () => {
       for (const imageId of imageIds) {
         try {
           const state = useClipStore.getState()
-          if (!state.qc[imageId] || !state.scores[imageId]) await inspectOne(imageId, peers)
+          if (!state.qc[imageId] || !state.scores[imageId]) await inspectOne(imageId, peers, expect)
         } finally {
           set((s) => ({ queued: Math.max(0, s.queued - 1) }))
         }
@@ -196,10 +228,13 @@ export function formatClipPercent(value: number | null) {
  * 一次调用同时做质检和重复度（后端 /api/inspect），结果按图片 id 写回 store。
  * 传进来的第一张是主角，其余作为「同方向历史图」一起参与两两比对，
  * 所以返回的重复度就是主角与它们之中最像那张的相似度。
+ *
+ * 拿不到本地服务（桌面安装版）时自动降级：质检直接用当前接口配置调视觉模型，
+ * 重复度改用浏览器内的感知哈希，界面会标注「画面近似度」。
  */
 export async function inspectImages(
   entries: Array<{ imageId: string; dataUrl: string }>,
-  options: { limit?: number } = {},
+  options: { limit?: number; expect?: ExpectText } = {},
 ): Promise<void> {
   const payload: Array<{ id: string; dataUrl: string }> = []
   const imageIdByIndex: string[] = []
@@ -211,50 +246,110 @@ export async function inspectImages(
   }
   if (!payload.length) return
 
-  const res = await fetch(`${SIDECAR}/api/inspect`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items: payload, limit: options.limit ?? useClipStore.getState().limit }),
-    signal: AbortSignal.timeout(180000),
-  })
-  const json = await res.json() as {
-    ok?: boolean
-    error?: string
-    limit?: number
-    qc?: Record<string, { ok?: boolean; verdict?: string; reason?: string; confidence?: number | null }>
-    similarity?: { perImage?: Record<string, { mean: number; max: number; nearest?: string | null }> }
-  }
-  if (!res.ok) throw new Error(json?.error || '检查失败')
+  try {
+    const res = await fetch(`${SIDECAR}/api/inspect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: payload, limit: options.limit ?? useClipStore.getState().limit }),
+      signal: AbortSignal.timeout(180000),
+    })
+    const json = await res.json() as {
+      ok?: boolean
+      error?: string
+      limit?: number
+      qc?: Record<string, { ok?: boolean; verdict?: string; reason?: string; confidence?: number | null }>
+      similarity?: { perImage?: Record<string, { mean: number; max: number; nearest?: string | null }> }
+    }
+    if (!res.ok) throw new Error(json?.error || '检查失败')
 
-  const imageIdAt = (key: string) => imageIdByIndex[Number(key)]
+    const imageIdAt = (key: string) => imageIdByIndex[Number(key)]
+
+    const nextQc: Record<string, QcResult> = { ...useClipStore.getState().qc }
+    for (const [key, item] of Object.entries(json?.qc || {})) {
+      const imageId = imageIdAt(key)
+      if (!imageId || !item) continue
+      const verdict: QcVerdict = item.verdict === 'pass' || item.verdict === 'fail' || item.verdict === 'unsure'
+        ? item.verdict
+        : 'unsure'
+      nextQc[imageId] = {
+        verdict,
+        reason: String(item.reason || ''),
+        confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
+      }
+    }
+
+    const nextScores: Record<string, ClipScore> = { ...useClipStore.getState().scores }
+    for (const [key, score] of Object.entries(json?.similarity?.perImage || {})) {
+      const imageId = imageIdAt(key)
+      if (!imageId) continue
+      const nearestKey = score.nearest ? String(score.nearest).replace(/\.[a-z]+$/i, '') : ''
+      const nearest = nearestKey && Number(nearestKey) !== Number(key) ? imageIdAt(nearestKey) : undefined
+      nextScores[imageId] = { mean: score.mean, max: score.max, nearest }
+    }
+
+    useClipStore.setState((state) => ({
+      qc: nextQc,
+      scores: nextScores,
+      limit: json?.limit ?? state.limit,
+      engine: 'clip',
+    }))
+  } catch {
+    await inspectLocally(entries, options.expect ?? EMPTY_EXPECT)
+  }
+}
+
+/**
+ * 没有本地服务时的替代实现：
+ * 质检逐张调视觉模型（并发 3），重复度用感知哈希两两比对。
+ * 两者都不依赖 Python / CLIP，桌面安装包里也能跑。
+ */
+async function inspectLocally(
+  entries: Array<{ imageId: string; dataUrl: string }>,
+  expect: ExpectText,
+): Promise<void> {
+  // 动态导入：store 反过来依赖本模块，静态引会成环
+  const { useStore } = await import('../store')
+  const { settings } = useStore.getState()
+  const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
 
   const nextQc: Record<string, QcResult> = { ...useClipStore.getState().qc }
-  for (const [key, item] of Object.entries(json?.qc || {})) {
-    const imageId = imageIdAt(key)
-    if (!imageId || !item) continue
-    const verdict: QcVerdict = item.verdict === 'pass' || item.verdict === 'fail' || item.verdict === 'unsure'
-      ? item.verdict
-      : 'unsure'
-    nextQc[imageId] = {
-      verdict,
-      reason: String(item.reason || ''),
-      confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
+  if (profile) {
+    let cursor = 0
+    const worker = async () => {
+      for (;;) {
+        const index = cursor
+        cursor += 1
+        if (index >= entries.length) return
+        const entry = entries[index]
+        const outcome = await qcInBrowser(profile, entry.dataUrl, expect)
+        nextQc[entry.imageId] = {
+          // error 不是合法结论，统一记成待定，原因留在 reason 里
+          verdict: outcome.verdict === 'pass' || outcome.verdict === 'fail' ? outcome.verdict : 'unsure',
+          reason: outcome.reason,
+          confidence: outcome.confidence ?? undefined,
+        }
+      }
     }
+    await Promise.all(Array.from({ length: Math.min(QC_CONCURRENCY, entries.length) }, worker))
   }
 
+  const hashes: Array<{ key: string; hash: string }> = []
+  for (const entry of entries) {
+    const hash = await computeImageHash(entry.dataUrl)
+    if (hash) hashes.push({ key: entry.imageId, hash })
+  }
+  const local = hashScores(hashes)
+
   const nextScores: Record<string, ClipScore> = { ...useClipStore.getState().scores }
-  for (const [key, score] of Object.entries(json?.similarity?.perImage || {})) {
-    const imageId = imageIdAt(key)
-    if (!imageId) continue
-    const nearestKey = score.nearest ? String(score.nearest).replace(/\.[a-z]+$/i, '') : ''
-    const nearest = nearestKey && Number(nearestKey) !== Number(key) ? imageIdAt(nearestKey) : undefined
-    nextScores[imageId] = { mean: score.mean, max: score.max, nearest }
+  for (const [imageId, score] of Object.entries(local)) {
+    nextScores[imageId] = score
   }
 
   useClipStore.setState((state) => ({
     qc: nextQc,
     scores: nextScores,
-    limit: json?.limit ?? state.limit,
+    engine: 'phash',
+    limit: state.limit,
   }))
 }
 
@@ -262,7 +357,7 @@ export async function inspectImages(
  * 一张图连同同方向的历史图一起送检：一次调用同时拿到质检结论和重复度。
  * 没有历史图时也要走，因为质检本身不依赖比对，只是算不出重复度。
  */
-async function inspectOne(imageId: string, peers: TaskRecord[]) {
+async function inspectOne(imageId: string, peers: TaskRecord[], expect: ExpectText) {
   try {
     const selfDataUrl = await ensureImageCached(imageId)
     if (!selfDataUrl) return
@@ -281,7 +376,7 @@ async function inspectOne(imageId: string, peers: TaskRecord[]) {
       const dataUrl = await ensureImageCached(id)
       if (dataUrl) entries.push({ imageId: id, dataUrl })
     }
-    await inspectImages(entries)
+    await inspectImages(entries, { expect })
   } catch {
     // 静默失败，下次进详情还会补算
   }

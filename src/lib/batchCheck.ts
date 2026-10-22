@@ -1,4 +1,5 @@
 import type { TaskRecord } from '../types'
+import { computeImageHash, hashScores, similarityFromHashes } from './imageHash'
 
 /** 本地验收服务（批次生图 sidecar）地址 */
 import { SIDECAR } from './sidecar'
@@ -118,6 +119,73 @@ export async function simBatch(items: Array<{ key: string; dataUrl: string }>): 
   const json = await res.json()
   if (!res.ok) throw new Error(json?.error || '相似度计算失败')
   return json as SimResponse
+}
+
+function percentile(sorted: number[], ratio: number): number {
+  if (!sorted.length) return 0
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * ratio)))
+  return sorted[index]
+}
+
+/**
+ * 没有本地服务时用感知哈希算一遍，返回结构与 simBatch 一致。
+ * 比的是画面结构而不是语义，界面上会标注「画面近似度」。
+ */
+export async function simBatchLocal(
+  items: Array<{ key: string; dataUrl: string }>,
+  limit = 0.92,
+): Promise<SimResponse> {
+  const hashed: Array<{ key: string; hash: string }> = []
+  for (const item of items) {
+    const hash = await computeImageHash(item.dataUrl)
+    if (hash) hashed.push({ key: item.key, hash })
+  }
+  const scores = hashScores(hashed)
+
+  const rows: SimRow[] = hashed.map((item) => {
+    const score = scores[item.key]
+    return {
+      key: item.key,
+      mean: score?.mean ?? 0,
+      max: score?.max ?? 0,
+      nearestKey: score?.nearest ?? '',
+    }
+  })
+
+  const pairs: SimResponse['over_list'] = []
+  for (let i = 0; i < hashed.length; i += 1) {
+    for (let j = i + 1; j < hashed.length; j += 1) {
+      pairs.push({
+        aKey: hashed[i].key,
+        bKey: hashed[j].key,
+        sim: similarityFromHashes(hashed[i].hash, hashed[j].hash),
+      })
+    }
+  }
+
+  const all = pairs.map((pair) => pair.sim).sort((a, b) => a - b)
+  const overList = pairs.filter((pair) => pair.sim > limit).sort((a, b) => b.sim - a.sim)
+  const regen = rows
+    .filter((row) => row.max > limit && row.nearestKey)
+    .map((row) => ({ regenKey: row.key, keepKey: row.nearestKey, sim: row.max }))
+
+  return {
+    count: hashed.length,
+    pairs_total: pairs.length,
+    over_pairs: overList.length,
+    pass_pairs: pairs.length - overList.length,
+    limit,
+    stats: {
+      min: all.length ? all[0] : 0,
+      max: all.length ? all[all.length - 1] : 0,
+      mean: all.length ? all.reduce((sum, value) => sum + value, 0) / all.length : 0,
+      p10: percentile(all, 0.1),
+      p90: percentile(all, 0.9),
+    },
+    over_list: overList,
+    regen,
+    per_image: rows,
+  }
 }
 
 /** 从任务里取第一张输出图的 data URL */

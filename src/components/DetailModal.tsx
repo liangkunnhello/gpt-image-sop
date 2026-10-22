@@ -21,6 +21,7 @@ import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from 
 import { getApiProviderLabel } from '../lib/apiProfiles'
 import { openImagesFolder } from '../lib/openImagesFolder'
 import { inspectImages, useClipStore } from '../lib/clipSimilarity'
+import { expectFromPrompt } from '../lib/batchCheck'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
@@ -301,6 +302,7 @@ export default function DetailModal() {
   const clipScores = useClipStore((s) => s.scores)
   const clipQc = useClipStore((s) => s.qc)
   const clipLimit = useClipStore((s) => s.limit)
+  const clipEngine = useClipStore((s) => s.engine)
   const ensureClip = useClipStore((s) => s.ensure)
 
   useEffect(() => {
@@ -403,7 +405,7 @@ export default function DetailModal() {
         }
         if (entries.length >= 12) break
       }
-      await inspectImages(entries)
+      await inspectImages(entries, { expect: expectFromPrompt(task.prompt) })
     } catch (err) {
       showToast(`检查失败：${err instanceof Error ? err.message : '未知原因'}`, 'error')
     } finally {
@@ -1353,6 +1355,11 @@ export default function DetailModal() {
                         )}
                         {inspectScore != null && (
                           <span className="text-gray-400 dark:text-gray-500">超过 {Math.round(clipLimit * 100)}% 判为重复</span>
+                        )}
+                        {inspectScore != null && clipEngine === 'phash' && (
+                          <span className="text-gray-400 dark:text-gray-500" title="当前环境没有本地 CLIP 服务，改按画面结构（感知哈希）比对，口径与 CLIP 不同">
+                            · 画面近似度
+                          </span>
                         )}
                       </div>
                     </div>

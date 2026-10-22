@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { getImage } from '../lib/db'
-import { expectFromPrompt, simBatch, sidecarAlive, type QcOutcome, type SimResponse } from '../lib/batchCheck'
+import { expectFromPrompt, simBatch, simBatchLocal, sidecarAlive, type QcOutcome, type SimResponse } from '../lib/batchCheck'
 import { DEFAULT_QC_MODEL, qcInBrowser } from '../lib/visionQc'
 
 const MAX_TASKS = 24
@@ -31,6 +31,8 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [qc, setQc] = useState<Record<string, QcOutcome>>({})
   const [sim, setSim] = useState<SimResponse | null>(null)
+  /** 相似度用的是本地 CLIP 还是浏览器内感知哈希 */
+  const [simEngine, setSimEngine] = useState<'clip' | 'phash' | ''>('')
 
   const candidates = useMemo(
     () => tasks.filter((t) => t.status === 'done' && t.outputImages.length > 0).slice(0, MAX_TASKS),
@@ -97,10 +99,11 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
     }
     try {
       setSim(await simBatch(payload))
-    } catch (err) {
-      setBusy(err instanceof Error ? err.message : '相似度计算失败')
-      setTimeout(() => setBusy(''), 2500)
-      return
+      setSimEngine('clip')
+    } catch {
+      // 桌面安装版没有本地 CLIP 服务：退到浏览器内算画面近似度
+      setSim(await simBatchLocal(payload))
+      setSimEngine('phash')
     }
     setBusy('')
   }
@@ -129,7 +132,8 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
 
         {!alive && alive !== null && (
           <div className="border-b border-amber-200 bg-amber-50 px-5 py-2 text-xs text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">
-            质检仍然可用（直接用当前接口配置调视觉模型）。只有「算相似度」需要本地服务：在 gpt-image-cli 目录双击「启动.bat」，再重新打开本面板。
+            没连上本地相似度服务。质检照常用当前接口配置调视觉模型；相似度会改按「画面近似度」（感知哈希）在浏览器里算，
+            能抓出几乎一样的图，但语义层面的重复仍建议用本地 CLIP：在 gpt-image-cli 目录双击「启动.bat」后重开本面板。
           </div>
         )}
 
@@ -171,6 +175,11 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) {
                 <span>判定线 {sim.limit}</span>
                 <span>超线 <b className="text-red-600">{sim.over_pairs}</b> 对</span>
                 <span>建议重出 <b className="text-red-600">{sim.regen.length}</b> 张</span>
+                {simEngine === 'phash' && (
+                  <span className="text-amber-600 dark:text-amber-400" title="没有本地 CLIP 服务，改按画面结构比对，口径与 CLIP 不同">
+                    画面近似度
+                  </span>
+                )}
               </>
             )}
           </div>
