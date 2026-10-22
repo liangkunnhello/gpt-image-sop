@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   POST_RATIO_TOLERANCE,
+  commitNumberInput,
   createPostTemplate,
   defaultPostTemplate,
   pickTemplateForImage,
@@ -92,5 +93,42 @@ describe('比例筛选归组', () => {
   it('非预设比例单独归到 other，尺寸非法也不报错', () => {
     expect(postTemplateRatioKey({ width: 1200, height: 500 })).toBe('other')
     expect(postTemplateRatioKey({ width: 0, height: 0 })).toBe('other')
+  })
+})
+
+describe('commitNumberInput（尺寸输入框的提交值）', () => {
+  it('合法的四位尺寸原样提交，不被下限影响', () => {
+    expect(commitNumberInput('2560', 840, { min: 64 })).toBe(2560)
+    expect(commitNumberInput('1460', 840, { min: 64 })).toBe(1460)
+  })
+
+  it('空草稿或非数字保留原值，不会把 0 写进去', () => {
+    // 删空时回到上一次的值，而不是变成下限 —— 否则接着输入就会拼成 64xx
+    expect(commitNumberInput('', 840, { min: 64 })).toBe(840)
+    expect(commitNumberInput('.', 840, { min: 64 })).toBe(840)
+    expect(commitNumberInput('abc', 840, { min: 64 })).toBe(840)
+  })
+
+  it('低于下限的提交值夹到下限', () => {
+    expect(commitNumberInput('10', 840, { min: 64 })).toBe(64)
+    expect(commitNumberInput('64', 840, { min: 64 })).toBe(64)
+  })
+
+  it('超过上限的夹到上限', () => {
+    expect(commitNumberInput('9999', 840, { min: 8, max: 300 })).toBe(300)
+  })
+
+  it('默认取整', () => {
+    expect(commitNumberInput('840.6', 1, { min: 1 })).toBe(841)
+  })
+
+  it('允许小数时保留小数，并按 step 对齐', () => {
+    expect(commitNumberInput('2.7', 1, { min: 0, step: 0.5, integer: false })).toBe(2.5)
+    expect(commitNumberInput('3.1', 1, { min: 0, step: 0.5, integer: false })).toBe(3)
+  })
+
+  it('字号这类下限为 1 的输入框不会被写成 1 之外的值', () => {
+    expect(commitNumberInput('32', 24, { min: 1 })).toBe(32)
+    expect(commitNumberInput('0', 24, { min: 1 })).toBe(1)
   })
 })

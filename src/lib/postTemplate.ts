@@ -298,3 +298,24 @@ export function coverRect(srcW: number, srcH: number, dstW: number, dstH: number
   const h = srcH * scale
   return { x: (dstW - w) / 2, y: (dstH - h) / 2, width: w, height: h }
 }
+
+/**
+ * 数字输入框的提交值：草稿为空或全是小数点时保留原值，
+ * 否则解析后夹到区间，并按 step 对齐（避免 8.299999 这种数）。
+ *
+ * 抽出来是因为输入期间必须存草稿、只在失焦/回车时规整：
+ * 边输边夹取值域会把「2」直接改写成下限（尺寸是 64），用户再敲一位就成了 645。
+ */
+export function commitNumberInput(
+  draft: string,
+  current: number,
+  options: { min: number; max?: number; step?: number; integer?: boolean } = { min: 0 },
+): number {
+  const parsed = Number(draft)
+  if (draft.trim() === '' || !Number.isFinite(parsed)) return current
+  let next = options.integer === false ? parsed : Math.round(parsed)
+  if (options.step && options.step > 0) next = Math.round(next / options.step) * options.step
+  next = Math.max(options.min, next)
+  if (options.max != null) next = Math.min(options.max, next)
+  return next
+}

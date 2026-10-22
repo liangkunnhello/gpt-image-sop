@@ -10,6 +10,7 @@ import {
   POST_RATIO_FILTERS,
   POST_SIZE_PRESETS,
   clamp01,
+  commitNumberInput,
   createPostTemplate,
   newPostElement,
   postTemplateRatioKey,
@@ -17,6 +18,71 @@ import {
   type PostTemplate,
 } from '../lib/postTemplate'
 import { useSopStore } from '../lib/sopStore'
+
+/** 尺寸下限：太小既排不了版，后端也撑不住 */
+const MIN_SIZE = 64
+
+/**
+ * 带下限的数字输入框。
+ *
+ * 不能直接受控于模板值：边输边把值夹到区间，用户删到只剩「2」时
+ * 立刻被改写成下限（尺寸是 64），接着再敲 5 就变成 645，还顺带把光标/选区重置掉，
+ * 表现就是「一直跳 64、没法长按框选」。
+ * 所以输入期间只存草稿字符串，失焦或回车才解析并夹取值域。
+ */
+export function NumberInput({
+  value,
+  min,
+  max,
+  step,
+  allowDecimal = false,
+  onCommit,
+  className,
+}: {
+  value: number
+  min: number
+  max?: number
+  step?: number
+  allowDecimal?: boolean
+  onCommit: (next: number) => void
+  className?: string
+}) {
+  const [draft, setDraft] = useState(String(value))
+  const [editing, setEditing] = useState(false)
+  // 外部改了值（点预设、撤销）时跟随，但编辑期间不打断用户输入
+  useEffect(() => {
+    if (!editing) setDraft(String(value))
+  }, [value, editing])
+
+  const commit = () => {
+    const next = commitNumberInput(draft, value, { min, max, step, integer: !allowDecimal })
+    setDraft(String(next))
+    setEditing(false)
+    if (next !== value) onCommit(next)
+  }
+
+  return (
+    <input
+      type="text"
+      inputMode={allowDecimal ? 'decimal' : 'numeric'}
+      value={draft}
+      onFocus={() => setEditing(true)}
+      onChange={(e) => setDraft(e.target.value.replace(allowDecimal ? /[^\d.]/g : /[^\d]/g, ''))}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          commit()
+        }
+        if (e.key === 'Escape') {
+          setDraft(String(value))
+          setEditing(false)
+        }
+      }}
+      className={className ?? 'w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200'}
+    />
+  )
+}
 
 /** 筛选条上的小胶囊，和画廊的渠道筛选保持同一种观感 */
 function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
@@ -805,18 +871,16 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
                     className="mb-1 w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                   />
                   <div className="flex items-center gap-1">
-                    <input
-                      type="number"
+                    <NumberInput
                       value={active.width}
-                      onChange={(e) => patchActive({ width: Math.max(64, Number(e.target.value) || 0) }, { coalesceKey: 'template:width' })}
-                      className="w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                      min={MIN_SIZE}
+                      onCommit={(width) => patchActive({ width }, { coalesceKey: 'template:width' })}
                     />
                     <span className="text-gray-400">×</span>
-                    <input
-                      type="number"
+                    <NumberInput
                       value={active.height}
-                      onChange={(e) => patchActive({ height: Math.max(64, Number(e.target.value) || 0) }, { coalesceKey: 'template:height' })}
-                      className="w-full rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                      min={MIN_SIZE}
+                      onCommit={(height) => patchActive({ height }, { coalesceKey: 'template:height' })}
                     />
                   </div>
                 </div>
@@ -963,11 +1027,10 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
                             className="flex-1 accent-blue-500"
                           />
                           <span className="flex items-center gap-0.5">
-                            <input
-                              type="number"
-                              min={8}
+                            <NumberInput
                               value={selected.fontSize}
-                              onChange={(e) => patchElement(selected.id, { fontSize: Math.max(1, Number(e.target.value) || 1) }, { coalesceKey: `fontSize:${selected.id}` })}
+                              min={1}
+                              onCommit={(fontSize) => patchElement(selected.id, { fontSize }, { coalesceKey: `fontSize:${selected.id}` })}
                               className="w-12 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                             />
                             px
@@ -1009,12 +1072,12 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
                             className="flex-1 accent-blue-500"
                           />
                           <span className="flex items-center gap-0.5">
-                            <input
-                              type="number"
+                            <NumberInput
+                              value={selected.strokeWidth}
                               min={0}
                               step={0.5}
-                              value={selected.strokeWidth}
-                              onChange={(e) => patchElement(selected.id, { strokeWidth: Math.max(0, Number(e.target.value) || 0) }, { coalesceKey: `strokeWidth:${selected.id}` })}
+                              allowDecimal
+                              onCommit={(strokeWidth) => patchElement(selected.id, { strokeWidth }, { coalesceKey: `strokeWidth:${selected.id}` })}
                               className="w-11 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                             />
                             px
