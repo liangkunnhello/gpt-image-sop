@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { flushSync } from 'react-dom'
-import { MAX_INPUT_IMAGES, type SketchBoardRequest } from '../types'
+import type { SketchBoardRequest } from '../types'
+import { useInputImageLimit } from '../hooks/useInputImageLimit'
 import { useStore } from '../store'
 import { canvasToBlob, loadImage } from '../lib/canvasImage'
 import { blobToDataUrl } from '../lib/dataUrl'
@@ -156,6 +157,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
   const setSketchBoard = useStore((s) => s.setSketchBoard)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
+  const imageLimit = useInputImageLimit()
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -807,8 +809,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     if (!docSize || !canConfirm || isSaving) return
     const state = useStore.getState()
     const replaceIdx = replaceImageId ? state.inputImages.findIndex((img) => img.id === replaceImageId) : -1
-    if (replaceIdx < 0 && state.inputImages.length >= MAX_INPUT_IMAGES) {
-      showToast(`参考图数量已达上限（${MAX_INPUT_IMAGES} 张），无法继续添加`, 'error')
+    if (replaceIdx < 0 && state.inputImages.length >= imageLimit) {
+      showToast(`参考图数量已达上限（${imageLimit} 张），无法继续添加`, 'error')
       return
     }
 

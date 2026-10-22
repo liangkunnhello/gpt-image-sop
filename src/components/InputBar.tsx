@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, createInputImageFromFile, removeMultipleTasks, assignTasksDirection, assignTasksChannel, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
-import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
+import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
 import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
@@ -29,6 +29,7 @@ import SopPresetPicker, { resolvePickedPreset } from './SopPresetPicker'
 import SopSystemPromptPicker from './SopSystemPromptPicker'
 import VariablePromptPicker from './VariablePromptPicker'
 import PlainImageModeSwitch from './PlainImageModeSwitch'
+import { useInputImageLimit } from '../hooks/useInputImageLimit'
 import { useSopStore } from '../lib/sopStore'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { buildPromptBundle } from '../lib/promptBundle'
@@ -702,8 +703,9 @@ export default function InputBar() {
         ]
       : []),
   ]
-  const atImageLimit = inputImages.length >= MAX_INPUT_IMAGES
-  const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${MAX_INPUT_IMAGES} 张），无法继续添加` : '添加图片'
+  const imageLimit = useInputImageLimit()
+  const atImageLimit = inputImages.length >= imageLimit
+  const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${imageLimit} 张），无法继续添加` : '添加图片'
   const transparentOutputHint = useHintTooltip()
   const handleTransparentOutputMenuOpenChange = useCallback((open: boolean) => {
     if (open) transparentOutputHint.hide()
@@ -1008,15 +1010,15 @@ export default function InputBar() {
   const handleFiles = async (files: FileList | File[]) => {
     try {
       const currentCount = useStore.getState().inputImages.length
-      if (currentCount >= MAX_INPUT_IMAGES) {
+      if (currentCount >= imageLimit) {
         useStore.getState().showToast(
-          `参考图数量已达上限（${MAX_INPUT_IMAGES} 张），无法继续添加`,
+          `参考图数量已达上限（${imageLimit} 张），无法继续添加`,
           'error',
         )
         return
       }
 
-      const remaining = MAX_INPUT_IMAGES - currentCount
+      const remaining = imageLimit - currentCount
       const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
@@ -1027,7 +1029,7 @@ export default function InputBar() {
 
       if (discarded > 0) {
         useStore.getState().showToast(
-          `已达上限 ${MAX_INPUT_IMAGES} 张，${discarded} 张图片被丢弃`,
+          `已达上限 ${imageLimit} 张，${discarded} 张图片被丢弃`,
           'error',
         )
       }
@@ -1949,7 +1951,7 @@ export default function InputBar() {
 
   return (
     <>
-      <DragUploadOverlay visible={isDragging} atImageLimit={atImageLimit} maxImages={MAX_INPUT_IMAGES} />
+      <DragUploadOverlay visible={isDragging} atImageLimit={atImageLimit} maxImages={imageLimit} />
 
       {showSizePicker && (
         <SizePickerModal
