@@ -391,9 +391,6 @@ export default function SopDirectionTree() {
   /** 当前归属左侧的竖条，和文字错开不重叠 */
   const currentBar = <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-blue-500 dark:bg-blue-400" />
 
-  /** 当前归属尾部的小圆点，竖条被遮挡时也能认出来 */
-  const currentDot = <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500 dark:bg-blue-400" />
-
   const tailBadge = (text: number) => (
     <span className="shrink-0 text-[11px] tabular-nums text-gray-400">{text}</span>
   )
@@ -430,7 +427,6 @@ export default function SopDirectionTree() {
               {unreadDot(node.id)}
             </span>
           </span>
-          {isCurrent && currentDot}
           {counts.get(node.id) ? tailBadge(counts.get(node.id) ?? 0) : <span className="shrink-0 text-[11px] tabular-nums text-gray-300">0</span>}
         </button>
         <button
@@ -473,7 +469,6 @@ export default function SopDirectionTree() {
               <span className="text-gray-400">{directionPath(directions, node.id).replace(/\/\s*[^/]+$/, '').replace(/\/$/, '')} / </span>
               {node.name}
             </span>
-            {isCurrent && currentDot}
             {tailBadge(counts.get(node.id) ?? 0)}
           </button>
         )
