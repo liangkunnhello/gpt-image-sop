@@ -42,6 +42,10 @@ export const DEFAULT_INSPECT_CONFIG: InspectConfig = {
   qcConcurrency: 3,
 }
 
+/** 判定线可调范围：低于 70% 几乎不会命中，高于 99% 抓不到重复 */
+export const LIMIT_MIN = 0.7
+export const LIMIT_MAX = 0.99
+
 const STORAGE_KEY = 'gpt-image-playground.inspect-config'
 
 function toBool(value: unknown, fallback: boolean) {
@@ -65,7 +69,7 @@ export function normalizeInspectConfig(raw: unknown): InspectConfig {
     checkViolation: toBool(record.checkViolation, d.checkViolation),
     checkText: toBool(record.checkText, d.checkText),
     checkOverlap: toBool(record.checkOverlap, d.checkOverlap),
-    limit: toNumber(record.limit, d.limit, 0.5, 0.999),
+    limit: toNumber(record.limit, d.limit, LIMIT_MIN, LIMIT_MAX),
     maxImages: Math.round(toNumber(record.maxImages, d.maxImages, 4, 60)),
     peerLimit: Math.round(toNumber(record.peerLimit, d.peerLimit, 1, 20)),
     qcConcurrency: Math.round(toNumber(record.qcConcurrency, d.qcConcurrency, 1, 8)),

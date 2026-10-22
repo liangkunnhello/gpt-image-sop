@@ -4,13 +4,9 @@ import { createPortal } from 'react-dom'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_QC_MODEL } from '../lib/visionQc'
-import { useInspectConfig, DEFAULT_INSPECT_CONFIG } from '../lib/inspectConfig'
+import { useInspectConfig, DEFAULT_INSPECT_CONFIG, LIMIT_MAX, LIMIT_MIN } from '../lib/inspectConfig'
 import { Checkbox } from './Checkbox'
 import { CloseIcon } from './icons'
-
-/** 判定线可调范围，低于 70% 基本不会命中，高于 99% 抓不到重复 */
-const LIMIT_MIN = 0.7
-const LIMIT_MAX = 0.99
 
 interface InspectConfigModalProps {
   onClose: () => void
