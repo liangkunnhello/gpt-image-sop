@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-pub use images::{FileMeta, ImageStat, Kind};
+pub use images::{ext_for_mime, file_stem, FileMeta, ImageStat, Kind};
 
 /// 按版本顺序执行的迁移，第 N 项把 schema 从 N 升到 N+1；已发布的项不能修改，只能追加
 const MIGRATIONS: &[&str] = &["

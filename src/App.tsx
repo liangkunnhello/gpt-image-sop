@@ -9,6 +9,7 @@ import { useAppFonts } from './hooks/useAppFonts'
 import { useCloseConfirm } from './hooks/useCloseConfirm'
 import { promptImportLink, useImportLinks } from './hooks/useImportLinks'
 import { useAutoUpdateCheck } from './hooks/useReleaseUpdates'
+import { useMcpDataSync } from './hooks/useMcpDataSync'
 import { useSaveLocationPrompt } from './hooks/useSaveLocationPrompt'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
@@ -57,6 +58,7 @@ export default function App() {
   useCloseConfirm()
   useSaveLocationPrompt()
   useAutoUpdateCheck(autoCheckUpdate)
+  useMcpDataSync()
   // 运行中的链接导入要等启动时的预置配置写入完，否则会被启动流程覆盖
   useImportLinks(startupImportDone)
 
