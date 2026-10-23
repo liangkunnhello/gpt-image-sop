@@ -1,4 +1,5 @@
 import type { ApiProfile } from '../types'
+import { MAX_INPUT_IMAGES } from '../types'
 import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, updateTaskInStore, useStore } from '../store'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
@@ -195,6 +196,20 @@ function sopFormatLines(sections: string[]): string[] {
     `输出 Markdown，必须包含以下小节，标题文字与顺序都照此执行：${list}。`,
     '不要输出任何解释性开场白。',
   ]
+}
+
+/**
+ * 参考图分组：先按用户选的卡数均分，再把每张卡里超过 MAX_INPUT_IMAGES 的部分继续切开。
+ * 一次反推请求塞不下几十张图，所以选「1 张卡」但拖了 40 张时，实际会变成 3 张卡。
+ */
+export function splitReferenceGroups<T>(items: T[], groups: number): T[][] {
+  return splitEven(items, groups).flatMap((group) => {
+    const chunks: T[][] = []
+    for (let i = 0; i < group.length; i += MAX_INPUT_IMAGES) {
+      chunks.push(group.slice(i, i + MAX_INPUT_IMAGES))
+    }
+    return chunks.length ? chunks : [group]
+  })
 }
 
 /** 反推 SOP 的系统提示词；单独导出便于测试哪些规则被写进去了 */

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useSopStore } from '../lib/sopStore'
-import { splitEven } from '../lib/sopPipeline'
+import { splitReferenceGroups } from '../lib/sopPipeline'
+import { MAX_INPUT_IMAGES } from '../types'
 import { collectAvoidZones } from '../lib/postReserve'
 import { BUILTIN_VARIABLE_PROMPT } from '../lib/variablePipeline'
 import { resolvePickedPreset } from './SopPresetPicker'
@@ -85,9 +86,13 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
       ? imageCount
       : Math.max(1, Math.min(Number(customCount) || 1, imageCount))
 
-  const preview = splitEven(Array.from({ length: imageCount }, (_, i) => i + 1), groupCount)
-    .map((group) => group.length)
-    .join(' / ')
+  // 每张卡最多 MAX_INPUT_IMAGES 张图，超出自动多分卡
+  const referenceGroups = splitReferenceGroups(
+    Array.from({ length: imageCount }, (_, i) => i + 1),
+    groupCount,
+  )
+  const actualCardCount = referenceGroups.length
+  const preview = referenceGroups.map((group) => group.length).join(' / ')
 
   const overlayInfo = useMemo(() => {
     // 方向专属模板优先，没配才看产品模板（与出图时的取法一致）
@@ -211,7 +216,8 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
               )}
             </div>
             <div className="mt-1.5 text-[11px] text-gray-400">
-              共 {groupCount} 张卡，参考图分配：{preview || '—'}
+              共 {actualCardCount} 张卡，参考图分配：{preview || '—'}
+              {actualCardCount > groupCount && `（每张卡最多 ${MAX_INPUT_IMAGES} 张，多的已自动分卡）`}
             </div>
           </div>
 
@@ -225,7 +231,7 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
               onChange={(e) => setVariablesPerCard(Number(e.target.value) || 1)}
               className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
             />
-            <span className="text-[11px] text-gray-400">按最远点采样挑组合，共约 {groupCount * variablesPerCard} 张</span>
+            <span className="text-[11px] text-gray-400">按最远点采样挑组合，共约 {actualCardCount * variablesPerCard} 张</span>
           </div>
 
           <div className="rounded-lg border border-violet-100 bg-violet-50/50 px-3 py-2 text-[11px] leading-relaxed text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/[0.08] dark:text-violet-300">

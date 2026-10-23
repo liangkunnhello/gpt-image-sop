@@ -80,6 +80,8 @@ import { createPersistedState, mergePersistedAgentConversations, migratePersiste
 import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
 import { stripInjectedCodexCliSizePrompt, withAspectRatioHint, normalizeCodexCliImageSize } from './lib/size'
 import { sizeOverridesForMixedRatios } from './lib/referenceSize'
+import { planGenerationSize } from './lib/sizeCapability'
+import { parsePixelSize, resizeDataUrlToSize } from './lib/imageResize'
 import { applyPostTemplate, productIdForDirection, resolvePostTemplates } from './lib/applyPostTemplate'
 import { buildAvoidHintForTask, withAvoidHint } from './lib/postReserve'
 import { imageSizeFromDataUrl } from './lib/imageDimensions'
@@ -2412,10 +2414,23 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
   const postTemplates = task.params.post_process === false
     ? []
     : resolvePostTemplates(sopState.postTemplates, sopState.directions, task.sopDirectionId).templates
-  let finalImages = images
+  const postProcessOn = postTemplates.some((item) => item.enabled)
+
+  // 渠道不支持目标尺寸时，出图用的是同比例更大的尺寸，这里缩回用户设的那个尺寸。
+  // 缩过之后它就是「接口给的原图」，后面判断有没有套模板都拿它当基准。
+  const sizePlan = planGenerationSize(task.params.size, { postProcess: postProcessOn })
+  let generatedImages = images
+  if (sizePlan.scaled) {
+    const target = parsePixelSize(sizePlan.targetSize)
+    if (target) {
+      generatedImages = await Promise.all(images.map((url) => resizeDataUrlToSize(url, target)))
+    }
+  }
+
+  let finalImages = generatedImages
   const appliedIndexes: number[] = []
-  if (postTemplates.some((item) => item.enabled)) {
-    finalImages = await Promise.all(images.map(async (url, index) => {
+  if (postProcessOn) {
+    finalImages = await Promise.all(generatedImages.map(async (url, index) => {
       const size = imageSizeFromDataUrl(url)
       const template = size ? pickTemplateForImage(postTemplates, size.width, size.height, task.channel) : null
       if (!template) return url
@@ -2443,10 +2458,10 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
     for (let index = 0; index < finalImages.length; index += 1) {
       const dataUrl = finalImages[index]
       // 只有真被模板改过才另存原图；没套模板时原图就等于成品，不必多存一份
-      if (dataUrl !== images[index]) {
-        const source = await storeImageWithSize(images[index], 'generated')
+      if (dataUrl !== generatedImages[index]) {
+        const source = await storeImageWithSize(generatedImages[index], 'generated')
         storedImageIds.push(source.id)
-        cacheImage(source.id, images[index])
+        cacheImage(source.id, generatedImages[index])
         sourceImageIds.push(source.id)
       } else {
         sourceImageIds.push('')
@@ -4128,13 +4143,23 @@ async function executeTask(taskId: string) {
     }
 
     // 后处理预留区：这张图出图后会按模板叠 Logo / 警示语，提示词里先让模型避开这些位置
+    const postTemplateList = resolvePostTemplates(sopState.postTemplates, sopState.directions, task.sopDirectionId).templates
     const avoidHint = sopState.avoidOverlay === false
       ? ''
       : buildAvoidHintForTask(
         task,
-        resolvePostTemplates(sopState.postTemplates, sopState.directions, task.sopDirectionId).templates,
+        postTemplateList,
         ratioReferenceDataUrls,
       )
+
+    // 渠道不支持这个尺寸时改按同比例更大的尺寸生成，出图后再缩回目标尺寸；
+    // 有后处理模板时不做（模板字号按成品像素写死，先缩会错位），Codex CLI 只认 1K 也不做
+    const postProcessOn = task.params.post_process !== false && postTemplateList.some((item) => item.enabled)
+    const sizePlan = planGenerationSize(task.params.size, {
+      postProcess: postProcessOn,
+      allowResize: !activeProfile.codexCli,
+    })
+    const requestParams = sizePlan.scaled ? { ...task.params, size: sizePlan.requestSize } : task.params
 
     const result = await callImageApi({
       settings: requestSettings,
@@ -4142,12 +4167,12 @@ async function executeTask(taskId: string) {
       prompt: withAvoidHint(
         withAspectRatioHint(
           replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
-          task.params.size,
+          requestParams.size,
           ratioReferenceDataUrls,
         ),
         avoidHint,
       ),
-      params: task.params,
+      params: requestParams,
       nativeTransparentBackground: task.params.transparent_output && !task.transparentOutput,
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
@@ -5509,7 +5534,7 @@ export async function importData(input: File | File[], options: ImportOptions = 
 export async function addImagesFromFiles(
   files: File[],
   options: { limit?: number; concurrency?: number } = {},
-): Promise<{ added: number; discarded: number; failed: number }> {
+): Promise<{ added: number; discarded: number; overflow: number; failed: number }> {
   const { limit, concurrency = 4 } = options
   const accepted = files.filter((file) => file.type.startsWith('image/'))
   const discarded = files.length - accepted.length
@@ -5532,7 +5557,7 @@ export async function addImagesFromFiles(
   })
 
   const added = useStore.getState().addInputImages(created, limit)
-  return { added, discarded: discarded + overflow, failed }
+  return { added, discarded, overflow, failed }
 }
 
 export async function createInputImageFromFile(file: File): Promise<InputImage | null> {

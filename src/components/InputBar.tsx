@@ -10,6 +10,7 @@ import { splitBatchPrompts } from '../lib/batchPrompts'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageComments, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeCodexCliImageSize, normalizeImageSize } from '../lib/size'
+import { planGenerationSize } from '../lib/sizeCapability'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getSafeBoundingClientRect } from '../lib/domRect'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
@@ -35,7 +36,7 @@ import { resolvePostTemplates } from '../lib/applyPostTemplate'
 import { parseSizeLimitKb } from '../lib/outputFileSize'
 import { buildPromptBundle } from '../lib/promptBundle'
 import { taskMatchesChannel } from '../lib/channel'
-import { enqueueSopJobs, splitEven } from '../lib/sopPipeline'
+import { enqueueSopJobs, splitReferenceGroups } from '../lib/sopPipeline'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import { CommentBadge } from './CommentMarks'
@@ -607,7 +608,8 @@ export default function InputBar() {
       style: pickedStyle?.content,
     })
     // 没有参考图时 splitEven 会返回一个空组：这一组只靠系统提示词与卖点反推文字版 SOP
-    const groups = splitEven(inputImages, options.groupCount)
+    // 每张卡最多 MAX_INPUT_IMAGES 张图，超出的自动多分卡
+    const groups = splitReferenceGroups(inputImages, options.groupCount)
     enqueueSopJobs(groups.map((group, index) => ({
       label: `第 ${index + 1}/${groups.length} 张卡`,
       imageDataUrls: group.map((img) => img.dataUrl),
@@ -627,7 +629,8 @@ export default function InputBar() {
   const runVariable = useCallback((options: VariableRunOptions) => {
     setVariableRunOpen(false)
     if (!inputImages.length) return
-    const groups = splitEven(inputImages, options.groupCount)
+    // 每张卡最多 MAX_INPUT_IMAGES 张图，超出的自动多分卡
+    const groups = splitReferenceGroups(inputImages, options.groupCount)
     enqueueVariableJobs(groups.map((group, index) => ({
       label: `第 ${index + 1}/${groups.length} 张卡`,
       imageDataUrls: group.map((img) => img.dataUrl),
@@ -703,6 +706,19 @@ export default function InputBar() {
     ? DEFAULT_FAL_IMAGE_SIZE
     : (activeProfile.codexCli ? normalizeCodexCliImageSize(params.size) : normalizeImageSize(params.size)) || DEFAULT_PARAMS.size
 
+  // 这次出图会不会真套模板。只有不套模板时，才允许「渠道不支持的尺寸 → 放大生成再缩回来」，
+  // 因为模板里的字号 / Logo 宽度是按成品像素写死的，先缩再套会错位。
+  const postProcessOn = postProcessAvailable && params.post_process !== false
+  // Codex CLI 只认 1K，放大反而会让提示词里的尺寸和实际出图对不上，所以不开放这条路径
+  const allowSizeUpscale = !postProcessOn && !activeProfile.codexCli
+  const sizePlan = useMemo(
+    () => planGenerationSize(params.size, { postProcess: postProcessOn, allowResize: !activeProfile.codexCli }),
+    [params.size, postProcessOn, activeProfile.codexCli],
+  )
+  const sizeScaleHint = sizePlan.scaled
+    ? `渠道不支持 ${sizePlan.targetSize.replace('x', '×')}，实际按 ${sizePlan.requestSize.replace('x', '×')} 生成，出图后缩回`
+    : ''
+
   const qualityOptions = [
     ...(!isFalProvider ? [{ label: 'auto', value: 'auto' }] : []),
     { label: 'low', value: 'low' },
@@ -725,7 +741,7 @@ export default function InputBar() {
   const sizeLimitHint = useHintTooltip({ enabled: () => sizeLimitDisabled })
   const moderationHint = useHintTooltip({ enabled: () => moderationDisabled })
   const postProcessHint = useHintTooltip({ enabled: () => !postProcessAvailable })
-  const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage || activeProfile.codexCli })
+  const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage || activeProfile.codexCli || Boolean(sizeScaleHint) })
   const qualityHint = useHintTooltip({ enabled: () => activeProfile.codexCli || isFalProvider })
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
   const streamConcurrentHint = useHintTooltip({ enabled: () => streamConcurrentByN })
@@ -1024,21 +1040,20 @@ export default function InputBar() {
     uploadingRef.current = true
     const startedAt = Date.now()
     try {
-      const { added, discarded, failed } = await addImagesFromFiles(list, {
+      const { added, discarded, overflow, failed } = await addImagesFromFiles(list, {
         limit: Number.isFinite(imageLimit) ? imageLimit : undefined,
       })
       // 大批量导入给一次结果反馈；单张小图不打扰
       if (list.length > 1 || failed > 0 || discarded > 0) {
         const consumed = Date.now() - startedAt
         const notes: string[] = [`已添加 ${added} 张图片`]
-        if (discarded > 0) notes.push(`${discarded} 张不是图片`)
+        // 拆开说：不是图片 vs 超过上限，否则用户会觉得「明明是图片却说不是」
+        if (discarded > 0) notes.push(`${discarded} 张不是图片格式`)
+        if (overflow > 0) notes.push(`${overflow} 张超过上限（最多 ${imageLimit} 张）`)
         if (failed > 0) notes.push(`${failed} 张读取失败`)
-        if (Number.isFinite(imageLimit) && added < list.length - discarded - failed) {
-          notes.push(`已达上限 ${imageLimit} 张`)
-        }
         useStore.getState().showToast(
           `${notes.join('，')}（${(consumed / 1000).toFixed(1)}s）`,
-          added > 0 ? 'success' : 'error',
+          added > 0 ? 'success' : 'info',
         )
       }
     } catch (err) {
@@ -1945,6 +1960,7 @@ export default function InputBar() {
       streamConcurrentByN={streamConcurrentByN}
       streamConcurrentHint={streamConcurrentHint}
       sizeHint={sizeHint}
+      sizeScaleHint={sizeScaleHint}
       qualityHint={qualityHint}
       onOpenSizePicker={() => setShowSizePicker(true)}
       showBatch={showBatch}
@@ -1973,6 +1989,7 @@ export default function InputBar() {
           onClose={() => setShowSizePicker(false)}
           allowAuto={!isFalTextToImage}
           codexCli={activeProfile.codexCli}
+          allowUpscale={allowSizeUpscale}
         />
       )}
 

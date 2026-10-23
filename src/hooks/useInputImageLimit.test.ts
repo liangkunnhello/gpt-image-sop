@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { resolveInputImageLimit } from '../hooks/useInputImageLimit'
-import { MAX_INPUT_IMAGES } from '../types'
+import { MAX_INPUT_IMAGES, MAX_SOP_INPUT_IMAGES } from '../types'
 
 const base = { sopMode: false, variableMode: false, plainImageMode: 'merge' as const, n: 1 }
 
@@ -19,9 +19,10 @@ describe('参考图数量上限', () => {
     expect(resolveInputImageLimit({ ...base, n: 100 })).toBe(Number.POSITIVE_INFINITY)
   })
 
-  it('SOP / 变量模式保持 16 张', () => {
-    expect(resolveInputImageLimit({ ...base, sopMode: true, plainImageMode: 'batch' })).toBe(MAX_INPUT_IMAGES)
-    expect(resolveInputImageLimit({ ...base, variableMode: true, n: 8 })).toBe(MAX_INPUT_IMAGES)
+  it('SOP / 变量模式放宽到 60 张（参考图不进生图接口）', () => {
+    expect(MAX_SOP_INPUT_IMAGES).toBeGreaterThan(MAX_INPUT_IMAGES)
+    expect(resolveInputImageLimit({ ...base, sopMode: true, plainImageMode: 'batch' })).toBe(MAX_SOP_INPUT_IMAGES)
+    expect(resolveInputImageLimit({ ...base, variableMode: true, n: 8 })).toBe(MAX_SOP_INPUT_IMAGES)
   })
 
   it('数量还没填时按 1 处理，不会误放开', () => {

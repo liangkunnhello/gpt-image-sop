@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useSopStore } from '../lib/sopStore'
-import { splitEven } from '../lib/sopPipeline'
+import { splitReferenceGroups } from '../lib/sopPipeline'
+import { MAX_INPUT_IMAGES } from '../types'
 import { collectAvoidZones, pickAvoidTemplate } from '../lib/postReserve'
 import { resolveSystemPrompt } from './SopSystemPromptPicker'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
@@ -88,9 +89,13 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
         ? imageCount
         : Math.max(1, Math.min(Number(customCount) || 1, imageCount))
 
-  const preview = splitEven(Array.from({ length: imageCount }, (_, i) => i + 1), groupCount)
-    .map((group) => group.length)
-    .join(' / ')
+  // 每张卡最多 MAX_INPUT_IMAGES 张图，超出会自动多分卡，预览按实际分组算
+  const referenceGroups = splitReferenceGroups(
+    Array.from({ length: imageCount }, (_, i) => i + 1),
+    groupCount,
+  )
+  const actualCardCount = referenceGroups.length
+  const preview = referenceGroups.map((group) => group.length).join(' / ')
 
   // 后处理预留区：这个方向实际生效的模板里有几处要避开
   // （方向专属优先，没配才看产品模板，和出图时的取法一致）
@@ -206,7 +211,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
                 )}
               </div>
               <div className="mt-1.5 text-[11px] text-gray-400">
-                共 {groupCount} 张卡，参考图分配：{preview || '—'}
+                共 {actualCardCount} 张卡，参考图分配：{preview || '—'}
+                {actualCardCount > groupCount && `（每张卡最多 ${MAX_INPUT_IMAGES} 张，多的已自动分卡）`}
               </div>
             </div>
           ) : (
@@ -225,7 +231,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               onChange={(e) => setPromptsPerGroup(Number(e.target.value) || 1)}
               className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
             />
-            <span className="text-[11px] text-gray-400">每条提示词出一张，共约 {groupCount * promptsPerGroup} 张</span>
+            <span className="text-[11px] text-gray-400">每条提示词出一张，共约 {actualCardCount * promptsPerGroup} 张</span>
           </div>
 
           <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
