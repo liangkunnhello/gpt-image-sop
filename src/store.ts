@@ -80,12 +80,12 @@ import { createPersistedState, mergePersistedAgentConversations, migratePersiste
 import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
 import { stripInjectedCodexCliSizePrompt, withAspectRatioHint, normalizeCodexCliImageSize } from './lib/size'
 import { sizeOverridesForMixedRatios } from './lib/referenceSize'
-import { applyPostTemplate, resolvePostTemplates } from './lib/applyPostTemplate'
+import { applyPostTemplate, productIdForDirection, resolvePostTemplates } from './lib/applyPostTemplate'
 import { buildAvoidHintForTask, withAvoidHint } from './lib/postReserve'
 import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage } from './lib/postTemplate'
 import { dataUrlByteSize, limitDataUrlSize, shouldLimitOutputSize } from './lib/outputFileSize'
-import { saveFinishedCopy } from './lib/openImagesFolder'
+import { finishedFileName, finishedFolderName, writeFinishedImage } from './lib/postFinished'
 import { useClipStore } from './lib/clipSimilarity'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
 import { pickSaveDir, saveFile, saveFileToDir, type SaveOptions } from './lib/saveFile'
@@ -1562,7 +1562,7 @@ async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<Return
   if (!latest || latest.status === 'done' || latest.error === AGENT_STOPPED_MESSAGE) return
   if (latest.status !== 'running' && !latest.falRecoverable) return
 
-  const { outputIds, outputDataUrls, outputImageSizes, transparentOriginalImageIds } = await storeTaskOutputImages(task, result.images)
+  const { outputIds, outputDataUrls, outputImageSizes, sourceImages, transparentOriginalImageIds } = await storeTaskOutputImages(task, result.images)
   const actualParamsList = await resolveImageSizeParamsList(outputDataUrls, result.actualParamsList, outputImageSizes)
   const latestBeforeUpdate = useStore.getState().tasks.find((item) => item.id === task.id)
   if (!latestBeforeUpdate || latestBeforeUpdate.status === 'done' || latestBeforeUpdate.error === AGENT_STOPPED_MESSAGE || (latestBeforeUpdate.status !== 'running' && !latestBeforeUpdate.falRecoverable)) {
@@ -1572,6 +1572,7 @@ async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<Return
 
   updateTaskInStore(task.id, {
     outputImages: outputIds,
+    sourceImages,
     transparentOriginalImages: transparentOriginalImageIds,
     actualParams: firstActualParams(actualParamsList),
     actualParamsByImage: mapActualParamsByImage(outputIds, actualParamsList),
@@ -2387,11 +2388,21 @@ function addTaskReferencedImageIds(target: Set<string>, task: TaskRecord) {
   for (const id of task.streamPartialImageIds || []) target.add(id)
 }
 
+/** 成品图落盘的文件夹名：一个任务卡一个文件夹，命名沿用设置里的任务文件夹模板 */
+function finishedFolderFor(task: TaskRecord): string {
+  const sop = useSopStore.getState()
+  const settings = useStore.getState().settings
+  const productId = productIdForDirection(sop.directions, task.sopDirectionId)
+  return finishedFolderName(task, sop.directions, settings.taskFolderTemplate, settings.taskFolderCustom, productId)
+}
+
 async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
   const outputIds: string[] = []
   const outputDataUrls: string[] = []
   const outputImageSizes: Array<{ width?: number; height?: number }> = []
   const transparentOriginalImageIds: string[] = []
+  // AI 直出原图 id，供「再次后处理」重新套模板
+  const sourceImageIds: string[] = []
   const storedImageIds: string[] = []
 
   // 后处理：按这张图自己的比例挑模板，没有对得上的模板就原样保留
@@ -2425,11 +2436,21 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
   const limitFormat: 'jpeg' | 'webp' = task.params.output_format === 'webp' ? 'webp' : 'jpeg'
   let overflowCount = 0
   let largestBytes = 0
-  const stamp = appliedIndexes.length ? Date.now() : 0
+  // 一个任务卡一个文件夹，文件名按序号 + 分辨率
+  const finishedFolder = appliedIndexes.length ? finishedFolderFor(task) : ''
 
   try {
     for (let index = 0; index < finalImages.length; index += 1) {
       const dataUrl = finalImages[index]
+      // 只有真被模板改过才另存原图；没套模板时原图就等于成品，不必多存一份
+      if (dataUrl !== images[index]) {
+        const source = await storeImageWithSize(images[index], 'generated')
+        storedImageIds.push(source.id)
+        cacheImage(source.id, images[index])
+        sourceImageIds.push(source.id)
+      } else {
+        sourceImageIds.push('')
+      }
       let outputDataUrl = dataUrl
       if (task.transparentOutput) {
         const original = await storeImageWithSize(dataUrl, 'generated')
@@ -2471,10 +2492,19 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
       outputDataUrls.push(outputDataUrl)
       outputImageSizes.push(stored)
 
-      // 顺手落一份到 data/finished，方便直接去文件夹取成品（带后处理、已压到目标体积的那份）
+      // 落一份到 data/finished/<任务文件夹>/，直接去文件夹就能取成品（带后处理、已压到目标体积的那份）
       if (appliedIndexes.includes(index)) {
-        void saveFinishedCopy(`${task.id.slice(0, 8)}-${stamp}-${index + 1}`, outputDataUrl)
+        void writeFinishedImage(
+          finishedFolder,
+          finishedFileName(index, task.params.size, task.params.output_format),
+          outputDataUrl,
+        )
       }
+    }
+
+    // 没套模板的图，原图就是成品本身
+    for (let index = 0; index < sourceImageIds.length; index += 1) {
+      if (!sourceImageIds[index]) sourceImageIds[index] = outputIds[index] ?? ''
     }
 
     // 上限是硬要求，达不到要让用户知道，不能静默放过
@@ -2489,6 +2519,7 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
       outputIds,
       outputDataUrls,
       outputImageSizes,
+      sourceImages: sourceImageIds.some((id, index) => id !== outputIds[index]) ? sourceImageIds : undefined,
       transparentOriginalImageIds: transparentOriginalImageIds.length ? transparentOriginalImageIds : undefined,
     }
   } catch (err) {
@@ -2520,6 +2551,74 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
     if (stillUsed.has(imgId)) continue
     await deleteStoredImageIfUnreferenced(imgId)
   }
+}
+
+/**
+ * 再次后处理：用出图时保留的 AI 原图重新套「当前」模板，覆盖原来那批成品，不重新生图。
+ * 只重做「套模板 + 体积上限」；透明背景任务不支持（重抠图会改变画面，已超出「再后处理」的语义）。
+ */
+export async function reapplyPostTemplate(taskId: string): Promise<void> {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task) throw new Error('找不到任务卡')
+  const sources = task.sourceImages ?? []
+  if (!sources.length || sources.length !== task.outputImages.length || sources.some((id) => !id)) {
+    throw new Error('这个任务没有保留 AI 原图，无法再次后处理（只有新版客户端出的图支持）')
+  }
+  if (task.transparentOutput) {
+    throw new Error('透明背景的任务暂不支持再次后处理，请重新生图')
+  }
+
+  const sopState = useSopStore.getState()
+  const templates = task.params.post_process === false
+    ? []
+    : resolvePostTemplates(sopState.postTemplates, sopState.directions, task.sopDirectionId).templates
+  if (!templates.some((item) => item.enabled)) throw new Error('当前产品 / 方向没有启用后处理模板')
+
+  const sourceUrls: string[] = []
+  for (const id of sources) {
+    const image = await getImage(id)
+    if (!image?.dataUrl) throw new Error('AI 原图已被清理，无法再次后处理')
+    sourceUrls.push(image.dataUrl)
+  }
+
+  const folder = finishedFolderFor(task)
+  const oldIds = [...task.outputImages, ...(task.transparentOriginalImages ?? [])]
+  const limitBytes = shouldLimitOutputSize(task.params) ? Math.round((task.params.max_file_kb ?? 0) * 1024) : 0
+  const limitFormat: 'jpeg' | 'webp' = task.params.output_format === 'webp' ? 'webp' : 'jpeg'
+  const nextIds: string[] = []
+  let applied = 0
+
+  for (let index = 0; index < sourceUrls.length; index += 1) {
+    let dataUrl = sourceUrls[index]
+    const size = imageSizeFromDataUrl(dataUrl)
+    const template = size ? pickTemplateForImage(templates, size.width, size.height, task.channel) : null
+    if (template) {
+      try {
+        dataUrl = await applyPostTemplate(dataUrl, template)
+        applied += 1
+      } catch (err) {
+        console.warn('再次后处理：套模板失败，保留原图', err)
+      }
+    }
+    if (limitBytes > 0) {
+      try {
+        dataUrl = (await limitDataUrlSize(dataUrl, limitFormat, limitBytes)).dataUrl
+      } catch (err) {
+        console.warn('再次后处理：限制体积失败，保留原图', err)
+      }
+    }
+    const stored = await storeImageWithSize(dataUrl, 'generated')
+    cacheImage(stored.id, dataUrl)
+    nextIds.push(stored.id)
+    void writeFinishedImage(folder, finishedFileName(index, task.params.size, task.params.output_format), dataUrl)
+  }
+
+  updateTaskInStore(taskId, { outputImages: nextIds })
+  await deleteUnreferencedImageIds(oldIds)
+  useStore.getState().showToast(
+    applied ? `已用原图重新后处理 ${nextIds.length} 张` : '没有匹配的模板，画面与之前一致',
+    applied ? 'success' : 'info',
+  )
 }
 
 async function persistTaskStreamPartialImage(taskId: string, dataUrl: string, execution?: symbol) {
@@ -4085,7 +4184,7 @@ async function executeTask(taskId: string) {
     }
 
     // 存储输出图片
-    const { outputIds, outputDataUrls, outputImageSizes, transparentOriginalImageIds } = await storeTaskOutputImages(task, result.images)
+    const { outputIds, outputDataUrls, outputImageSizes, sourceImages, transparentOriginalImageIds } = await storeTaskOutputImages(task, result.images)
     const isAsyncCustomTask = taskProvider !== 'fal' && taskProvider !== 'openai' && Boolean(customTaskInfo)
     const actualParamsList = await resolveImageSizeParamsList(
       outputDataUrls,
@@ -4123,6 +4222,7 @@ async function executeTask(taskId: string) {
     useStore.getState().setTaskStreamPreview(taskId)
     updateTaskInStore(taskId, {
       outputImages: outputIds,
+      sourceImages,
       transparentOriginalImages: transparentOriginalImageIds,
       outputErrors: result.failedRequests?.length ? result.failedRequests : undefined,
       streamPartialImageIds: undefined,
@@ -4982,7 +5082,7 @@ async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<Ret
   if (!latest || latest.status === 'done' || latest.error === AGENT_STOPPED_MESSAGE) return
   if (latest.status !== 'running' && !latest.customRecoverable) return
 
-  const { outputIds, outputDataUrls, outputImageSizes, transparentOriginalImageIds } = await storeTaskOutputImages(task, result.images)
+  const { outputIds, outputDataUrls, outputImageSizes, sourceImages, transparentOriginalImageIds } = await storeTaskOutputImages(task, result.images)
   const actualParamsList = await resolveImageSizeParamsList(outputDataUrls, undefined, outputImageSizes)
   const latestBeforeUpdate = useStore.getState().tasks.find((item) => item.id === task.id)
   if (!latestBeforeUpdate || latestBeforeUpdate.status === 'done' || latestBeforeUpdate.error === AGENT_STOPPED_MESSAGE || (latestBeforeUpdate.status !== 'running' && !latestBeforeUpdate.customRecoverable)) {
@@ -4992,6 +5092,7 @@ async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<Ret
 
   updateTaskInStore(task.id, {
     outputImages: outputIds,
+    sourceImages,
     transparentOriginalImages: transparentOriginalImageIds,
     actualParams: firstActualParams(actualParamsList),
     actualParamsByImage: mapActualParamsByImage(outputIds, actualParamsList),

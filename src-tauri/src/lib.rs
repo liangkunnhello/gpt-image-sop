@@ -1,5 +1,6 @@
 mod close_watch;
 mod data_dir;
+mod dataurl;
 mod diagnostics;
 mod files;
 mod http;
@@ -52,6 +53,7 @@ pub fn run() {
             storage::commands::image_get,
             storage::commands::image_put,
             storage::commands::image_delete,
+            storage::commands::finished_write,
             storage::commands::images_clear,
             storage::commands::image_ids,
             storage::commands::image_stats,

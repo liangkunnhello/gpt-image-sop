@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask, updateSopText, trashTask } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, retryTask, updateSopText, trashTask } from '../store'
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
@@ -335,6 +335,26 @@ export default function DetailModal() {
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
 
   const outputLen = outputSlots.length
+  const [reapplying, setReapplying] = useState(false)
+  // 只有保留过 AI 原图、且不是透明背景的任务才能重跑后处理
+  const canReapplyPost = Boolean(
+    isTauri
+    && outputLen > 0
+    && task?.sourceImages?.length === outputLen
+    && task.sourceImages.every(Boolean)
+    && !task.transparentOutput,
+  )
+  const handleReapplyPost = async () => {
+    if (!task) return
+    setReapplying(true)
+    try {
+      await reapplyPostTemplate(task.id)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setReapplying(false)
+    }
+  }
   const currentImageRatio = currentOutputImageId ? imageRatios[currentOutputImageId] : ''
   const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
   const baseActualParams = currentOutputImageId
@@ -1544,6 +1564,20 @@ export default function DetailModal() {
             >
               <EditIcon className="w-4 h-4 flex-shrink-0" />
               编辑输出
+            </button>
+            <button
+              onClick={() => void handleReapplyPost()}
+              disabled={!canReapplyPost || reapplying}
+              title={canReapplyPost
+                ? '用 AI 原图按当前模板重新后处理，覆盖这次的结果（不重新生图）'
+                : '这个任务没有保留 AI 原图，或开了透明背景，无法再次后处理'}
+              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
+            >
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20 10A8 8 0 006.3 6.3L4 8.5M4 14a8 8 0 0013.7 3.7L20 15.5" />
+              </svg>
+              {reapplying ? '后处理中…' : '再次后处理'}
             </button>
             <button
               onClick={handleDelete}

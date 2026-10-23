@@ -151,6 +151,56 @@ pub async fn image_put(state: State<'_, StorageState>, request: Request<'_>) -> 
     put_from_request(state, request, Kind::Image).await
 }
 
+/// 文件名/文件夹名单段清洗：去掉路径分隔符与控制字符，防止写出数据目录之外
+fn sanitize_segment(value: &str, max_chars: usize) -> String {
+    let cleaned: String = value
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| match c {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            other => other,
+        })
+        .collect();
+    let trimmed: String = cleaned
+        .trim()
+        .trim_matches('.')
+        .trim()
+        .chars()
+        .take(max_chars)
+        .collect();
+    let trimmed = trimmed.trim().trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "unnamed".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 把后处理成品写进数据目录的 finished/<任务文件夹>/<文件名>。
+/// 走 Rust 直写，不依赖本地 Node 服务（打包版没有那个服务）。
+/// 同名文件直接覆盖，正好用于「再次后处理」。
+#[tauri::command]
+pub async fn finished_write(
+    state: State<'_, StorageState>,
+    folder: String,
+    name: String,
+    payload: String,
+) -> Result<String> {
+    let (_, bytes) = crate::dataurl::split(&payload)
+        .ok_or_else(|| StorageError::new("invalid_argument", "图片数据不是合法的 dataUrl"))?;
+    run(state, move |storage| {
+        let dir = storage
+            .root()
+            .join("finished")
+            .join(sanitize_segment(&folder, 80));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(sanitize_segment(&name, 120));
+        std::fs::write(&path, &bytes)?;
+        Ok(path.to_string_lossy().to_string())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn image_delete(state: State<'_, StorageState>, id: String) -> Result<()> {
     run(state, move |s| s.delete_image(&id)).await

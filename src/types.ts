@@ -301,6 +301,11 @@ export interface TaskRecord {
   transparentPrompt?: string
   /** 透明背景后处理前的原始输出图片 id，顺序对应 outputImages */
   transparentOriginalImages?: string[]
+  /**
+   * AI 直出、尚未套后处理模板的图片 id，顺序对应 outputImages。
+   * 「再次后处理」用它重新套模板，不需要重新生图；早期任务没有这个字段，无法重跑。
+   */
+  sourceImages?: string[]
   /** 输入图片的 image store id 列表 */
   inputImageIds: string[]
   maskTargetImageId?: string | null

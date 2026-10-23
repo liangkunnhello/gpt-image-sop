@@ -66,17 +66,3 @@ export async function revealImageFile(imageId: string): Promise<OpenFolderResult
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
-
-/** 后处理完成后，把成品图另存一份到 data/finished，方便直接去文件夹拿 */
-export async function saveFinishedCopy(name: string, dataUrl: string): Promise<void> {
-  try {
-    await fetch(`${SIDECAR}/api/save-finished`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, dataUrl }),
-      signal: AbortSignal.timeout(15000),
-    })
-  } catch {
-    // 本地服务没开就算了，库里还有一份
-  }
-}
