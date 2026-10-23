@@ -178,7 +178,21 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
   const [pickerOpen, setPickerOpen] = useState(false)
   const [previewWidth, setPreviewWidth] = useState(0)
   const stageRef = useRef<HTMLDivElement>(null)
-  const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
+  const dragRef = useRef<{
+    id: string
+    startX: number
+    startY: number
+    originX: number
+    originY: number
+    /** 指针真的挪动过才算拖动，避免点一下也记一步历史 */
+    moved: boolean
+  } | null>(null)
+  /**
+   * 正在输入文字的元素。文字默认不可编辑（整块都能拖，跟 PS 一样），
+   * 双击才进入编辑；不然一按下就把光标插进去、拖不动。
+   */
+  const [editingTextId, setEditingTextId] = useState('')
+  const editingNodeRef = useRef<HTMLDivElement | null>(null)
 
   // ===== 撤销 / 重做 =====
   // 所有改动都走 commit，改动前的样子留在 past 里；拖动、连续输入按「一次操作」合并
@@ -275,6 +289,11 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
     const observer = new ResizeObserver((entries) => setPreviewWidth(entries[0].contentRect.width))
     observer.observe(el)
     return () => observer.disconnect()
+  }, [activeId])
+
+  // 换一套模板就退出文字编辑，否则编辑焦点留在上一套的元素上
+  useEffect(() => {
+    setEditingTextId('')
   }, [activeId])
 
   const active = useMemo(
@@ -446,23 +465,27 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
     if (!active) return
     patchActive({ elements: active.elements.filter((item) => item.id !== id) })
     if (selectedId === id) setSelectedId('')
+    if (editingTextId === id) setEditingTextId('')
   }
 
   const startDrag = (event: React.PointerEvent, element: PostElement) => {
     if (!stageRef.current) return
-    event.preventDefault()
+    // 只认主键；文字处于编辑态时把按下让给光标与选区
+    if (event.button !== 0) return
+    if (editingTextId === element.id) return
     event.stopPropagation()
     setSelectedId(element.id)
-    // 一次拖动只留一个历史点，中间每一帧不再单独记
-    pushHistory(templatesRef.current)
+    // 历史点在真正开始移动时才记（见 onDrag），单纯点一下不该多一步撤销
     dragRef.current = {
       id: element.id,
       startX: event.clientX,
       startY: event.clientY,
       originX: element.x,
       originY: element.y,
+      moved: false,
     }
-    ;(event.target as HTMLElement).setPointerCapture(event.pointerId)
+    // 捕获到元素自己身上：指针滑出画布也不会掉，事件继续冒泡到 stage 的 onPointerMove
+    event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   const onDrag = (event: React.PointerEvent) => {
@@ -470,10 +493,45 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
     const el = stageRef.current
     if (!drag || !el) return
     const rect = el.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+    // 手抖几像素不算拖动，否则单击选中的同时元素会轻微位移
+    if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 3) return
+    if (!drag.moved) {
+      drag.moved = true
+      // 一次拖动只留一个历史点
+      pushHistory(templatesRef.current)
+    }
+    // 按指针位移移动，不把锚点吸到指针上：抓哪儿都不会跳一下
     patchElement(drag.id, {
       x: clamp01(drag.originX + (event.clientX - drag.startX) / rect.width),
       y: clamp01(drag.originY + (event.clientY - drag.startY) / rect.height),
     }, { record: false })
+  }
+
+  /** 双击进入文字编辑，并把光标放到末尾（直接全选会让一敲键盘就清空原文） */
+  const beginTextEdit = (element: PostElement) => {
+    setSelectedId(element.id)
+    setEditingTextId(element.id)
+  }
+
+  useEffect(() => {
+    if (!editingTextId) return
+    const node = editingNodeRef.current
+    if (!node) return
+    node.focus()
+    const range = document.createRange()
+    range.selectNodeContents(node)
+    range.collapse(false)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  }, [editingTextId])
+
+  /** 退出编辑：同步一次正文（拖选、粘贴可能没触发 onInput），但不额外记历史 */
+  const endTextEdit = (element: PostElement, node: HTMLDivElement) => {
+    const text = node.textContent || ''
+    if (text !== element.text) patchElement(element.id, { text }, { record: false })
+    setEditingTextId('')
   }
 
   /** 读图片顺便记下高宽比，避让区域要靠它算预留高度 */
@@ -676,14 +734,25 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
 
                 {active.elements.map((element) => {
                   const isActive = selectedId === element.id
+                  const isEditing = element.kind === 'text' && editingTextId === element.id
                   return (
                     <div
                       key={element.id}
+                      // 整块都能拖：按下即抓取，位移按指针算，抓左上角还是右下角都一样（和 PS 一致）
+                      onPointerDown={(e) => startDrag(e, element)}
+                      onDoubleClick={(e) => {
+                        if (element.kind !== 'text') return
+                        e.stopPropagation()
+                        beginTextEdit(element)
+                      }}
                       onClick={(e) => { e.stopPropagation(); setSelectedId(element.id) }}
-                      className={`absolute ${isActive ? 'ring-2 ring-blue-500' : 'ring-1 ring-transparent hover:ring-blue-300'}`}
+                      title={element.kind === 'text' ? '拖动调整位置，双击编辑文字' : '拖动调整位置'}
+                      className={`absolute ${isEditing ? 'cursor-text' : 'cursor-move touch-none select-none'} ${
+                        isActive ? 'ring-2 ring-blue-500' : 'ring-1 ring-transparent hover:ring-blue-300'
+                      }`}
                       style={{ left: `${element.x * 100}%`, top: `${element.y * 100}%`, opacity: element.opacity }}
                     >
-                      {isActive && (
+                      {isActive && !isEditing && (
                         <div
                           onPointerDown={(e) => startDrag(e, element)}
                           title="拖动调整位置"
@@ -714,14 +783,25 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                             </div>
                           )}
                           <div
-                            contentEditable
-                            suppressContentEditableWarning
-                            onInput={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' }, { coalesceKey: `text:${element.id}` })}
-                            onBlur={(e) => {
-                              // 失焦只做兜底同步，不额外记一步历史
-                              const text = e.currentTarget.textContent || ''
-                              if (text !== element.text) patchElement(element.id, { text }, { record: false })
+                            // 只有编辑态才挂 ref：非编辑态复用同一个节点时别把焦点抢过来
+                            ref={(node) => {
+                              if (node && isEditing) editingNodeRef.current = node
                             }}
+                            contentEditable={isEditing}
+                            suppressContentEditableWarning
+                            spellCheck={false}
+                            // 编辑态下的按下要留给光标/选区，不能当成拖动
+                            onPointerDown={(e) => {
+                              if (isEditing) e.stopPropagation()
+                            }}
+                            onInput={(e) => patchElement(element.id, { text: e.currentTarget.textContent || '' }, { coalesceKey: `text:${element.id}` })}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') {
+                                e.preventDefault()
+                                e.currentTarget.blur()
+                              }
+                            }}
+                            onBlur={(e) => endTextEdit(element, e.currentTarget)}
                             style={{
                               position: 'relative',
                               fontFamily: POST_FONT_STACK,
@@ -731,6 +811,7 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                               textAlign: element.align,
                               lineHeight: 1.35,
                               whiteSpace: 'pre',
+                              cursor: isEditing ? 'text' : 'inherit',
                             }}
                           >
                             {element.text}
@@ -1019,7 +1100,8 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                   <div className="space-y-2 rounded-lg bg-gray-50 p-2 dark:bg-white/[0.04]">
                     <div className="text-[11px] font-medium text-gray-500 dark:text-gray-400">
                       {selected.kind === 'text' ? '文字设置' : 'Logo 设置'}
-                      <span className="ml-1 text-gray-400">拖蓝点移动</span>
+                      {/* 整块都能拖（和 PS 一样），提示别再引导用户去找左上角的小圆点 */}
+                      <span className="ml-1 text-gray-400">{selected.kind === 'text' ? '整块可拖 · 双击改字' : '整块可拖'}</span>
                     </div>
 
                     <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
