@@ -130,19 +130,77 @@ function sopRuleLines(ignoreCompliance: boolean, useImageSellingPoints: boolean,
   ].filter(Boolean)
 }
 
-const SOP_TAIL_LINES = [
-  '输出 Markdown，包含以下小节：## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌。',
-  '不要输出任何解释性开场白。',
+/** 系统提示词里没有定义小节时用的默认结构 */
+export const DEFAULT_SOP_SECTIONS = [
+  'SOP 名称',
+  '适用场景',
+  '版式结构',
+  '画面元素',
+  '文字规范',
+  '配色与光线',
+  '必守与禁忌',
 ]
 
+/**
+ * 取出「系统提示词」那一段。
+ * buildPromptBundle 会把三份包成 `# 文案…` / `# 系统提示词（…）` / `# 风格` 三段，
+ * 直接扫全文标题会把「文案」「风格」也当成 SOP 小节。
+ */
+function systemPromptBody(text: string): string {
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex((line) => /^#\s*系统提示词/.test(line))
+  if (start < 0) return text
+  const body: string[] = []
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i]
+    // 下一个一级标题或合并用的分隔线就是这一段结束
+    if (/^#\s/.test(line) || /^-{3,}$/.test(line.trim())) break
+    body.push(line)
+  }
+  return body.join('\n')
+}
+
+/**
+ * SOP 的输出结构由系统提示词决定：系统提示词里写了哪些小节，反推出的 SOP 就输出哪些小节。
+ * 只取最外层标题（# 最少的那些），避免把 ## 下面 ### 的子项也当成小节；
+ * 系统提示词里没有任何标题时退回默认 7 节。
+ */
+export function sopSectionsFrom(systemPrompt: string): string[] {
+  const body = systemPromptBody(systemPrompt || '')
+  const headings: Array<{ level: number; name: string }> = []
+  for (const line of body.split(/\r?\n/)) {
+    const match = line.match(/^(#{1,6})\s+(.+?)\s*$/)
+    if (match) headings.push({ level: match[1].length, name: match[2].trim() })
+  }
+  if (!headings.length) return DEFAULT_SOP_SECTIONS
+  const shallowest = Math.min(...headings.map((item) => item.level))
+  const names = headings.filter((item) => item.level === shallowest).map((item) => item.name)
+  return names.length ? names : DEFAULT_SOP_SECTIONS
+}
+
+/** 拼「输出哪些小节」这一段；结构来自系统提示词 */
+function sopFormatLines(sections: string[]): string[] {
+  const list = sections.map((name) => `## ${name}`).join('、')
+  return [
+    `输出 Markdown，必须包含以下小节，标题文字与顺序都照此执行：${list}。`,
+    '不要输出任何解释性开场白。',
+  ]
+}
+
 /** 反推 SOP 的系统提示词；单独导出便于测试哪些规则被写进去了 */
-export function buildSopSystemPrompt(ignoreCompliance: boolean, useImageSellingPoints: boolean, avoidCta = false) {
+export function buildSopSystemPrompt(
+  ignoreCompliance: boolean,
+  useImageSellingPoints: boolean,
+  avoidCta = false,
+  /** 输出小节，来自系统提示词；不传时用默认 7 节 */
+  sections: string[] = DEFAULT_SOP_SECTIONS,
+) {
   return [
     '你是广告设计团队的资深生图指导。用户会给你若干张参考图，你要从这些图里反推出一套可复用的「生图 SOP」。',
     'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
     '只描述你从参考图里真实观察到的规律，不要编造参考图里没有的品牌、价格或功效。',
     ...sopRuleLines(ignoreCompliance, useImageSellingPoints, avoidCta),
-    ...SOP_TAIL_LINES,
+    ...sopFormatLines(sections),
   ].filter(Boolean).join('\n')
 }
 
@@ -150,13 +208,19 @@ export function buildSopSystemPrompt(ignoreCompliance: boolean, useImageSellingP
  * 没有参考图时的 SOP 系统提示词：只凭卖点与风格要求设计一份文字版 SOP。
  * 与有图版本的差别只在「来源」——规则与输出格式完全一致，保证后续写提示词不用分叉。
  */
-export function buildTextSopSystemPrompt(ignoreCompliance: boolean, useImageSellingPoints: boolean, avoidCta = false) {
+export function buildTextSopSystemPrompt(
+  ignoreCompliance: boolean,
+  useImageSellingPoints: boolean,
+  avoidCta = false,
+  /** 输出小节，来自系统提示词；不传时用默认 7 节 */
+  sections: string[] = DEFAULT_SOP_SECTIONS,
+) {
   return [
     '你是广告设计团队的资深生图指导。本次用户没有提供参考图，只给了卖点文案与风格要求，你要仅凭这些文字设计出一套可复用的「生图 SOP」。',
     'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
     '所有画面设定都必须能用用户给的卖点与风格要求推出来，不要编造用户没提到的品牌、价格、功效、认证或数据。',
     ...sopRuleLines(ignoreCompliance, useImageSellingPoints, avoidCta),
-    ...SOP_TAIL_LINES,
+    ...sopFormatLines(sections),
   ].filter(Boolean).join('\n')
 }
 
@@ -222,8 +286,9 @@ export async function rewriteSopText(
 ): Promise<string> {
   const system = [
     '你是广告设计团队的资深生图指导。用户会给你一份「生图 SOP」（Markdown）和一条修改要求，你要按要求改写这份 SOP。',
-    '必须保持原有的小节结构（## SOP 名称、## 适用场景、## 版式结构、## 画面元素、## 文字规范、## 配色与光线、## 必守与禁忌），小节标题一个字都不要改。',
-    '只输出改写后的完整 SOP 正文，从「## SOP 名称」这一行开始，不要写任何解释、开场白或结束语，也不要用代码块包裹。',
+    // 结构由这份 SOP 自己决定（源头是系统提示词），这里只要求原样保留
+    '必须保持原文已有的小节结构与标题文字，顺序也不要改；原文没有的小节不要新增。',
+    '只输出改写后的完整 SOP 正文，从第一个「## 」标题行开始，不要写任何解释、开场白或结束语，也不要用代码块包裹。',
     '除非修改要求明确要求增删，否则保留原文里已有的具体数值、比例、字号和禁忌条目。',
   ].join('\n')
   const user = [
@@ -238,8 +303,9 @@ export async function rewriteSopText(
 
   // 模型偶尔会用代码块包一层，去掉再判断
   let content = raw.trim().replace(/^```(?:markdown|md)?\s*/i, '').replace(/```\s*$/, '').trim()
-  // 没输出小节结构时退回原文，避免把一份好 SOP 换成一段散文
-  if (!/^#{1,3}\s*SOP\s*名称/m.test(content) && !/^#{1,3}\s+/m.test(content)) {
+  // 没输出小节结构时退回原文，避免把一份好 SOP 换成一段散文；
+  // 结构本身由系统提示词决定，所以只要有任何一级/二级标题就认
+  if (!/^#{1,3}\s+\S/m.test(content)) {
     throw new Error('模型返回的内容不像 SOP，已放弃这次改动')
   }
   return content
@@ -259,11 +325,13 @@ export async function generateSop(
 ): Promise<string> {
   const maxSide = imageDataUrls.length > MANY_IMAGE_THRESHOLD ? 768 : MODEL_MAX_SIDE
   const images = await Promise.all(imageDataUrls.map((url) => shrinkToDataUrl(url, maxSide)))
+  // 输出哪些小节由系统提示词决定，没定义就用默认 7 节
+  const sections = sopSectionsFrom(systemPrompt)
 
   // 没有参考图：仅凭系统提示词与卖点反推文字版 SOP，规则与有图版一致
   if (!images.length) {
     return chat(profile, [
-      { role: 'system', content: buildTextSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta) },
+      { role: 'system', content: buildTextSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta, sections) },
       {
         role: 'user',
         content: [
@@ -294,7 +362,7 @@ export async function generateSop(
   for (const url of images) content.push({ type: 'image_url', image_url: { url } })
 
   return chat(profile, [
-    { role: 'system', content: buildSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta) },
+    { role: 'system', content: buildSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta, sections) },
     { role: 'user', content },
   ])
 }
@@ -423,10 +491,14 @@ export function parseNumberedList(text: string): string[] {
   return body.split(/\r?\n\s*\r?\n/).map((item) => item.trim()).filter(Boolean)
 }
 
-/** SOP 标题取「## SOP 名称」那一行，取不到就用方向名兜底 */
+/** SOP 标题取「SOP 名称」那一行；自定义结构里没有这一节时，取第一个小节下的第一行，最后才用方向名兜底 */
 export function sopTitleOf(sopText: string, fallback: string): string {
-  const match = sopText.match(/##\s*SOP\s*名称\s*\n+\s*(.+)/)
-  return match ? match[1].trim().slice(0, 40) : fallback
+  const named = sopText.match(/^#{1,3}\s*SOP\s*名称\s*\n+\s*(.+)$/m)
+  if (named) return named[1].trim().slice(0, 40)
+  const firstBody = sopText
+    .match(/^#{1,3}\s*.+\n+\s*(?:[-*]\s*)?([^\n#].+)$/m)?.[1]
+    ?.trim()
+  return (firstBody || fallback).slice(0, 40)
 }
 
 // ===== 后台队列：点击后立即返回，界面不锁 =====

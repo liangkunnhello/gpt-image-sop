@@ -534,13 +534,19 @@ export default function SopLibraryModal() {
                   value={draftContent}
                   onChange={setDraftContent}
                   placeholder={tab === 'prompt'
-                    ? '系统提示词正文，支持 Markdown：# 标题、- 列表、**重点**…'
+                    ? '系统提示词正文，支持 Markdown；用 ## 小节定义 SOP 的结构'
                     : `${label}正文，支持 Markdown`}
                   className="mt-3 min-h-0 flex-1"
                   onSave={saveDraft}
                   onImportFile={importMarkdownFile}
                 />
 
+                {tab === 'prompt' && (
+                  <p className="mt-2 shrink-0 text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                    这里用 ## 写的小节，就是按它反推出的 SOP 的结构（顺序也照此执行），例如写「## 版式要求」「## 禁忌」。
+                    一个小节都不写时，按默认的 SOP 名称、适用场景、版式结构、画面元素、文字规范、配色与光线、必守与禁忌 输出。
+                  </p>
+                )}
                 <div className="mt-3 shrink-0">
                   <AiRewriteBar
                     value={draftContent}

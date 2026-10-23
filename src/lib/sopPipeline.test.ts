@@ -72,7 +72,9 @@ describe('rewriteSopText', () => {
     const user = body.messages[1].content as string
     // 关键：不能沿用「第一行名称 + 空行 + 正文」那套输出约定
     expect(system).toContain('只输出改写后的完整 SOP 正文')
-    expect(system).toContain('## SOP 名称')
+    // 结构由 SOP 自己决定，请求里不再写死某几个小节
+    expect(system).toContain('必须保持原文已有的小节结构与标题')
+    expect(system).not.toContain('## 适用场景')
     expect(user).toContain(SOP)
     expect(user).toContain('更简洁')
   })
