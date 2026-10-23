@@ -31,6 +31,7 @@ import PlainImageModeSwitch from './PlainImageModeSwitch'
 import { useInputImageLimit } from '../hooks/useInputImageLimit'
 import { useSopStore } from '../lib/sopStore'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
+import { productIdForDirection } from '../lib/applyPostTemplate'
 import { buildPromptBundle } from '../lib/promptBundle'
 import { taskMatchesChannel } from '../lib/channel'
 import { enqueueSopJobs, splitEven } from '../lib/sopPipeline'
@@ -562,6 +563,7 @@ export default function InputBar() {
   const sopProgress = useSopStore((s) => s.progress)
   const sopDirections = useSopStore((s) => s.directions)
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
+  const sopPostTemplates = useSopStore((s) => s.postTemplates)
   const sopPresets = useSopStore((s) => s.presets)
   const sopLastPick = useSopStore((s) => s.lastPick)
   const sopDefaultPick = useSopStore((s) => s.defaultPick)
@@ -578,6 +580,14 @@ export default function InputBar() {
   const currentProductId = currentDirection ? nearestScopeId(sopDirections, currentDirection.id) : ''
   const currentProduct = sopDirections.find((node) => node.id === currentProductId)
     ?? currentDirection
+  /**
+   * 后处理模板挂产品上；当前方向所属产品没配启用的模板时，
+   * 「后处理」开着也不会有变化，面板里给个提示但不禁用（用户可能先把它设成关）。
+   */
+  const postProcessAvailable = useMemo(() => {
+    const productId = productIdForDirection(sopDirections, activeDirectionId)
+    return productId ? (sopPostTemplates[productId] ?? []).some((item) => item.enabled) : false
+  }, [sopDirections, activeDirectionId, sopPostTemplates])
   const pickedPoint = currentDirection
     ? resolvePickedPreset(sopPresets, currentDirection.id, sopScopeIds, 'point', sopLastPick, sopDefaultPick)
     : undefined
@@ -712,6 +722,7 @@ export default function InputBar() {
   }, [transparentOutputHint.hide])
   const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
   const moderationHint = useHintTooltip({ enabled: () => moderationDisabled })
+  const postProcessHint = useHintTooltip({ enabled: () => !postProcessAvailable })
   const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage || activeProfile.codexCli })
   const qualityHint = useHintTooltip({ enabled: () => activeProfile.codexCli || isFalProvider })
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
@@ -1922,6 +1933,9 @@ export default function InputBar() {
       commitOutputCompression={commitOutputCompression}
       moderationHint={moderationHint}
       moderationDisabled={moderationDisabled}
+      postProcessEnabled={params.post_process !== false}
+      postProcessAvailable={postProcessAvailable}
+      postProcessHint={postProcessHint}
       agentAutoImageCount={agentAutoImageCount}
       hideCount={sopMode || variableMode}
       outputImageLimit={outputImageLimit}

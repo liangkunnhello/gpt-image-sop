@@ -207,6 +207,11 @@ export interface TaskParams {
   moderation: 'auto' | 'low'
   n: number
   transparent_output: boolean
+  /**
+   * 出图后是否套用后处理模板（叠 Logo / 文案）。
+   * 只在本机生效，不会进接口请求；老任务没有这个字段，按「开启」处理。
+   */
+  post_process?: boolean
 }
 
 export const DEFAULT_PARAMS: TaskParams = {
@@ -217,6 +222,7 @@ export const DEFAULT_PARAMS: TaskParams = {
   moderation: 'auto',
   n: 1,
   transparent_output: false,
+  post_process: true,
 }
 
 // ===== 输入图片（UI 层面） =====

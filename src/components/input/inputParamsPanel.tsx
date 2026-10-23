@@ -116,6 +116,9 @@ export default function InputParamsPanel({
   commitOutputCompression,
   moderationHint,
   moderationDisabled,
+  postProcessEnabled,
+  postProcessAvailable,
+  postProcessHint,
   agentAutoImageCount,
   hideCount,
   outputImageLimit,
@@ -167,6 +170,11 @@ export default function InputParamsPanel({
   commitOutputCompression: () => void
   moderationHint: HintTooltipState
   moderationDisabled: boolean
+  /** 出图后是否套用后处理模板 */
+  postProcessEnabled: boolean
+  /** 当前方向下有没有启用的模板，没有时只给提示、不禁用开关 */
+  postProcessAvailable: boolean
+  postProcessHint: HintTooltipState
   agentAutoImageCount: boolean
   /** SOP 模式：出图数量改由生成弹窗决定，这里不再显示 */
   hideCount?: boolean
@@ -204,6 +212,7 @@ export default function InputParamsPanel({
       ? `透明 ${transparentOutputEnabled}`
       : compressionDisabled ? null : `压缩 ${outputCompressionInput || '默认'}`,
     moderationDisabled ? null : `审核 ${params.moderation}`,
+    postProcessEnabled ? null : '后处理 关',
   ].filter(Boolean).join(' · ')
   const prefix = (text: string) => <span className="mr-1.5 text-gray-400 dark:text-gray-500">{text}</span>
 
@@ -433,6 +442,32 @@ export default function InputParamsPanel({
               <ButtonTooltip
                 visible={moderationDisabled && moderationHint.visible}
                 text="fal.ai 不支持审核参数"
+              />
+            </div>
+            <div
+              className={ROW_CLASS}
+              onMouseEnter={postProcessHint.show}
+              onMouseLeave={postProcessHint.hide}
+              onTouchStart={postProcessHint.startTouch}
+              onTouchEnd={postProcessHint.clearTimer}
+              onTouchCancel={postProcessHint.hide}
+              onClick={postProcessHint.show}
+            >
+              <span className={ROW_LABEL_CLASS}>后处理</span>
+              <div className="w-28">
+                <Select
+                  value={postProcessEnabled ? 'on' : 'off'}
+                  onChange={(val) => setParams({ post_process: val === 'on' })}
+                  options={[
+                    { label: '开启', value: 'on' },
+                    { label: '关闭', value: 'off' },
+                  ]}
+                  className={selectClass}
+                />
+              </div>
+              <ButtonTooltip
+                visible={!postProcessAvailable && postProcessHint.visible}
+                text="当前方向还没有启用的后处理模板，出图会保持原样"
               />
             </div>
       </ParamPopoverChip>

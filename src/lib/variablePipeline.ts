@@ -451,7 +451,8 @@ async function runJob(job: VariableJobRequest) {
   if (!profile) throw new Error('没有可用的接口配置')
 
   const sopState = useSopStore.getState()
-  const avoidHint = sopState.avoidOverlay === false
+  // 关掉后处理时不必再给 Logo / 警示语留位
+  const avoidHint = sopState.avoidOverlay === false || state.params.post_process === false
     ? ''
     : buildAvoidHint(pickAvoidTemplate(
       sopState.postTemplates[productIdForDirection(sopState.directions, job.directionId)] ?? [],

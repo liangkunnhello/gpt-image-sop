@@ -89,6 +89,7 @@ function normalizeParams(value: unknown, fallback: TaskParams): TaskParams {
     moderation: value.moderation === 'auto' || value.moderation === 'low' ? value.moderation : fallback.moderation,
     n: typeof value.n === 'number' && Number.isFinite(value.n) ? value.n : fallback.n,
     transparent_output: typeof value.transparent_output === 'boolean' ? value.transparent_output : fallback.transparent_output,
+    post_process: typeof value.post_process === 'boolean' ? value.post_process : fallback.post_process,
   }
 }
 

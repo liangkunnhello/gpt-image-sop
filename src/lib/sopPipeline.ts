@@ -476,8 +476,9 @@ async function runJob(job: SopJobRequest) {
   if (!profile) throw new Error('没有可用的接口配置')
 
   // 后处理预留区：出图后要在固定位置叠 Logo / 警示语，写提示词时就让模型避开
+  // 关掉后处理就不用留位了，画面可以画满
   const sopState = useSopStore.getState()
-  const avoidHint = sopState.avoidOverlay === false
+  const avoidHint = sopState.avoidOverlay === false || state.params.post_process === false
     ? ''
     : buildAvoidHint(pickAvoidTemplate(
       sopState.postTemplates[productIdForDirection(sopState.directions, job.directionId)] ?? [],

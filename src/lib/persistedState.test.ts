@@ -387,3 +387,20 @@ describe('persisted state codec', () => {
     expect(merged[1].title).toBe('legacy')
   })
 })
+
+describe('后处理开关的持久化', () => {
+  it('关掉后刷新还在，不会被重置成开启', () => {
+    const result = normalizePersistedState(
+      { params: { ...DEFAULT_PARAMS, post_process: false } },
+      fallback(),
+      100,
+    )!
+    expect(result.state.params.post_process).toBe(false)
+  })
+
+  it('老存档没有这个字段时按开启处理', () => {
+    const { post_process: _omitted, ...legacyParams } = DEFAULT_PARAMS
+    const result = normalizePersistedState({ params: legacyParams }, fallback(), 100)!
+    expect(result.state.params.post_process).toBe(true)
+  })
+})

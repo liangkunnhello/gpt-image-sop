@@ -2394,9 +2394,12 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
   const storedImageIds: string[] = []
 
   // 后处理：按这张图自己的比例挑模板，没有对得上的模板就原样保留
+  // 参数面板里可以把「后处理」关掉，关掉时一张都不套，原图直出
   const sopState = useSopStore.getState()
   const postProductId = productIdForDirection(sopState.directions, task.sopDirectionId)
-  const postTemplates = postProductId ? (sopState.postTemplates[postProductId] ?? []) : []
+  const postTemplates = task.params.post_process === false
+    ? []
+    : postProductId ? (sopState.postTemplates[postProductId] ?? []) : []
   let finalImages = images
   if (postTemplates.some((item) => item.enabled)) {
     const appliedIndexes: number[] = []
