@@ -46,9 +46,10 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
     [directions],
   )
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
-  const activeNode = directions.find((node) => node.id === activeDirectionId)
   const [productId, setProductId] = useState(
-    (activeDirectionId ? nearestScopeId(directions, activeDirectionId) : activeNode?.id) || products[0]?.id || '',
+    // 归属为空 = 未归属：默认就停在这，不替用户挑第一个产品。
+    // 否则点完「全部任务」打开弹窗，会看到某个方向被预选，跟侧栏归属对不上。
+    activeDirectionId ? nearestScopeId(directions, activeDirectionId) || products[0]?.id || '' : '',
   )
   const productChildren = useMemo(
     () => directions.filter((node) => node.parentId === productId),
@@ -100,8 +101,10 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
     }
   }, [postTemplates, productId])
 
-  // 系统提示词在外面选，这里不再拦截；有方向就能跑，参考图可以没有（纯卖点生图）
-  const canRun = Boolean(currentDirectionId)
+  // 系统提示词在外面选，这里不再拦截；参考图可以没有（纯卖点生图）。
+  // 未归属（productId 为空）也能跑：不挂方向、不继承提示词，靠内置规则反推 SOP；
+  // 选了产品就必须落到具体方向，避免「看着选了产品其实没归到任何方向」。
+  const canRun = !productId || Boolean(currentDirectionId)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-6" onClick={onClose}>
@@ -132,6 +135,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
                 }}
                 className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
               >
+                {/* 未归属是合法选择：不继承任何方向的提示词/模板，出图直接进「未归属」 */}
+                <option value="">未归属</option>
                 {products.map((node) => (
                   <option key={node.id} value={node.id}>{node.name}</option>
                 ))}
@@ -141,12 +146,15 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
                 onChange={(e) => {
                   setDirectionId(e.target.value)
                 }}
-                className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                disabled={!productId}
+                className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm disabled:opacity-50 dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
               >
                 {/* 产品下的子节点就是可选归属，按层级算，不依赖可能写错的 kind */}
-                {productChildren.map((node) => (
-                  <option key={node.id} value={node.id}>{node.name}</option>
-                ))}
+                {productId
+                  ? productChildren.map((node) => (
+                    <option key={node.id} value={node.id}>{node.name}</option>
+                  ))
+                  : <option value="">—</option>}
               </select>
             </div>
           </div>
@@ -156,7 +164,9 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             <span className="min-w-0 flex-1 truncate font-medium text-gray-700 dark:text-gray-200">
               {selectedPrompt?.name ?? '未使用'}
             </span>
-            <span className="shrink-0 text-[11px] text-gray-400">在输入框上方切换</span>
+            <span className="shrink-0 text-[11px] text-gray-400">
+              {productId ? '在输入框上方切换' : '未归属不继承方向提示词'}
+            </span>
           </div>
 
           {hasImages ? (

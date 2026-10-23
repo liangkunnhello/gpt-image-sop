@@ -56,9 +56,9 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
     () => directions.filter((node) => effectiveNodeKind(directions, node.id) !== 'direction'),
     [directions],
   )
-  const activeNode = directions.find((node) => node.id === activeDirectionId)
   const [productId, setProductId] = useState(
-    (activeDirectionId ? nearestScopeId(directions, activeDirectionId) : activeNode?.id) || products[0]?.id || '',
+    // 归属为空 = 未归属：默认就停在这，不替用户挑第一个产品
+    activeDirectionId ? nearestScopeId(directions, activeDirectionId) || products[0]?.id || '' : '',
   )
   const productChildren = useMemo(
     () => directions.filter((node) => node.parentId === productId),
@@ -97,7 +97,9 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
     }
   }, [postTemplates, productId])
 
-  const canRun = Boolean(currentDirectionId && imageCount > 0)
+  // 未归属（productId 为空）也能跑：不挂方向，变量提示词退回内置提取策略；
+  // 选了产品就必须落到具体方向，避免「看着选了产品其实没归到任何方向」
+  const canRun = (!productId || Boolean(currentDirectionId)) && imageCount > 0
   const isBuiltin = selectedPrompt?.id === BUILTIN_VARIABLE_PROMPT.id
 
   return (
@@ -132,6 +134,8 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
                 }}
                 className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
               >
+                {/* 未归属是合法选择：不继承方向的变量提示词，出图直接进「未归属」 */}
+                <option value="">未归属</option>
                 {products.map((node) => (
                   <option key={node.id} value={node.id}>{node.name}</option>
                 ))}
@@ -139,12 +143,15 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
               <select
                 value={currentDirectionId}
                 onChange={(e) => setDirectionId(e.target.value)}
-                className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                disabled={!productId}
+                className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm disabled:opacity-50 dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
               >
                 {/* 产品下的子节点就是可选归属，按层级算，不依赖可能写错的 kind */}
-                {productChildren.map((node) => (
-                  <option key={node.id} value={node.id}>{node.name}</option>
-                ))}
+                {productId
+                  ? productChildren.map((node) => (
+                    <option key={node.id} value={node.id}>{node.name}</option>
+                  ))
+                  : <option value="">—</option>}
               </select>
             </div>
           </div>

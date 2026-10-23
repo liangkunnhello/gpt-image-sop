@@ -515,22 +515,29 @@ export default function SopDirectionTree() {
             默认归属常驻显示：树折叠或滚走了也能一眼看到现在归到哪。
             用中性卡而不是蓝色实底 —— 蓝色实底会被误读成「这个方向正被选中」，
             点了「全部任务」之后尤其明显。这里只表示新图会归到哪，点击才去筛选它。
+
+            点「全部任务」「未归属」会把归属清空，这时卡片也要在：
+            显示「未归属」，否则用户看不到「新图不会挂方向」这件事。
           */}
-          {currentNode && (
-            <button
-              type="button"
-              onClick={() => setActiveFilter(activeDirectionId)}
-              title={`${sopStyleMode ? '当前归属' : '默认归属'}：${currentPath}（新生成的图归到这里，点击只看这个方向）`}
-              className="mb-2 flex w-full min-w-0 flex-col gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-left transition-colors hover:border-gray-300 hover:bg-gray-100 dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
-            >
-              <span className="flex items-center gap-1 text-[10px] font-medium text-gray-500 dark:text-gray-400">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500 dark:bg-blue-400" />
-                {sopStyleMode ? '当前归属' : '默认归属'}
-                <span className="font-normal text-gray-400 dark:text-gray-500">· 新图归到这里</span>
+          <button
+            type="button"
+            onClick={() => setActiveFilter(currentNode ? activeDirectionId : UNASSIGNED_FILTER)}
+            title={currentNode
+              ? `${sopStyleMode ? '当前归属' : '默认归属'}：${currentPath}（新生成的图归到这里，点击只看这个方向）`
+              : `${sopStyleMode ? '当前归属' : '默认归属'}：未归属（新生成的图不挂方向，点击只看未归属）`}
+            className="mb-2 flex w-full min-w-0 flex-col gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-left transition-colors hover:border-gray-300 hover:bg-gray-100 dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
+          >
+            <span className="flex items-center gap-1 text-[10px] font-medium text-gray-500 dark:text-gray-400">
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${currentNode ? 'bg-blue-500 dark:bg-blue-400' : 'bg-gray-300 dark:bg-gray-600'}`} />
+              {sopStyleMode ? '当前归属' : '默认归属'}
+              <span className="font-normal text-gray-400 dark:text-gray-500">
+                {currentNode ? '· 新图归到这里' : '· 新图不挂方向'}
               </span>
-              <span className="min-w-0 truncate text-[12px] font-semibold text-gray-700 dark:text-gray-100">{currentPath}</span>
-            </button>
-          )}
+            </span>
+            <span className={`min-w-0 truncate text-[12px] font-semibold ${currentNode ? 'text-gray-700 dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}>
+              {currentNode ? currentPath : '未归属'}
+            </span>
+          </button>
         </div>
 
         {search.trim() ? (

@@ -226,9 +226,13 @@ export const useSopStore = create<SopState>()(
         // 这里按层级判断而不是 kind 字段，老数据里 kind 写错的节点也能点得动。
         const target = id ? state.directions.find((node) => node.id === id) : undefined
         const canOwn = Boolean(target?.parentId)
+        // 「全部任务」「未归属」都不是具体方向，等于「新图不指定归属」：
+        // 归属跟着回到未归属（空串）。否则点完全部任务再出图，
+        // 会悄悄落到上一次看过的方向里，跟界面显示对不上。
+        const noDirection = id === null || id === UNASSIGNED_FILTER
         return {
           activeFilterId: id,
-          activeDirectionId: canOwn && id ? id : state.activeDirectionId,
+          activeDirectionId: noDirection ? '' : canOwn && id ? id : state.activeDirectionId,
         }
       }),
       setSidebarCollapsed: (value) => set({ sidebarCollapsed: value }),

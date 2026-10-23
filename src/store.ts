@@ -1956,7 +1956,10 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       createdAt: Date.now(),
       finishedAt: null,
       elapsed: null,
-      sopDirectionId: useSopStore.getState().activeFilterId || undefined,
+      // 归属取「当前归属」而不是「正在筛选的节点」：
+      // 点「未归属」筛选时 activeFilterId 是 __unassigned__ 这种视图标记，
+      // 写进任务会变成一个查不到节点的脏方向；点类目筛选也不该把图挂到分组容器上。
+      sopDirectionId: useSopStore.getState().activeDirectionId || undefined,
       ...(meta ? {
         sopJobId: meta.sopJobId,
         sopPromptIndex: meta.sopPromptIndex,
@@ -5466,7 +5469,7 @@ export async function submitSopTasks(input: {
       sopPromptIndex: index + 1,
       sopSystemPrompt: input.systemPromptName,
       sopText: input.sopText,
-      sopDirectionId: input.directionId,
+      sopDirectionId: input.directionId || undefined,
       sopReferenceImageIds: input.referenceImageIds,
       variableMode: input.variable ? true : undefined,
       variablePromptName: input.variable?.promptName,
@@ -5516,7 +5519,7 @@ export function createSopPlaceholder(sopJobId: string, label: string, directionI
     sopJobId,
     sopName: label,
     sopPromptIndex: 0,
-    sopDirectionId: directionId,
+    sopDirectionId: directionId || undefined,
     sopPlaceholder: true,
   }
   useStore.getState().setTasks([task, ...useStore.getState().tasks])
