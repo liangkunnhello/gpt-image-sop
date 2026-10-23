@@ -615,7 +615,6 @@ export default function InputBar() {
       systemPromptName: options.systemPromptName,
       copyText: bundle.copyText,
       promptsPerGroup: options.promptsPerGroup,
-      variationMode: options.variationMode,
       directionId: options.directionId,
       ignoreCompliance: options.ignoreCompliance,
       useImageSellingPoints: options.useImageSellingPoints,

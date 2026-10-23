@@ -7,7 +7,7 @@ import { apiFetch } from './platform'
 import { productIdForDirection } from './applyPostTemplate'
 import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
 import { dedupePrompts } from './copyDedupe'
-import { buildVariationTable, buildVariations, type SopVariationMode } from './promptVariation'
+import { variationCandidates } from './promptVariation'
 
 /** 生成 SOP 与提示词所用的文本模型 */
 export const SOP_TEXT_MODEL = 'deepseek-v4.1-flash'
@@ -127,8 +127,13 @@ function sopRuleLines(ignoreCompliance: boolean, useImageSellingPoints: boolean,
       ? '参考图里的按钮、悬浮球、进度条、返回箭头、开关、卡片跳转等「仿系统界面 / 可点击」的设计元素，一律不要写进 SOP；SOP 里要明确列为禁忌：不画按钮、不画手指点击示意、不加指向性的箭头或手势，也不写「立即领取」「点击查看」「滑动解锁」「下载App」这类引导点击的文案。'
       : '',
     '文字规范要按卖点条数定义槽位：有几条卖点就排几个文字位，不要设计固定数量的装饰性文字位；卖点少于槽位时删掉多余槽位或改用图形、留白，不能靠重复同一句卖点把版面填满。',
+    '必须写「变量池」：按场景、机位、主体、色调四个维度，列出这份 SOP 允许使用的具体取值，每个维度至少 4 个。优先从用户给的候选里挑，删掉与参考图冲突的，再补上参考图里体现的行业特有取景；不要照抄候选全表。',
+    '必须写「互斥规则」：用可执行的条款写清同一批提示词之间怎么避重 —— 任意两条至少在场景、机位、主体、色调中的两项上不同；相邻两条不得使用同一机位或同一色调；不得靠替换形容词冒充差异；一批里同一场景出现次数不超过该批条数的一半。',
   ].filter(Boolean)
 }
+
+/** 发散机制的两节：无论系统提示词怎么定义结构，这两节都要保留 */
+export const VARIATION_SECTIONS = ['变量池', '互斥规则']
 
 /** 系统提示词里没有定义小节时用的默认结构 */
 export const DEFAULT_SOP_SECTIONS = [
@@ -139,6 +144,7 @@ export const DEFAULT_SOP_SECTIONS = [
   '文字规范',
   '配色与光线',
   '必守与禁忌',
+  ...VARIATION_SECTIONS,
 ]
 
 /**
@@ -175,7 +181,10 @@ export function sopSectionsFrom(systemPrompt: string): string[] {
   if (!headings.length) return DEFAULT_SOP_SECTIONS
   const shallowest = Math.min(...headings.map((item) => item.level))
   const names = headings.filter((item) => item.level === shallowest).map((item) => item.name)
-  return names.length ? names : DEFAULT_SOP_SECTIONS
+  if (!names.length) return DEFAULT_SOP_SECTIONS
+  // 变量池与互斥规则是发散机制的载体，用户没自己写就追加在末尾
+  const missing = VARIATION_SECTIONS.filter((name) => !names.includes(name))
+  return [...names, ...missing]
 }
 
 /** 拼「输出哪些小节」这一段；结构来自系统提示词 */
@@ -337,6 +346,7 @@ export async function generateSop(
         content: [
           '根据下面的要求与卖点，设计一套生图 SOP。',
           systemPrompt.trim() ? `\n【用户给定的要求与文案】\n${systemPrompt.trim()}` : '',
+          `\n${variationCandidates()}`,
           copyText.trim()
             ? '\n注意：「文案」那一段是要印在图上、必须逐字使用的文字，请原样抄进 SOP 的文字规范里，不要改写或省略。'
             : '',
@@ -352,6 +362,7 @@ export async function generateSop(
       text: [
         '根据下面这些参考图，反推一套生图 SOP。',
         systemPrompt.trim() ? `\n【用户给定的要求与文案】\n${systemPrompt.trim()}` : '',
+        `\n${variationCandidates()}`,
         copyText.trim()
           ? '\n注意：「文案」那一段是要印在图上、必须逐字使用的文字，请原样抄进 SOP 的文字规范里，不要改写或省略。'
           : '',
@@ -367,20 +378,11 @@ export async function generateSop(
   ])
 }
 
-function promptSystem(
-  ignoreCompliance: boolean,
-  avoidHint = '',
-  hasCopy = false,
-  avoidCta = false,
-  variationMode: SopVariationMode = 'deepen',
-) {
-  const explore = variationMode === 'explore'
+function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false) {
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
     '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。',
-    explore
-      ? '用户会给出每条提示词已分配好的场景、机位、主体、色调，必须严格使用自己那一行的取值：不要自己另选，不要和别的条目重复，也不要只换几个形容词就当成差异。'
-      : '',
+    '发散按 SOP 里的「变量池」和「互斥规则」执行：每条从变量池里取用取值，同一批之间按互斥规则避重；不要自己另立一套维度，也不要把互斥规则当成建议。',
     avoidHint
       ? '如果给出了【画面预留区】，每条提示词都要写清主体、主要文字和关键视觉安排在预留区之外，并明确说明这些区域留白或保持干净背景。'
       : '',
@@ -417,8 +419,6 @@ export interface PromptMessagesInput {
   copyText?: string
   /** 避免按钮等引导点击的仿系统界面设计 */
   avoidCta?: boolean
-  /** 多条提示词之间怎么拉开差异，默认深化（沿用原有做法） */
-  variationMode?: SopVariationMode
 }
 
 /** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
@@ -429,7 +429,6 @@ export function buildPromptMessages({
   avoidHint = '',
   copyText = '',
   avoidCta = false,
-  variationMode = 'deepen',
 }: PromptMessagesInput): { system: string; user: string } {
   const copy = copyText.trim()
   const tail = ignoreCompliance
@@ -440,12 +439,9 @@ export function buildPromptMessages({
   const copyTail = copy
     ? '\n注意：每条提示词用的都是同一份卖点，各张图的卖点完全一致。同一张图里，一份卖点从头到尾只用一遍：一句进了主标题，就不许再出现在副标题、角标、贴片等其他文字位上，也不许换个说法或拆成两行重写。文字位数量按卖点条数来定，多出来的槽位删掉，用图形、色块或留白补位。'
     : ''
-  // 探索模式：把预先算好的差异表拼进请求；深化模式不拼，保持原有行为
-  const variation = variationMode === 'explore' ? buildVariationTable(buildVariations(count)) : ''
-  const variationBlock = variation ? `\n\n${variation}` : ''
   return {
-    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta, variationMode),
-    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${variationBlock}${tail}${copyTail}${reserve}`,
+    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta),
+    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${reserve}`,
   }
 }
 
@@ -458,9 +454,8 @@ export async function generatePrompts(
   avoidHint = '',
   copyText = '',
   avoidCta = false,
-  variationMode: SopVariationMode = 'deepen',
 ): Promise<string[]> {
-  const messages = buildPromptMessages({ sopText, count, ignoreCompliance, avoidHint, copyText, avoidCta, variationMode })
+  const messages = buildPromptMessages({ sopText, count, ignoreCompliance, avoidHint, copyText, avoidCta })
   const raw = await chat(
     profile,
     [
@@ -470,8 +465,8 @@ export async function generatePrompts(
     // 条数多时写得更久，超时要跟着放宽，否则正常的长输出会被中断
     240,
     tokensForPrompts(count),
-    // 探索模式要放开采样，否则模型在差异表之外仍会复用前面的写法；深化保持原来的稳定值
-    variationMode === 'explore' ? 0.85 : 0.4,
+    // 发散交给 SOP 的变量池与互斥规则，这里保持稳定采样，避免 SOP 之外的随机漂移
+    0.4,
   )
   const prompts = parseNumberedList(raw)
   // 规则层要求「同一张图里每种卖点只出现一次」，但模型可能写重；
@@ -514,8 +509,6 @@ export interface SopJobRequest {
   /** 卖点原文：写提示词阶段要再单独喂一次，保证图上文字逐字来自这里 */
   copyText?: string
   promptsPerGroup: number
-  /** 差异方式：深化沿用原有做法，探索按维度表强制分配，默认深化 */
-  variationMode?: SopVariationMode
   directionId?: string
   ignoreCompliance?: boolean
   useImageSellingPoints?: boolean
@@ -580,7 +573,6 @@ async function runJob(job: SopJobRequest) {
       avoidHint,
       job.copyText ?? '',
       job.avoidCta !== false,
-      job.variationMode ?? 'deepen',
     )
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
 

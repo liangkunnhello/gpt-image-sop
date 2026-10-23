@@ -35,23 +35,30 @@ const MERGED = [
 ].join('\n')
 
 describe('sopSectionsFrom', () => {
-  it('系统提示词里没写小节时退回默认 7 节', () => {
+  it('系统提示词里没写小节时退回默认结构（含变量池与互斥规则）', () => {
     expect(sopSectionsFrom('一段没有任何标题的说明文字')).toEqual(DEFAULT_SOP_SECTIONS)
     expect(sopSectionsFrom('')).toEqual(DEFAULT_SOP_SECTIONS)
+    expect(DEFAULT_SOP_SECTIONS).toContain('变量池')
+    expect(DEFAULT_SOP_SECTIONS).toContain('互斥规则')
   })
 
-  it('按系统提示词里的小节决定 SOP 结构', () => {
+  it('按系统提示词里的小节决定结构，并自动补上变量池与互斥规则', () => {
     const text = ['## 版式要求', '左图右文', '## 文案规则', '主标题 12 字内', '## 禁忌', '不画按钮'].join('\n')
-    expect(sopSectionsFrom(text)).toEqual(['版式要求', '文案规则', '禁忌'])
+    expect(sopSectionsFrom(text)).toEqual(['版式要求', '文案规则', '禁忌', '变量池', '互斥规则'])
+  })
+
+  it('系统提示词自己已经写了变量池时不再重复追加', () => {
+    const text = ['## 版式要求', '左图右文', '## 变量池', '场景：室内', '## 互斥规则', '不重复'].join('\n')
+    expect(sopSectionsFrom(text)).toEqual(['版式要求', '变量池', '互斥规则'])
   })
 
   it('只取最外层标题，不把更深的子项当小节', () => {
     const text = ['## 产品', '### 人群', '### 痛点', '## 版式', '### 分区'].join('\n')
-    expect(sopSectionsFrom(text)).toEqual(['产品', '版式'])
+    expect(sopSectionsFrom(text)).toEqual(['产品', '版式', '变量池', '互斥规则'])
   })
 
   it('合并文档里只认「系统提示词」那一段，文案和风格不算小节', () => {
-    expect(sopSectionsFrom(MERGED)).toEqual(['产品与受众', '必须做到', '绝对不要'])
+    expect(sopSectionsFrom(MERGED)).toEqual(['产品与受众', '必须做到', '绝对不要', '变量池', '互斥规则'])
   })
 })
 
@@ -69,11 +76,13 @@ describe('输出格式由系统提示词决定', () => {
     expect(system).not.toContain('## 配色与光线')
   })
 
-  it('不传结构时保持默认 7 节，原有行为不变', () => {
+  it('不传结构时用默认结构，且包含变量池与互斥规则的写法要求', () => {
     const system = buildSopSystemPrompt(true, false, true)
     for (const name of DEFAULT_SOP_SECTIONS) {
       expect(system).toContain(`## ${name}`)
     }
+    expect(system).toContain('每个维度至少 4 个')
+    expect(system).toContain('任意两条至少在场景、机位、主体、色调中的两项上不同')
   })
 })
 

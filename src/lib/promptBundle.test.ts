@@ -91,29 +91,18 @@ describe('buildPromptMessages', () => {
     expect(user.trimEnd().endsWith('左上角留白')).toBe(true)
   })
 
-  it('探索模式：每条提示词的画面差异直接分配好，写在预留区之前', () => {
+  it('发散交给 SOP：要求按变量池与互斥规则执行，不再由代码逐条分配', () => {
     const { system, user } = buildPromptMessages({
       ...base,
       copyText: '首月 1 元',
       avoidHint: '【画面预留区】左上角留白',
-      variationMode: 'explore',
     })
-    expect(system).toContain('必须严格使用自己那一行的取值')
-    expect(user).toContain('【每条的画面差异（已经分配好，必须照此执行）】')
-    // 3 条就给 3 行，不多不少
-    expect(user).toContain('第 1 条：场景＝')
-    expect(user).toContain('第 3 条：场景＝')
-    expect(user).not.toContain('第 4 条')
-    // 预留给后处理的说明必须留在最末，顺序不能被打乱
-    expect(user.indexOf('【每条的画面差异')).toBeLessThan(user.indexOf('【画面预留区】'))
-  })
-
-  it('深化模式（默认）：不出现差异表，保持原有行为', () => {
-    const { system, user } = buildPromptMessages({ ...base, copyText: '首月 1 元' })
-    expect(system).not.toContain('必须严格使用自己那一行的取值')
-    expect(user).not.toContain('【每条的画面差异')
-    // 原有的差异化约束仍然保留
-    expect(system).toContain('多条之间要在场景、机位、人物、色调上做出区分')
+    expect(system).toContain('「变量池」和「互斥规则」')
+    expect(user).toContain('严格遵守其中的「变量池」与「互斥规则」')
+    // 差异由 SOP 决定，请求里不该再出现第几条用哪组
+    expect(user).not.toContain('第 1 条：场景＝')
+    // 预留给后处理的说明仍然固定在最末
+    expect(user.trimEnd().endsWith('左上角留白')).toBe(true)
   })
 })
 
