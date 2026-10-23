@@ -1072,28 +1072,108 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                   </span>
                 </label>
 
-                <div className="mb-3 space-y-1">
-                  {active.elements.map((element, index) => (
-                    <div
-                      key={element.id}
-                      className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] ${selectedId === element.id ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.04]'}`}
-                    >
-                      <button type="button" onClick={() => setSelectedId(element.id)} className="min-w-0 flex-1 truncate text-left">
-                        {element.kind === 'text' ? `文字 ${index + 1}｜${element.text.slice(0, 10) || '空'}` : `Logo ${index + 1}`}
-                      </button>
-                      <label className="flex shrink-0 items-center gap-0.5 text-[10px] text-gray-400" title="写提示词时避开这块位置">
-                        <input
-                          type="checkbox"
-                          checked={element.avoid !== false}
-                          onChange={(e) => patchElement(element.id, { avoid: e.target.checked })}
-                          className="h-3 w-3 accent-blue-500"
-                        />
-                        避让
-                      </label>
-                      <button type="button" onClick={() => removeElement(element.id)} className="shrink-0 text-gray-400 hover:text-red-500">✕</button>
+                <div className="mb-3">
+                  <div className="mb-1.5 flex items-baseline justify-between px-0.5">
+                    <span className="text-[10px] font-semibold tracking-wide text-gray-500 dark:text-gray-400">
+                      图层
+                      <span className="ml-1 rounded-full bg-gray-100 px-1.5 py-px text-[9px] font-medium tabular-nums text-gray-500 dark:bg-white/10 dark:text-gray-400">
+                        {active.elements.length}
+                      </span>
+                    </span>
+                    <span className="text-[9px] text-gray-300 dark:text-gray-500">选中后画布上直接拖</span>
+                  </div>
+
+                  <div className="space-y-1">
+                    {active.elements.map((element, index) => {
+                      const isActive = selectedId === element.id
+                      // 有自定义名称就优先显示名称，没有才退回「文字 1 / Logo 2」
+                      const title = element.label?.trim() || (element.kind === 'text' ? `文字 ${index + 1}` : `Logo ${index + 1}`)
+                      const subtitle = element.kind === 'text'
+                        ? (element.text.replace(/\s*\n\s*/g, ' ').trim() || '空内容')
+                        : `宽 ${Math.round(element.width * 100)}%`
+                      const avoid = element.avoid !== false
+                      return (
+                        <div
+                          key={element.id}
+                          className={`group relative flex items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 transition ${
+                            isActive
+                              ? 'border-blue-300/80 bg-blue-50 shadow-sm dark:border-blue-400/40 dark:bg-blue-500/[0.12]'
+                              : 'border-gray-200/90 bg-white hover:border-gray-300 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:hover:border-white/20 dark:hover:bg-white/[0.06]'
+                          }`}
+                        >
+                          {/* 选中态左侧蓝条，比纯底色更好认 */}
+                          <span className={`absolute inset-y-1 left-0 w-[3px] rounded-full ${isActive ? 'bg-blue-500' : 'bg-transparent'}`} />
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedId(element.id)}
+                            className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                          >
+                            <span
+                              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[9px] font-bold ${
+                                element.kind === 'text'
+                                  ? 'bg-sky-100 text-sky-600 dark:bg-sky-500/20 dark:text-sky-300'
+                                  : 'bg-violet-100 text-violet-600 dark:bg-violet-500/20 dark:text-violet-300'
+                              }`}
+                            >
+                              {element.kind === 'text' ? 'T' : (
+                                <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.4">
+                                  <rect x="2" y="3" width="12" height="10" rx="1.5" />
+                                  <path d="M2 10.5l3-3 2.5 2.5L10 7.5l4 4" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              )}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className={`block truncate text-[11px] font-medium ${isActive ? 'text-blue-700 dark:text-blue-200' : 'text-gray-700 dark:text-gray-200'}`}>
+                                {title}
+                              </span>
+                              <span className="block truncate text-[10px] leading-tight text-gray-400 dark:text-gray-500">
+                                {subtitle}
+                              </span>
+                            </span>
+                          </button>
+
+                          {/* 「避让」做成小开关：亮蓝=参与避让，灰色=这块是设计的一部分 */}
+                          <label
+                            className="flex shrink-0 cursor-pointer items-center"
+                            title={avoid ? '写提示词时会让主体避开这块位置（点击关闭）' : '这块不参与避让，生图时不需要特意留白（点击开启）'}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={avoid}
+                              onChange={(e) => patchElement(element.id, { avoid: e.target.checked })}
+                              className="peer sr-only"
+                            />
+                            <span
+                              className={`flex items-center gap-1 rounded-md border px-1 py-[3px] text-[9px] leading-none transition peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/60 ${
+                                avoid
+                                  ? 'border-blue-300/70 bg-blue-500/10 font-medium text-blue-600 dark:border-blue-400/40 dark:bg-blue-500/15 dark:text-blue-300'
+                                  : 'border-gray-200 bg-gray-50 text-gray-400 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-500'
+                              }`}
+                            >
+                              <span className={`h-1 w-1 rounded-full ${avoid ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                              避让
+                            </span>
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => removeElement(element.id)}
+                            title="删除这个图层"
+                            className="shrink-0 rounded p-0.5 text-[11px] leading-none text-gray-300 transition hover:bg-red-50 hover:text-red-500 dark:text-gray-500 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {!active.elements.length && (
+                    <div className="rounded-lg border border-dashed border-gray-200 px-2 py-3 text-center text-[10px] text-gray-400 dark:border-white/10 dark:text-gray-500">
+                      还没有元素，用上面的「+ 文字」「+ Logo」添加
                     </div>
-                  ))}
-                  {!active.elements.length && <p className="px-1 py-2 text-[11px] text-gray-400">还没有元素</p>}
+                  )}
                 </div>
 
                 {selected && (
