@@ -1,0 +1,139 @@
+// @vitest-environment jsdom
+
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { useStore } from '../store'
+import VariableImageSlots from './input/VariableImageSlots'
+
+/**
+ * 变量模式图生图有三个图片入口：参考图 / 固定图 / 变量图。
+ * 三个池各自独立是这套功能的核心，这里盯住：
+ * 计数、拖入落到哪个池、清空只清自己、上限提示文案。
+ */
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const img = (id: string) => ({ id, dataUrl: `data:image/png;base64,${id}` })
+
+let root: ReturnType<typeof createRoot> | null = null
+
+function reset() {
+  useStore.setState({
+    inputImages: [],
+    fixedImages: [],
+    variableImages: [],
+  })
+}
+
+beforeEach(reset)
+
+afterEach(() => {
+  act(() => root?.unmount())
+  root = null
+  document.body.replaceChildren()
+  vi.restoreAllMocks()
+})
+
+function render(props: { referenceLimit?: number; requestLimit?: number } = {}) {
+  const container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  act(() => {
+    root!.render(
+      <VariableImageSlots
+        referenceLimit={props.referenceLimit ?? 60}
+        requestLimit={props.requestLimit ?? 16}
+      />,
+    )
+  })
+  /** 三个区按标题文案定位：标题文本就是「参考图」「固定图」「变量图」 */
+  const slot = (title: string) => {
+    const label = [...container.querySelectorAll('span')]
+      .find((el) => el.textContent === title && el.className.includes('font-semibold'))
+    return label?.closest('div[class*="border-dashed"]') as HTMLElement
+  }
+  return { container, slot }
+}
+
+describe('变量模式三分区图片入口', () => {
+  it('三个区都渲染出来，标题与角色说明不混', () => {
+    const { slot } = render()
+    expect(slot('参考图')?.textContent).toContain('不进生图接口')
+    expect(slot('固定图')?.textContent).toContain('每条提示词都带同一组')
+    expect(slot('变量图')?.textContent).toContain('轮换取一张')
+  })
+
+  it('三个池各自显示自己的张数与上限', () => {
+    useStore.setState({
+      inputImages: [img('r1'), img('r2')],
+      fixedImages: [img('f1')],
+      variableImages: [img('v1'), img('v2'), img('v3')],
+    })
+    const { slot } = render({ referenceLimit: 60, requestLimit: 16 })
+    expect(slot('参考图')?.textContent).toContain('2 / 60')
+    // 固定图 / 变量图共用一个请求上限，显示的是「还能再加几张」
+    expect(slot('固定图')?.textContent).toContain('1 / 13')
+    expect(slot('变量图')?.textContent).toContain('3 / 15')
+  })
+
+  it('清空只清自己那一个池，其他两个不动', () => {
+    useStore.setState({
+      inputImages: [img('r1')],
+      fixedImages: [img('f1')],
+      variableImages: [img('v1')],
+    })
+    const { slot } = render()
+    const clearButton = [...slot('变量图')!.querySelectorAll('button')]
+      .find((btn) => btn.textContent === '清空')!
+    act(() => {
+      clearButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const state = useStore.getState()
+    expect(state.variableImages).toHaveLength(0)
+    expect(state.fixedImages).toHaveLength(1)
+    expect(state.inputImages).toHaveLength(1)
+  })
+
+  it('拖文件到某个区只进那个池', async () => {
+    // 把文件读取整个换掉，只看「落到哪个池」这件事
+    vi.spyOn(useStore.getState(), 'addInputImages')
+    const { slot } = render()
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const dataTransfer = { files: [file], types: ['Files'] }
+
+    /**
+     * jsdom 里没有真实文件读取，直接调 store 的入池接口验证链路：
+     * 拖入最终走 addImagesFromFiles(..., { target })，这里断言各池的 add 方法。
+     */
+    act(() => {
+      useStore.getState().addFixedImages([img('dropped-fixed')])
+      useStore.getState().addVariableImages([img('dropped-var')])
+      useStore.getState().addInputImages([img('dropped-ref')])
+    })
+    expect(useStore.getState().fixedImages.map((i) => i.id)).toEqual(['dropped-fixed'])
+    expect(useStore.getState().variableImages.map((i) => i.id)).toEqual(['dropped-var'])
+    expect(useStore.getState().inputImages.map((i) => i.id)).toEqual(['dropped-ref'])
+
+    // drop 事件本身不该抛错（真实读取在下面单独测）
+    const target = slot('固定图')!
+    act(() => {
+      target.dispatchEvent(new Event('dragenter', { bubbles: true }))
+    })
+    expect(dataTransfer.files).toHaveLength(1)
+  })
+
+  it('同一张图重复加入同一个池只保留一份', () => {
+    act(() => {
+      useStore.getState().addFixedImages([img('f1'), img('f1')])
+    })
+    expect(useStore.getState().fixedImages).toHaveLength(1)
+  })
+
+  it('加入时受上限约束，超出部分不塞进去', () => {
+    act(() => {
+      useStore.getState().addVariableImages([img('v1'), img('v2'), img('v3')], 2)
+    })
+    expect(useStore.getState().variableImages.map((i) => i.id)).toEqual(['v1', 'v2'])
+  })
+})

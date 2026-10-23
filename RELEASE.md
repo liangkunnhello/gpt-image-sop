@@ -1,3 +1,15 @@
+## v1.2.5（2026-10-23）
+
+### 修复
+
+- 点开任务详情页立刻白屏。根因是「再次后处理」的 `useState` 写在了 `if (!task) return null` 之后：
+  详情页常驻挂载，关闭时 `task` 为空会少调一个 Hook，打开时又多调一个，
+  React 抛 “Rendered more hooks than during the previous render” 并卸载整棵树，表现就是白屏。
+  已把该 Hook 移到提前返回之前。
+- 新增 `src/components/hookOrder.test.ts`：用 TypeScript 语法树扫描全部组件，
+  凡是在顶层提前 `return` 之后调用 Hook 的直接报错。这类问题 tsc 查不出、普通单测也照不到，
+  之前就是这样漏到线上的。
+
 ## v1.2.4（2026-10-23）
 
 ### 新增

@@ -9,7 +9,7 @@
  * 所以任务卡、详情页、筛选、下载都不用另做一套。
  */
 
-import type { ApiProfile, VariableDimension, VariablePrompt, VariableStrategy } from '../types'
+import type { ApiProfile, InputImage, VariableDimension, VariablePrompt, VariableStrategy } from '../types'
 import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, updateTaskInStore, useStore } from '../store'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
@@ -19,6 +19,7 @@ import { resolvePostTemplates } from './applyPostTemplate'
 import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
 import { dedupePrompts, normalizeCopy } from './copyDedupe'
 import { planStrategyFills } from './variableSample'
+import { buildVariableImageHint, planVariableImageAssignments, withVariableImageHint } from './variableImages'
 import { shrinkToDataUrl, SOP_TEXT_MODEL } from './sopPipeline'
 
 /** 与 SOP 反推用同一个文本模型 */
@@ -408,6 +409,7 @@ export function strategiesToText(strategies: VariableStrategy[]): string {
 
 export interface VariableJobRequest {
   label: string
+  /** 参考图 data URLs：只用于提取策略，不进生图接口 */
   imageDataUrls: string[]
   imageIds?: string[]
   /** 变量提示词正文（提取策略）；空则用内置策略 */
@@ -425,6 +427,16 @@ export interface VariableJobRequest {
   avoidCta?: boolean
   /** 内部用：占位卡已经转成错误卡时不再弹卖点提示 */
   quietCopyCheck?: boolean
+  /**
+   * 图生图：每条提示词都带上的固定图（产品实拍、包装等）。
+   * 不传就是原来「纯靠提示词出图」的行为。
+   */
+  fixedImages?: InputImage[]
+  /**
+   * 图生图：按条轮换的变量图（场景、机位变化）。
+   * 与固定图一起决定每条提示词发给接口的输入图。
+   */
+  variableImages?: InputImage[]
 }
 
 const QUEUE_LIMIT = 10
@@ -505,6 +517,16 @@ async function runJob(job: VariableJobRequest) {
     ].filter(Boolean).join('\n')
 
     await removeSopPlaceholder(placeholderId)
+    // 图生图：固定图每条都带、变量图按条轮换；没有图池时就是纯提示词出图
+    const imagePlan = planVariableImageAssignments(
+      job.fixedImages ?? [],
+      job.variableImages ?? [],
+      picked.length,
+    )
+    const imageHint = buildVariableImageHint(
+      job.fixedImages?.length ?? 0,
+      job.variableImages?.length ? 1 : 0,
+    )
     void submitSopTasks({
       sopJobId,
       sopName: strategies[0]?.name || job.label,
@@ -512,7 +534,9 @@ async function runJob(job: VariableJobRequest) {
       sopText: specText,
       directionId: job.directionId,
       referenceImageIds: job.imageIds,
-      prompts: picked.map((item) => item.prompt),
+      prompts: picked.map((item) => withVariableImageHint(item.prompt, imageHint)),
+      inputImagesPerPrompt: imagePlan.assignments.map((item) => item.images),
+      variableImageIds: imagePlan.assignments.map((item) => item.variableImage?.id),
       variable: {
         promptName: job.variablePromptName,
         specText,

@@ -386,6 +386,16 @@ export interface TaskRecord {
   variableSkeleton?: string
   /** 变量模式：本次填入的「变量名 → 选项」 */
   variableAssignments?: Record<string, string>
+  /**
+   * 变量模式图生图：本条提示词用到的变量图 id。
+   * 固定图在 inputImageIds 里（每条都带），这里只记「这一条换了哪张」，详情页可回看。
+   */
+  variableImageId?: string
+  /**
+   * 变量模式图生图：本批的固定图 id（同一 sopJobId 下所有任务都一样）。
+   * 复用配置时用来把固定图回填到「固定图」区，避免和变量图混在一起。
+   */
+  variableFixedImageIds?: string[]
   /** 变量模式：使用的变量提示词名称，详情页展示用 */
   variablePromptName?: string
   /** 变量模式：该策略的完整提取结果（Markdown），详情页回看策略用 */

@@ -169,11 +169,20 @@ export default function SopLibraryModal() {
   const dirty = Boolean(editingItem) && (draftName !== editingItem?.name || draftContent !== editingItem?.content)
 
   const applyItem = (id: string) => {
+    if (!activeDirectionId) {
+      showToast('先选一个方向或产品，选择才会记下来', 'error')
+      return
+    }
     setPick(activeDirectionId, { ...lastPick[activeDirectionId], [pickKey]: id })
   }
 
   /** 按当前分组落到对应的 store 方法，四类都走这一组分发 */
   const addItem = (name: string, content: string) => {
+    // 没归属时不落库，否则会写出一条 productId 为空的孤儿数据
+    if (!productId) {
+      showToast('先在左侧选一个方向或产品', 'error')
+      return ''
+    }
     if (tab === 'prompt') return addSystemPrompt(productId, name, content)
     if (tab === 'variable') return addVariablePrompt(productId, name, content)
     return addPreset(productId, tab, name, content)
@@ -189,6 +198,7 @@ export default function SopLibraryModal() {
     const name = newName.trim()
     if (!name) return
     const id = addItem(name, name)
+    if (!id) return
     applyItem(id)
     loadDraft({ id, name, content: name, updatedAt: Date.now() })
     setNewName('')
@@ -203,6 +213,7 @@ export default function SopLibraryModal() {
       seq += 1
     }
     const id = addItem(name, item.content)
+    if (!id) return
     applyItem(id)
     showToast(`已复制为「${name}」`, 'success')
   }
@@ -242,6 +253,7 @@ export default function SopLibraryModal() {
     }
     const name = nameFromFile(fileName)
     const id = addItem(name, text)
+    if (!id) return
     applyItem(id)
     loadDraft({ id, name, content: text, updatedAt: Date.now() })
     showToast(`已导入并保存为「${name}」`, 'success')
@@ -380,9 +392,19 @@ export default function SopLibraryModal() {
 
               {!items.length && (
                 <p className="px-2 py-6 text-center text-xs leading-relaxed text-gray-400">
-                  还没有{label}
-                  <br />
-                  在下面输入名称回车新建
+                  {activeDirectionId ? (
+                    <>
+                      还没有{label}
+                      <br />
+                      在下面输入名称回车新建
+                    </>
+                  ) : (
+                    <>
+                      先在左侧选一个方向或产品
+                      <br />
+                      {label}按产品共享
+                    </>
+                  )}
                 </p>
               )}
 
@@ -561,6 +583,7 @@ export default function SopLibraryModal() {
                         seq += 1
                       }
                       const id = addItem(name, result.content)
+                      if (!id) return
                       applyItem(id)
                       loadDraft({ id, name, content: result.content, updatedAt: Date.now() })
                       showToast(`已另存为新版本「${name}」，原内容未改动`, 'success')

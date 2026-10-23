@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImagesFromFiles, createInputImageFromFile, removeMultipleTasks, assignTasksDirection, assignTasksChannel, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
-import { DEFAULT_PARAMS, type TaskRecord } from '../types'
+import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
 import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
@@ -31,7 +31,7 @@ import VariablePromptPicker from './VariablePromptPicker'
 import PlainImageModeSwitch from './PlainImageModeSwitch'
 import { useInputImageLimit } from '../hooks/useInputImageLimit'
 import { useSopStore } from '../lib/sopStore'
-import { nearestScopeId, scopeChain } from '../lib/sopScope'
+import { scopeChain } from '../lib/sopScope'
 import { resolvePostTemplates } from '../lib/applyPostTemplate'
 import { parseSizeLimitKb } from '../lib/outputFileSize'
 import { buildPromptBundle } from '../lib/promptBundle'
@@ -42,6 +42,7 @@ import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import { CommentBadge } from './CommentMarks'
 import ButtonTooltip from './input/buttonTooltip'
 import DragUploadOverlay from './input/dragUploadOverlay'
+import VariableImageSlots from './input/VariableImageSlots'
 import InputThumbImage from './input/inputThumbImage'
 import InputBatchBars from './input/inputBatchBars'
 import InputParamsPanel from './input/inputParamsPanel'
@@ -526,10 +527,11 @@ export default function InputBar() {
   const plainMode = !sopMode && !variableMode
   const plainImageMode = useStore((s) => s.plainImageMode)
   const fixedImages = useStore((s) => s.fixedImages)
+  const variableImages = useStore((s) => s.variableImages)
   const addFixedImage = useStore((s) => s.addFixedImage)
   const removeFixedImage = useStore((s) => s.removeFixedImage)
   const clearFixedImages = useStore((s) => s.clearFixedImages)
-  // 固定图只在普通模式的融图下有意义；批量模式所有图都是变量图
+  // 固定图在普通模式融图下有意义；变量模式图生图也用它（这时由三分区面板展示）
   const showFixedImages = plainMode && plainImageMode === 'merge'
   // 批量进行中暂停画廊和 Agent 的提交，需等待完成或停止后再提交
   const batchRunning = Boolean(batchProgress)
@@ -579,9 +581,12 @@ export default function InputBar() {
    * 身份按层级判断，不依赖可能写错的 kind 字段。
    */
   const sopScopeIds = currentDirection ? scopeChain(sopDirections, currentDirection.id) : []
-  const currentProductId = currentDirection ? nearestScopeId(sopDirections, currentDirection.id) : ''
-  const currentProduct = sopDirections.find((node) => node.id === currentProductId)
-    ?? currentDirection
+  /**
+   * 提示词库入口用的归属 id。
+   * 点「全部任务 / 未归属」时 activeDirectionId 被清空，这里给空串兜底，
+   * 让三个入口照常渲染（选中的「上一次使用」按空 key 取不到，就显示未设置）。
+   */
+  const pickerDirectionId = currentDirection?.id ?? ''
   /**
    * 后处理模板可以是方向专属，也可以是产品通用；方向配了专属模板就只认它。
    * 当前方向实际能套上的模板都没有启用时，「后处理」开着也不会有变化，
@@ -628,11 +633,13 @@ export default function InputBar() {
   /** 变量模式：把任务卡推进后台队列，立即返回；参考图只用于提取策略，不参与生图 */
   const runVariable = useCallback((options: VariableRunOptions) => {
     setVariableRunOpen(false)
-    if (!inputImages.length) return
-    // 每张卡最多 MAX_INPUT_IMAGES 张图，超出的自动多分卡
-    const groups = splitReferenceGroups(inputImages, options.groupCount)
-    enqueueVariableJobs(groups.map((group, index) => ({
-      label: `第 ${index + 1}/${groups.length} 张卡`,
+    if (!inputImages.length && !variableImages.length) return
+    // 每张卡最多 MAX_INPUT_IMAGES 张参考图（只影响反推分组），超出的自动多分卡
+    const referenceGroups = inputImages.length
+      ? splitReferenceGroups(inputImages, options.groupCount)
+      : [[]]
+    enqueueVariableJobs(referenceGroups.map((group, index) => ({
+      label: `第 ${index + 1}/${referenceGroups.length} 张卡`,
       imageDataUrls: group.map((img) => img.dataUrl),
       imageIds: group.map((img) => img.id),
       variablePromptText: options.variablePromptText,
@@ -643,8 +650,11 @@ export default function InputBar() {
       directionId: options.directionId,
       ignoreCompliance: options.ignoreCompliance,
       avoidCta: options.avoidCta,
+      // 图生图：固定图每条都带、变量图逐条轮换；参考图不进生图接口
+      fixedImages,
+      variableImages,
     })))
-  }, [inputImages])
+  }, [inputImages, fixedImages, variableImages])
 
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {
@@ -652,8 +662,9 @@ export default function InputBar() {
       return
     }
     if (variableMode) {
-      if (!inputImages.length) {
-        useStore.getState().showToast('变量模式需要先拖入参考图', 'error')
+      // 参考图只用于提取策略，没有也可以；但固定图 / 变量图至少要有一种，否则就是纯文生图
+      if (!inputImages.length && !fixedImages.length && !variableImages.length) {
+        useStore.getState().showToast('变量模式需要先拖入参考图或图片', 'error')
         return
       }
       setVariableRunOpen(true)
@@ -670,7 +681,7 @@ export default function InputBar() {
       pickedStyle?.content ? `风格：${pickedStyle.content}` : '',
     ].filter(Boolean).join('\n')
     void submitTask({ promptPrefix: presetPrefix })
-  }, [appMode, sopMode, variableMode, inputImages.length, pickedPoint, pickedStyle])
+  }, [appMode, sopMode, variableMode, inputImages.length, fixedImages.length, variableImages.length, pickedPoint, pickedStyle])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -2035,8 +2046,13 @@ export default function InputBar() {
             <div className={`w-10 h-1 rounded-full bg-gray-300 dark:bg-white/[0.06] transition-transform duration-200 ${mobileCollapsed ? 'scale-x-75' : ''}`} />
           </div>
 
+          {/* 变量模式：参考图 / 固定图 / 变量图三个独立入口，各自拖入互不串 */}
+          {variableMode && (
+            <VariableImageSlots referenceLimit={imageLimit} requestLimit={MAX_INPUT_IMAGES} />
+          )}
+
           {/* 输入图片行（移动端可折叠） */}
-          {inputImages.length > 0 && (
+          {!variableMode && inputImages.length > 0 && (
             isMobile ? (
               <>
                 <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
@@ -2056,19 +2072,22 @@ export default function InputBar() {
           )}
           {renderFixedImages()}
 
-          {sopMode && currentDirection && currentProduct && (
+          {/* 三个入口不跟业务归属绑定：点「全部任务 / 未归属」时 activeDirectionId 是空的，
+              仍然要能看到并打开提示词库（库里会提示先选方向）。归属为空时作用域链为空，
+              picker 自己会显示「未设置」。 */}
+          {sopMode && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <SopSystemPromptPicker scopeIds={sopScopeIds} directionId={currentDirection.id} />
-              <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} scopeIds={sopScopeIds} />
-              <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} scopeIds={sopScopeIds} />
+              <SopSystemPromptPicker scopeIds={sopScopeIds} directionId={pickerDirectionId} />
+              <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
+              <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
             </div>
           )}
           {/* 变量模式：变量提示词与系统提示词并行，卖点/风格两个模式通用 */}
-          {variableMode && currentDirection && currentProduct && (
+          {variableMode && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <VariablePromptPicker scopeIds={sopScopeIds} directionId={currentDirection.id} />
-              <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} scopeIds={sopScopeIds} />
-              <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} scopeIds={sopScopeIds} />
+              <VariablePromptPicker scopeIds={sopScopeIds} directionId={pickerDirectionId} />
+              <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
+              <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
             </div>
           )}
           {/* 普通模式：卖点 / 风格保留，系统提示词的位置换成「融图 / 批量」切换。
@@ -2076,12 +2095,8 @@ export default function InputBar() {
           {plainMode && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <PlainImageModeSwitch />
-              {currentDirection && currentProduct && (
-                <>
-                  <SopPresetPicker kind="point" label="卖点" directionId={currentDirection.id} scopeIds={sopScopeIds} />
-                  <SopPresetPicker kind="style" label="风格" directionId={currentDirection.id} scopeIds={sopScopeIds} />
-                </>
-              )}
+              <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
+              <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
             </div>
           )}
 
@@ -2233,6 +2248,8 @@ export default function InputBar() {
             {variableRunOpen && createPortal(
               <VariableRunModal
                 imageCount={inputImages.length}
+                fixedCount={fixedImages.length}
+                variableCount={variableImages.length}
                 onClose={() => setVariableRunOpen(false)}
                 onConfirm={(options) => void runVariable(options)}
               />,

@@ -351,11 +351,26 @@ interface AppState {
    */
   plainImageMode: PlainImageMode
   setPlainImageMode: (mode: PlainImageMode) => void
-  /** 固定图：融图模式下每个请求都会带上；批量模式不参与 */
+  /** 固定图：融图模式下每个请求都会带上；变量模式图生图时也是每条提示词都带 */
   fixedImages: InputImage[]
   addFixedImage: (img: InputImage) => void
+  /** 一次性追加多张固定图，拖一批进来时只更新一次 */
+  addFixedImages: (imgs: InputImage[], limit?: number) => number
+  /** 整体替换固定图（复用配置时按任务回填） */
+  setFixedImages: (imgs: InputImage[]) => void
   removeFixedImage: (idx: number) => void
   clearFixedImages: () => void
+  /**
+   * 变量图：变量模式图生图专用，每条提示词轮换取一张，是「这张和上一张哪里不一样」的来源。
+   * 与参考图（只用于提取策略）和固定图（每条都带）分开存。
+   */
+  variableImages: InputImage[]
+  addVariableImage: (img: InputImage) => void
+  addVariableImages: (imgs: InputImage[], limit?: number) => number
+  /** 整体替换变量图（复用配置时按任务回填） */
+  setVariableImages: (imgs: InputImage[]) => void
+  removeVariableImage: (idx: number) => void
+  clearVariableImages: () => void
   maskDraft: MaskDraft | null
   setMaskDraft: (draft: MaskDraft | null) => void
   clearMaskDraft: () => void
@@ -773,12 +788,56 @@ export const useStore = create<AppState>()(
       fixedImages: [],
       addFixedImage: (img) =>
         set((s) => (s.fixedImages.some((item) => item.id === img.id) ? s : { fixedImages: [...s.fixedImages, img] })),
+      addFixedImages: (imgs, limit) => {
+        let added = 0
+        set((s) => {
+          const seen = new Set(s.fixedImages.map((item) => item.id))
+          const next = [...s.fixedImages]
+          for (const img of imgs) {
+            if (seen.has(img.id)) continue
+            if (limit != null && next.length >= limit) break
+            seen.add(img.id)
+            next.push(img)
+            added += 1
+          }
+          return added ? { fixedImages: next } : s
+        })
+        return added
+      },
       removeFixedImage: (idx) =>
         set((s) => ({ fixedImages: s.fixedImages.filter((_, i) => i !== idx) })),
+      setFixedImages: (imgs) => set({ fixedImages: imgs }),
       clearFixedImages: () =>
         set((s) => {
           for (const img of s.fixedImages) deleteCachedImage(img.id)
           return { fixedImages: [] }
+        }),
+      variableImages: [],
+      addVariableImage: (img) =>
+        set((s) => (s.variableImages.some((item) => item.id === img.id) ? s : { variableImages: [...s.variableImages, img] })),
+      addVariableImages: (imgs, limit) => {
+        let added = 0
+        set((s) => {
+          const seen = new Set(s.variableImages.map((item) => item.id))
+          const next = [...s.variableImages]
+          for (const img of imgs) {
+            if (seen.has(img.id)) continue
+            if (limit != null && next.length >= limit) break
+            seen.add(img.id)
+            next.push(img)
+            added += 1
+          }
+          return added ? { variableImages: next } : s
+        })
+        return added
+      },
+      removeVariableImage: (idx) =>
+        set((s) => ({ variableImages: s.variableImages.filter((_, i) => i !== idx) })),
+      setVariableImages: (imgs) => set({ variableImages: imgs }),
+      clearVariableImages: () =>
+        set((s) => {
+          for (const img of s.variableImages) deleteCachedImage(img.id)
+          return { variableImages: [] }
         }),
       addInputImage: (img) =>
         set((s) => {
@@ -2555,8 +2614,9 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
   for (const img of inputImages) stillUsed.add(img.id)
-  // 固定图还在输入栏里等着用，别当孤儿图清掉
+  // 固定图 / 变量图还在输入栏里等着用，别当孤儿图清掉
   for (const img of useStore.getState().fixedImages) stillUsed.add(img.id)
+  for (const img of useStore.getState().variableImages) stillUsed.add(img.id)
   // 后处理模板的预览底图是用户挑的，被引用的图不能被当孤儿清掉
   for (const byRatio of Object.values(useSopStore.getState().postPreviewImages)) {
     for (const imgId of Object.values(byRatio)) stillUsed.add(imgId)
@@ -4532,7 +4592,7 @@ export async function retryTask(task: TaskRecord) {
 
 /** 复用配置 */
 export async function reuseConfig(task: TaskRecord) {
-  const { settings, setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile } = useStore.getState()
+  const { settings, setPrompt, setParams, setInputImages, setFixedImages, setVariableImages, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile } = useStore.getState()
   const normalizedSettings = normalizeSettings(settings)
   const currentProfile = getActiveApiProfile(settings)
   const taskProfile = normalizedSettings.reuseTaskApiProfileTemporarily ? getTaskApiProfile(normalizedSettings, task) : null
@@ -4559,8 +4619,14 @@ export async function reuseConfig(task: TaskRecord) {
   )
   clearMaskDraft()
 
-  // 恢复输入图片；SOP 任务的参考图存在 sopReferenceImageIds 里
-  const sourceImageIds = task.inputImageIds.length ? task.inputImageIds : (task.sopReferenceImageIds ?? [])
+  /**
+   * 恢复参考图。
+   * 变量模式图生图的 inputImageIds 是「固定图 + 变量图」，参考图存在 sopReferenceImageIds，
+   * 所以这里只回填参考图，固定图 / 变量图 在下面单独拆回各自的池。
+   */
+  const sourceImageIds = task.variableMode
+    ? (task.sopReferenceImageIds ?? [])
+    : (task.inputImageIds.length ? task.inputImageIds : (task.sopReferenceImageIds ?? []))
   const imgs: InputImage[] = []
   for (const imgId of sourceImageIds) {
     const dataUrl = await ensureImageCached(imgId)
@@ -4569,6 +4635,28 @@ export async function reuseConfig(task: TaskRecord) {
     }
   }
   setInputImages(imgs)
+  // 变量模式图生图：把固定图 / 变量图拆回对应的池，否则下次发送会混进参考图里
+  if (task.variableMode && task.inputImageIds.length) {
+    const fixedIds = new Set(task.variableFixedImageIds ?? [])
+    const fixedImgs: InputImage[] = []
+    const variableImgs: InputImage[] = []
+    for (const imgId of task.inputImageIds) {
+      const dataUrl = await ensureImageCached(imgId)
+      if (!dataUrl) continue
+      if (fixedIds.has(imgId)) fixedImgs.push({ id: imgId, dataUrl })
+      else variableImgs.push({ id: imgId, dataUrl })
+    }
+    // 早期任务没存 fixedImageIds，退回「只有变量图的那张算变量图」
+    if (!task.variableFixedImageIds?.length && task.variableImageId) {
+      const isVariable = fixedImgs.find((img) => img.id === task.variableImageId)
+      if (isVariable) {
+        variableImgs.push(isVariable)
+        fixedImgs.splice(fixedImgs.indexOf(isVariable), 1)
+      }
+    }
+    setFixedImages(fixedImgs)
+    setVariableImages(variableImgs)
+  }
   // 部分参考图可能已被删除，按图片 id 重新对齐提示词中的图片序号，避免评论和提及错位到其他图片
   setPrompt(remapImageMentionsForOrder(task.prompt, sourceImageIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
@@ -5533,13 +5621,18 @@ export async function importData(input: File | File[], options: ImportOptions = 
  */
 export async function addImagesFromFiles(
   files: File[],
-  options: { limit?: number; concurrency?: number } = {},
+  options: { limit?: number; target?: 'input' | 'fixed' | 'variable'; concurrency?: number } = {},
 ): Promise<{ added: number; discarded: number; overflow: number; failed: number }> {
-  const { limit, concurrency = 4 } = options
+  const { limit, target = 'input', concurrency = 4 } = options
   const accepted = files.filter((file) => file.type.startsWith('image/'))
   const discarded = files.length - accepted.length
 
-  const currentCount = useStore.getState().inputImages.length
+  const state = useStore.getState()
+  const currentCount = target === 'fixed'
+    ? state.fixedImages.length
+    : target === 'variable'
+      ? state.variableImages.length
+      : state.inputImages.length
   const remaining = limit == null ? accepted.length : Math.max(0, limit - currentCount)
   const toAdd = accepted.slice(0, remaining)
   const overflow = accepted.length - toAdd.length
@@ -5556,7 +5649,12 @@ export async function addImagesFromFiles(
     }
   })
 
-  const added = useStore.getState().addInputImages(created, limit)
+  const store = useStore.getState()
+  const added = target === 'fixed'
+    ? store.addFixedImages(created, limit)
+    : target === 'variable'
+      ? store.addVariableImages(created, limit)
+      : store.addInputImages(created, limit)
   return { added, discarded, overflow, failed }
 }
 
@@ -5588,6 +5686,13 @@ export async function submitSopTasks(input: {
   directionId?: string
   referenceImageIds?: string[]
   prompts: string[]
+  /**
+   * 变量模式图生图：与 prompts 一一对应的输入图（固定图 + 变量图）。
+   * 不传时 `inputImageIds` 为空，就是原来「纯靠提示词出图」的行为。
+   */
+  inputImagesPerPrompt?: InputImage[][]
+  /** 变量模式图生图：每条提示词各自用到的变量图 id，详情页回看用 */
+  variableImageIds?: Array<string | undefined>
   /** 变量模式：附带骨架与逐维取值，SOP 模式不传 */
   variable?: {
     promptName: string
@@ -5606,6 +5711,10 @@ export async function submitSopTasks(input: {
 
   const tasks: TaskRecord[] = input.prompts.map((prompt, index) => {
     const fill = input.variable?.fills[index]
+    const promptImages = input.inputImagesPerPrompt?.[index] ?? []
+    const fixedImageIds = input.variableImageIds?.[index]
+      ? promptImages.filter((img) => img.id !== input.variableImageIds?.[index]).map((img) => img.id)
+      : promptImages.map((img) => img.id)
     return {
       id: genId(),
       prompt,
@@ -5615,7 +5724,7 @@ export async function submitSopTasks(input: {
       apiProfileName: profile.name,
       apiMode: profile.apiMode,
       apiModel: profile.model,
-      inputImageIds: [],
+      inputImageIds: promptImages.map((img) => img.id),
       outputImages: [],
       status: 'running',
       error: null,
@@ -5634,6 +5743,9 @@ export async function submitSopTasks(input: {
       variableSpecText: input.variable?.specText,
       variableSkeleton: fill?.skeleton,
       variableAssignments: fill?.assignments,
+      variableImageId: input.variableImageIds?.[index],
+      // 同一批的固定图都一样；存下来是为了复用配置时能拆回「固定图」区
+      variableFixedImageIds: fixedImageIds.length ? fixedImageIds : undefined,
     }
   })
 

@@ -304,6 +304,7 @@ export default function DetailModal() {
 
   // 这几个 Hook 必须在下面的 `if (!task) return null` 之前调用：
   // 否则详情关闭时少调用、打开时多调用，Hook 数量变化会让 React 直接报错并卸载整棵树（表现为点开详情变空白）
+  const [reapplying, setReapplying] = useState(false)
   const clipScores = useClipStore((s) => s.scores)
   const clipQc = useClipStore((s) => s.qc)
   const clipLimit = useClipStore((s) => s.limit)
@@ -335,7 +336,6 @@ export default function DetailModal() {
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
 
   const outputLen = outputSlots.length
-  const [reapplying, setReapplying] = useState(false)
   // 只有保留过 AI 原图、且不是透明背景的任务才能重跑后处理
   const canReapplyPost = Boolean(
     isTauri
@@ -1265,6 +1265,13 @@ export default function DetailModal() {
                     </div>
                     {task.variableAssignments && Object.keys(task.variableAssignments).length === 0 && (
                       <span className="text-[11px] text-gray-400">这一条没有可替换变量</span>
+                    )}
+                    {task.variableImageId && (
+                      <div className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
+                        图生图：固定图 {task.variableFixedImageIds?.length ?? 0} 张每条都带 · 这一条用的变量图
+                        {' '}
+                        <span className="font-mono text-gray-500 dark:text-gray-400">{task.variableImageId.slice(0, 8)}</span>
+                      </div>
                     )}
                   </div>
                 )}

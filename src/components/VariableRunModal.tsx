@@ -24,7 +24,12 @@ export interface VariableRunOptions {
 }
 
 interface Props {
+  /** 参考图张数：只用于提取策略，不进生图接口 */
   imageCount: number
+  /** 固定图张数：每条提示词都带 */
+  fixedCount?: number
+  /** 变量图张数：每条提示词轮换取 */
+  variableCount?: number
   onClose: () => void
   onConfirm: (options: VariableRunOptions) => void
 }
@@ -36,7 +41,7 @@ type SplitMode = 'one' | 'perImage' | 'custom'
  * 与 SOP 的区别：没有「使用参考图中的卖点」这个开关（变量模式的文字来源始终是卖点库），
  * 张数叫「每张卡出几张」，实际条数会受变量组合池容量限制。
  */
-export default function VariableRunModal({ imageCount, onClose, onConfirm }: Props) {
+export default function VariableRunModal({ imageCount, fixedCount = 0, variableCount = 0, onClose, onConfirm }: Props) {
   const directions = useSopStore((s) => s.directions)
   const variablePrompts = useSopStore((s) => s.variablePrompts)
   const presets = useSopStore((s) => s.presets)
@@ -80,17 +85,19 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
   const [mode, setMode] = useState<SplitMode>('one')
   const [customCount, setCustomCount] = useState(String(Math.max(1, Math.min(4, imageCount))))
 
-  const groupCount = mode === 'one'
+  // 没有参考图时只能 1 张卡：没有可分析的图，也就没有按图分卡的意义
+  const groupCount = !imageCount
     ? 1
-    : mode === 'perImage'
-      ? imageCount
-      : Math.max(1, Math.min(Number(customCount) || 1, imageCount))
+    : mode === 'one'
+      ? 1
+      : mode === 'perImage'
+        ? imageCount
+        : Math.max(1, Math.min(Number(customCount) || 1, imageCount))
 
   // 每张卡最多 MAX_INPUT_IMAGES 张图，超出自动多分卡
-  const referenceGroups = splitReferenceGroups(
-    Array.from({ length: imageCount }, (_, i) => i + 1),
-    groupCount,
-  )
+  const referenceGroups = imageCount
+    ? splitReferenceGroups(Array.from({ length: imageCount }, (_, i) => i + 1), groupCount)
+    : [[]]
   const actualCardCount = referenceGroups.length
   const preview = referenceGroups.map((group) => group.length).join(' / ')
 
@@ -107,7 +114,8 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
 
   // 未归属（productId 为空）也能跑：不挂方向，变量提示词退回内置提取策略；
   // 选了产品就必须落到具体方向，避免「看着选了产品其实没归到任何方向」
-  const canRun = (!productId || Boolean(currentDirectionId)) && imageCount > 0
+  const hasSourceImages = imageCount > 0 || fixedCount > 0 || variableCount > 0
+  const canRun = (!productId || Boolean(currentDirectionId)) && hasSourceImages
   const isBuiltin = selectedPrompt?.id === BUILTIN_VARIABLE_PROMPT.id
 
   return (
@@ -124,6 +132,11 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
           <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-white/10 dark:text-gray-400">
             参考图 {imageCount} 张
           </span>
+          {(fixedCount > 0 || variableCount > 0) && (
+            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">
+              图生图 · 固定 {fixedCount} / 变量 {variableCount}
+            </span>
+          )}
           <div className="flex-1" />
           <button type="button" onClick={onClose} className="rounded-lg px-3 py-1 text-sm text-gray-500 hover:bg-gray-100 dark:hover:bg-white/[0.06]">
             取消
@@ -194,8 +207,9 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
                 <button
                   key={value}
                   type="button"
+                  disabled={!imageCount}
                   onClick={() => setMode(value)}
-                  className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                  className={`rounded-lg border px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                     mode === value
                       ? 'border-violet-500 bg-violet-50 text-violet-600 dark:border-violet-500/50 dark:bg-violet-500/10 dark:text-violet-300'
                       : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/[0.06]'
@@ -216,10 +230,26 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
               )}
             </div>
             <div className="mt-1.5 text-[11px] text-gray-400">
-              共 {actualCardCount} 张卡，参考图分配：{preview || '—'}
+              {imageCount
+                ? `共 ${actualCardCount} 张卡，参考图分配：${preview}`
+                : '没有参考图：这一批只按固定图与变量图出图，策略仍按提示词与卖点提取'}
               {actualCardCount > groupCount && `（每张卡最多 ${MAX_INPUT_IMAGES} 张，多的已自动分卡）`}
             </div>
           </div>
+
+          {(fixedCount > 0 || variableCount > 0) && (
+            <div className="space-y-1 rounded-lg border border-emerald-100 bg-emerald-50/50 px-3 py-2 text-[11px] leading-relaxed text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/[0.08] dark:text-emerald-300">
+              <div>
+                图生图：<span className="font-medium">固定图 {fixedCount} 张</span>每条提示词都会带上（产品外观、包装、骨架以它为准）；
+                <span className="font-medium">变量图 {variableCount} 张</span>每条轮换取一张，用来制造场景 / 机位 / 光影差异。
+              </div>
+              {variableCount > 0 && (
+                <div className="text-emerald-600/80 dark:text-emerald-300/70">
+                  约 {actualCardCount * variablesPerCard} 条提示词会在 {variableCount} 张变量图之间循环分配。
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-gray-500 dark:text-gray-400">每张卡出几张图</span>
@@ -290,7 +320,10 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-gray-200 px-5 py-3 dark:border-white/[0.08]">
-          <span className="text-[11px] text-gray-400">参考图只用于提取策略，不参与最终生图。</span>
+          <span className="text-[11px] text-gray-400">
+            参考图只用于提取策略，不参与最终生图。
+            {(fixedCount > 0 || variableCount > 0) && '固定图 / 变量图才是发给接口的输入图。'}
+          </span>
           <button
             type="button"
             disabled={!canRun}

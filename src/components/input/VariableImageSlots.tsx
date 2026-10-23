@@ -1,0 +1,257 @@
+/**
+ * 变量模式图生图的三分区图片入口。
+ *
+ * 参考图、固定图、变量图三者在生成里的角色完全不同，混在一个「参考图」区里
+ * 用户没法表达「这几张每次都带、那几张换着用」。这里给三个独立入口：
+ * 每个区各自能拖入、粘贴、点选，互相不串。
+ */
+import { useState } from 'react'
+import { useStore, addImagesFromFiles } from '../../store'
+import type { InputImage } from '../../types'
+
+type Slot = 'reference' | 'fixed' | 'variable'
+
+interface SlotConfig {
+  key: Slot
+  title: string
+  hint: string
+  accent: string
+  badge: string
+}
+
+const SLOTS: SlotConfig[] = [
+  {
+    key: 'reference',
+    title: '参考图',
+    hint: '只用来分析和提取策略，不进生图接口',
+    accent: 'blue',
+    badge: '分析',
+  },
+  {
+    key: 'fixed',
+    title: '固定图',
+    hint: '每条提示词都带同一组，产品外观与骨架以它为准',
+    accent: 'emerald',
+    badge: '每次都带',
+  },
+  {
+    key: 'variable',
+    title: '变量图',
+    hint: '每条提示词轮换取一张，取它的场景 / 机位变化',
+    accent: 'amber',
+    badge: '逐条更换',
+  },
+]
+
+const ACCENT: Record<string, { ring: string; text: string; chip: string; dashed: string; solid: string }> = {
+  blue: {
+    ring: 'border-blue-300 dark:border-blue-500/40',
+    text: 'text-blue-600 dark:text-blue-300',
+    chip: 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300',
+    dashed: 'border-blue-300/70 dark:border-blue-500/30',
+    solid: 'bg-blue-500',
+  },
+  emerald: {
+    ring: 'border-emerald-300 dark:border-emerald-500/40',
+    text: 'text-emerald-600 dark:text-emerald-300',
+    chip: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300',
+    dashed: 'border-emerald-300/70 dark:border-emerald-500/30',
+    solid: 'bg-emerald-500',
+  },
+  amber: {
+    ring: 'border-amber-300 dark:border-amber-500/40',
+    text: 'text-amber-600 dark:text-amber-300',
+    chip: 'bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300',
+    dashed: 'border-amber-300/70 dark:border-amber-500/30',
+    solid: 'bg-amber-500',
+  },
+}
+
+interface Props {
+  /** 参考图上限（SOP / 变量模式下是 60） */
+  referenceLimit: number
+  /** 单次请求最多能带几张图，固定图 + 变量图要受它约束 */
+  requestLimit: number
+}
+
+/** 三个图片池的统一读写：都是 InputImage[]，只是存的位置不同 */
+function useSlotImages(slot: Slot) {
+  const inputImages = useStore((s) => s.inputImages)
+  const fixedImages = useStore((s) => s.fixedImages)
+  const variableImages = useStore((s) => s.variableImages)
+  const removeInputImage = useStore((s) => s.removeInputImage)
+  const removeFixedImage = useStore((s) => s.removeFixedImage)
+  const removeVariableImage = useStore((s) => s.removeVariableImage)
+  const clearInputImages = useStore((s) => s.clearInputImages)
+  const clearFixedImages = useStore((s) => s.clearFixedImages)
+  const clearVariableImages = useStore((s) => s.clearVariableImages)
+
+  const images = slot === 'reference' ? inputImages : slot === 'fixed' ? fixedImages : variableImages
+  const remove = slot === 'reference' ? removeInputImage : slot === 'fixed' ? removeFixedImage : removeVariableImage
+  const clear = slot === 'reference' ? clearInputImages : slot === 'fixed' ? clearFixedImages : clearVariableImages
+  return { images, remove, clear }
+}
+
+/** 缩略图：只读、可删；点击放大交给外层，这里不做预览 */
+function SlotThumbs({ images, onRemove }: { images: InputImage[]; onRemove: (idx: number) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {images.map((img, idx) => (
+        <div
+          key={img.id}
+          className="group relative h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-gray-200 dark:border-white/10"
+        >
+          <img src={img.dataUrl} alt={`${idx + 1}`} className="h-full w-full object-cover" />
+          <span className="absolute bottom-0 left-0 rounded-tr bg-black/55 px-1 text-[9px] leading-tight text-white">
+            {idx + 1}
+          </span>
+          <button
+            type="button"
+            onClick={() => onRemove(idx)}
+            title="移除"
+            className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-bl bg-black/60 text-[10px] leading-none text-white opacity-0 transition-opacity group-hover:opacity-100"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export default function VariableImageSlots({ referenceLimit, requestLimit }: Props) {
+  // dragOverSlot 只用来做高亮：真正落图时由每个区的 drop 处理
+  const [dragOverSlot, setDragOverSlot] = useState<Slot | null>(null)
+  const [uploading, setUploading] = useState<Slot | null>(null)
+
+  const reference = useSlotImages('reference')
+  const fixed = useSlotImages('fixed')
+  const variable = useSlotImages('variable')
+  const bySlot: Record<Slot, ReturnType<typeof useSlotImages>> = {
+    reference,
+    fixed,
+    variable,
+  }
+
+  const slotLimit = (slot: Slot) => {
+    if (slot === 'reference') return referenceLimit
+    // 固定图 + 变量图要一起塞进一个请求，所以两者共用一个上限
+    return Math.max(1, requestLimit - (slot === 'fixed' ? variable.images.length : fixed.images.length))
+  }
+
+  const dropFiles = async (slot: Slot, files: FileList | File[] | null) => {
+    const list = files ? Array.from(files) : []
+    if (!list.length) return
+    setUploading(slot)
+    try {
+      const { added, overflow, failed, discarded } = await addImagesFromFiles(list, {
+        target: slot === 'reference' ? 'input' : slot,
+        limit: slotLimit(slot),
+      })
+      const notes: string[] = [`已加入 ${added} 张`]
+      if (overflow > 0) notes.push(`${overflow} 张超过该区上限`)
+      if (discarded > 0) notes.push(`${discarded} 张不是图片`)
+      if (failed > 0) notes.push(`${failed} 张读取失败`)
+      useStore.getState().showToast(notes.join('，'), added > 0 ? 'success' : 'info')
+    } catch (err) {
+      useStore.getState().showToast(`添加失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    } finally {
+      setUploading(null)
+    }
+  }
+
+  const renderSlot = (config: SlotConfig) => {
+    const { images, clear } = bySlot[config.key]
+    const accent = ACCENT[config.accent]!
+    const limit = slotLimit(config.key)
+    const isOver = dragOverSlot === config.key
+    const total = config.key === 'reference'
+      ? `${images.length} / ${referenceLimit}`
+      : `${images.length} / ${limit}`
+
+    return (
+      <div
+        key={config.key}
+        onDragEnter={(e) => {
+          if (!e.dataTransfer?.types.includes('Files')) return
+          e.preventDefault()
+          e.stopPropagation()
+          setDragOverSlot(config.key)
+        }}
+        onDragOver={(e) => {
+          if (!e.dataTransfer?.types.includes('Files')) return
+          e.preventDefault()
+          e.stopPropagation()
+          e.dataTransfer.dropEffect = 'copy'
+          setDragOverSlot(config.key)
+        }}
+        onDragLeave={(e) => {
+          e.stopPropagation()
+          setDragOverSlot((prev) => (prev === config.key ? null : prev))
+        }}
+        onDrop={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setDragOverSlot(null)
+          void dropFiles(config.key, e.dataTransfer?.files ?? null)
+        }}
+        className={`flex min-h-[104px] flex-col rounded-xl border-2 border-dashed p-2 transition-colors ${
+          isOver
+            ? `${accent.ring} bg-white dark:bg-white/[0.06]`
+            : 'border-gray-200 dark:border-white/[0.1]'
+        }`}
+      >
+        <div className="mb-1.5 flex items-center gap-1.5">
+          <span className={`rounded px-1 py-0.5 text-[10px] font-medium ${accent.chip}`}>{config.badge}</span>
+          <span className={`text-xs font-semibold ${accent.text}`}>{config.title}</span>
+          <span className="ml-auto text-[10px] tabular-nums text-gray-400">{total}</span>
+        </div>
+
+        {images.length > 0 && (
+          <div className="mb-1.5">
+            <SlotThumbs images={images} onRemove={bySlot[config.key].remove} />
+          </div>
+        )}
+
+        <div className="mt-auto flex items-center gap-1.5">
+          <label
+            className="flex cursor-pointer items-center gap-1 rounded-md border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-500 transition-colors hover:border-gray-300 hover:text-gray-700 dark:border-white/10 dark:text-gray-400 dark:hover:border-white/20"
+            title={`添加${config.title}`}
+          >
+            <span className="leading-none">+</span>
+            <span>{uploading === config.key ? '读取中…' : '添加'}</span>
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = e.target.files
+                e.target.value = ''
+                void dropFiles(config.key, files)
+              }}
+            />
+          </label>
+          {images.length > 0 && (
+            <button
+              type="button"
+              onClick={clear}
+              className="text-[10px] text-gray-400 transition-colors hover:text-red-500"
+            >
+              清空
+            </button>
+          )}
+          <span className="ml-auto text-right text-[10px] leading-tight text-gray-400 dark:text-gray-500">
+            {config.hint}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+      {SLOTS.map(renderSlot)}
+    </div>
+  )
+}
