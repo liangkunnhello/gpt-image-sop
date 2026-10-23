@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { SopDirectionNode, SopSystemPrompt, VariablePrompt } from '../types'
 import type { PostTemplate } from './postTemplate'
+import type { SopVariationMode } from './promptVariation'
 
 /** 初始树按现有策略分类搭骨架，内容后续在界面里增删 */
 const SEED_DIRECTIONS: SopDirectionNode[] = [
@@ -101,6 +102,12 @@ interface SopState {
   avoidCtaDesign: boolean
   /** 每张任务卡生成几条提示词（=几张图），SOP 模式下唯一的数量来源 */
   promptsPerGroup: number
+  /**
+   * 多条提示词之间怎么拉开差异：
+   * - deepen（深化）：沿用原有做法，围绕同一份 SOP 自由做画面变化，风格最统一
+   * - explore（探索）：每条锁定不同的场景/机位/主体/色调，差异最大
+   */
+  variationMode: SopVariationMode
   /** 变量模式：每张卡最多产出几条提示词，实际条数受组合池容量限制 */
   variablesPerCard: number
   /** 生成提示词时自动避让后处理预留区（Logo / 警示语），默认开启 */
@@ -125,6 +132,7 @@ interface SopState {
   trashedNodes: () => SopDirectionNode[]
   setLibraryTab: (tab: SopLibraryTab | null) => void
   setPromptsPerGroup: (value: number) => void
+  setVariationMode: (value: SopVariationMode) => void
   setVariablesPerCard: (value: number) => void
   setPostTemplates: (productId: string, templates: PostTemplate[]) => void
   setSopMode: (value: boolean) => void
@@ -188,6 +196,8 @@ export const useSopStore = create<SopState>()(
       avoidCtaDesign: true,
       promptsPerGroup: 5,
       variablesPerCard: 5,
+      // 默认沿用原有做法，探索要用户主动选
+      variationMode: 'deepen',
       avoidOverlay: true,
       postTemplates: {},
       postPreviewImages: {},
@@ -199,6 +209,7 @@ export const useSopStore = create<SopState>()(
       setSopMode: (value) => set({ sopMode: value, variableMode: false }),
       setVariableMode: (value) => set({ variableMode: value, sopMode: false }),
       setPromptsPerGroup: (value) => set({ promptsPerGroup: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
+      setVariationMode: (value) => set({ variationMode: value }),
       setVariablesPerCard: (value) => set({ variablesPerCard: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
       setPostTemplates: (productId, templates) => set((state) => ({
         postTemplates: { ...state.postTemplates, [productId]: templates },
@@ -507,7 +518,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages }),
+      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variationMode: state.variationMode, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages }),
     },
   ),
 )
@@ -525,6 +536,7 @@ export interface SopLibraryExport {
   useImageSellingPoints?: boolean
   avoidCtaDesign?: boolean
   promptsPerGroup?: number
+  variationMode?: SopVariationMode
   variablesPerCard?: number
   avoidOverlay?: boolean
 }
@@ -544,6 +556,7 @@ export function collectSopLibrary(): SopLibraryExport {
     useImageSellingPoints: state.useImageSellingPoints,
     avoidCtaDesign: state.avoidCtaDesign,
     promptsPerGroup: state.promptsPerGroup,
+    variationMode: state.variationMode,
     variablesPerCard: state.variablesPerCard,
     avoidOverlay: state.avoidOverlay,
   }
@@ -585,6 +598,7 @@ export function mergeSopLibrary(library?: SopLibraryExport | null) {
       useImageSellingPoints: library.useImageSellingPoints ?? state.useImageSellingPoints,
       avoidCtaDesign: library.avoidCtaDesign ?? state.avoidCtaDesign,
       promptsPerGroup: typeof library.promptsPerGroup === 'number' ? library.promptsPerGroup : state.promptsPerGroup,
+      variationMode: library.variationMode === 'explore' || library.variationMode === 'deepen' ? library.variationMode : state.variationMode,
       variablesPerCard: typeof library.variablesPerCard === 'number' ? library.variablesPerCard : state.variablesPerCard,
       avoidOverlay: library.avoidOverlay ?? state.avoidOverlay,
     }

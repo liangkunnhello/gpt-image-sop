@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useSopStore } from '../lib/sopStore'
 import { splitEven } from '../lib/sopPipeline'
+import type { SopVariationMode } from '../lib/promptVariation'
 import { collectAvoidZones, pickAvoidTemplate } from '../lib/postReserve'
 import { resolveSystemPrompt } from './SopSystemPromptPicker'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
@@ -13,6 +14,8 @@ export interface SopRunOptions {
   systemPromptName?: string
   groupCount: number
   promptsPerGroup: number
+  /** 深化＝沿用原有做法，探索＝按场景/机位/主体/色调强制分散 */
+  variationMode: SopVariationMode
   ignoreCompliance: boolean
   useImageSellingPoints: boolean
   /** 避免按钮、悬浮球这类引导点击的仿系统界面设计 */
@@ -77,6 +80,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   // SOP 模式下「出几张图」只由这个值决定，跟输入框的数量不再是两个数
   const promptsPerGroup = useSopStore((s) => s.promptsPerGroup)
   const setPromptsPerGroup = useSopStore((s) => s.setPromptsPerGroup)
+  const variationMode = useSopStore((s) => s.variationMode)
+  const setVariationMode = useSopStore((s) => s.setVariationMode)
 
   const hasImages = imageCount > 0
   const groupCount = !hasImages
@@ -225,6 +230,41 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             <span className="text-[11px] text-gray-400">每条提示词出一张，共约 {groupCount * promptsPerGroup} 张</span>
           </div>
 
+          <div>
+            <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
+              <span className="text-xs font-medium text-gray-500 dark:text-gray-400">画面差异方式</span>
+              <span className="text-[11px] text-gray-400">
+                {variationMode === 'explore'
+                  ? '每条锁定不同的场景、机位、主体、色调，差异最大'
+                  : '围绕同一份 SOP 自由变化，风格最统一'}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {([
+                ['deepen', '深化'],
+                ['explore', '探索'],
+              ] as Array<[SopVariationMode, string]>).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setVariationMode(value)}
+                  className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                    variationMode === value
+                      ? 'border-blue-500 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'
+                      : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/[0.06]'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-1.5 text-[11px] leading-relaxed text-gray-400">
+              {variationMode === 'explore'
+                ? '写提示词时先给每条分配一组不重复的场景 / 机位 / 主体 / 色调，模型只负责展开，适合大批量拓量。'
+                : '沿用原有做法：版式与文案不变，场景和画面由模型自由变化，适合把一套物料做深。'}
+            </div>
+          </div>
+
           <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
             <input
               type="checkbox"
@@ -303,6 +343,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               systemPromptName: selectedPrompt?.name ?? '不使用',
               groupCount,
               promptsPerGroup,
+              variationMode,
               ignoreCompliance,
               useImageSellingPoints,
               avoidCta: avoidCtaDesign,

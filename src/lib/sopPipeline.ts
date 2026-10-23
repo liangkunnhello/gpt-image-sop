@@ -7,6 +7,7 @@ import { apiFetch } from './platform'
 import { productIdForDirection } from './applyPostTemplate'
 import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
 import { dedupePrompts } from './copyDedupe'
+import { buildVariationTable, buildVariations, type SopVariationMode } from './promptVariation'
 
 /** 生成 SOP 与提示词所用的文本模型 */
 export const SOP_TEXT_MODEL = 'deepseek-v4.1-flash'
@@ -45,6 +46,8 @@ async function chat(
   timeoutSeconds = 240,
   /** 输出上限：写提示词时按条数放大，避免大数量被截断 */
   maxTokens = 4000,
+  /** 采样温度：反推 SOP 要稳，写多条提示词时要放开，否则后半段会抄前面 */
+  temperature = 0.4,
 ): Promise<string> {
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
@@ -63,7 +66,7 @@ async function chat(
           // 优先用配置里指定的反推/写提示词模型
           model: profile.sopTextModel || SOP_TEXT_MODEL,
           messages,
-          temperature: 0.4,
+          temperature,
           max_tokens: limit,
           stream: false,
           thinking: { type: 'disabled' },
@@ -296,10 +299,20 @@ export async function generateSop(
   ])
 }
 
-function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false) {
+function promptSystem(
+  ignoreCompliance: boolean,
+  avoidHint = '',
+  hasCopy = false,
+  avoidCta = false,
+  variationMode: SopVariationMode = 'deepen',
+) {
+  const explore = variationMode === 'explore'
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
     '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。',
+    explore
+      ? '用户会给出每条提示词已分配好的场景、机位、主体、色调，必须严格使用自己那一行的取值：不要自己另选，不要和别的条目重复，也不要只换几个形容词就当成差异。'
+      : '',
     avoidHint
       ? '如果给出了【画面预留区】，每条提示词都要写清主体、主要文字和关键视觉安排在预留区之外，并明确说明这些区域留白或保持干净背景。'
       : '',
@@ -336,6 +349,8 @@ export interface PromptMessagesInput {
   copyText?: string
   /** 避免按钮等引导点击的仿系统界面设计 */
   avoidCta?: boolean
+  /** 多条提示词之间怎么拉开差异，默认深化（沿用原有做法） */
+  variationMode?: SopVariationMode
 }
 
 /** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
@@ -346,6 +361,7 @@ export function buildPromptMessages({
   avoidHint = '',
   copyText = '',
   avoidCta = false,
+  variationMode = 'deepen',
 }: PromptMessagesInput): { system: string; user: string } {
   const copy = copyText.trim()
   const tail = ignoreCompliance
@@ -356,9 +372,12 @@ export function buildPromptMessages({
   const copyTail = copy
     ? '\n注意：每条提示词用的都是同一份卖点，各张图的卖点完全一致。同一张图里，一份卖点从头到尾只用一遍：一句进了主标题，就不许再出现在副标题、角标、贴片等其他文字位上，也不许换个说法或拆成两行重写。文字位数量按卖点条数来定，多出来的槽位删掉，用图形、色块或留白补位。'
     : ''
+  // 探索模式：把预先算好的差异表拼进请求；深化模式不拼，保持原有行为
+  const variation = variationMode === 'explore' ? buildVariationTable(buildVariations(count)) : ''
+  const variationBlock = variation ? `\n\n${variation}` : ''
   return {
-    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta),
-    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${reserve}`,
+    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta, variationMode),
+    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}\n\n按这份 SOP 写 ${count} 条提示词，每条之间在场景和构图上要有明显区别。${variationBlock}${tail}${copyTail}${reserve}`,
   }
 }
 
@@ -371,8 +390,9 @@ export async function generatePrompts(
   avoidHint = '',
   copyText = '',
   avoidCta = false,
+  variationMode: SopVariationMode = 'deepen',
 ): Promise<string[]> {
-  const messages = buildPromptMessages({ sopText, count, ignoreCompliance, avoidHint, copyText, avoidCta })
+  const messages = buildPromptMessages({ sopText, count, ignoreCompliance, avoidHint, copyText, avoidCta, variationMode })
   const raw = await chat(
     profile,
     [
@@ -382,6 +402,8 @@ export async function generatePrompts(
     // 条数多时写得更久，超时要跟着放宽，否则正常的长输出会被中断
     240,
     tokensForPrompts(count),
+    // 探索模式要放开采样，否则模型在差异表之外仍会复用前面的写法；深化保持原来的稳定值
+    variationMode === 'explore' ? 0.85 : 0.4,
   )
   const prompts = parseNumberedList(raw)
   // 规则层要求「同一张图里每种卖点只出现一次」，但模型可能写重；
@@ -420,6 +442,8 @@ export interface SopJobRequest {
   /** 卖点原文：写提示词阶段要再单独喂一次，保证图上文字逐字来自这里 */
   copyText?: string
   promptsPerGroup: number
+  /** 差异方式：深化沿用原有做法，探索按维度表强制分配，默认深化 */
+  variationMode?: SopVariationMode
   directionId?: string
   ignoreCompliance?: boolean
   useImageSellingPoints?: boolean
@@ -483,6 +507,7 @@ async function runJob(job: SopJobRequest) {
       avoidHint,
       job.copyText ?? '',
       job.avoidCta !== false,
+      job.variationMode ?? 'deepen',
     )
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
 
