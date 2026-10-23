@@ -633,7 +633,8 @@ export default function InputBar() {
   /** 变量模式：把任务卡推进后台队列，立即返回；参考图只用于提取策略，不参与生图 */
   const runVariable = useCallback((options: VariableRunOptions) => {
     setVariableRunOpen(false)
-    if (!inputImages.length && !variableImages.length) return
+    // 三种图都算来源：只拖了固定图也要能跑（纯靠固定图 + 提示词出图），漏判会导致点确认后毫无反应
+    if (!inputImages.length && !fixedImages.length && !variableImages.length) return
     // 每张卡最多 MAX_INPUT_IMAGES 张参考图（只影响反推分组），超出的自动多分卡
     const referenceGroups = inputImages.length
       ? splitReferenceGroups(inputImages, options.groupCount)
