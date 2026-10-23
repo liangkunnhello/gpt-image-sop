@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import type { ImageComment } from '../types'
-import { createInputImageFromFile, deleteImageIfUnreferenced, useStore } from '../store'
+import { createInputImageFromFile, deleteImageIfUnreferenced, trashOutputImage, useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
@@ -147,6 +147,7 @@ export default function Lightbox() {
   const goNext = useCallback(() => { if (showNav) goTo(currentIndex + 1) }, [showNav, currentIndex, goTo])
 
   const isInputImage = Boolean(lightboxImageId && inputImages.some((image) => image.id === lightboxImageId))
+
 
   const openReplaceFilePicker = useCallback(() => {
     if (!lightboxImageId || !isInputImage) return
@@ -319,6 +320,16 @@ interface LightboxInnerProps {
 function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, showInputActions, onReplace, onEdit }: LightboxInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const openedAtRef = useRef(Date.now())
+  const allTasks = useStore((s) => s.tasks)
+  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+
+  /**
+   * 当前这张大图属于哪张任务卡的成品图。
+   * 只有「成品图」才提供放入回收站 —— 参考图、遮罩有各自的清理入口，
+   * 混进图片回收站会让「还原」的语义变得含糊。
+   */
+  const ownerOutputTask = allTasks.find((task) => !task.deletedAt && task.outputImages.includes(imageId))
+  const canTrashOutput = Boolean(ownerOutputTask)
 
   // 用 ref 追踪最新变换，避免闭包过期
   const scaleRef = useRef(1)
@@ -851,6 +862,30 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
             </svg>
           </button>
         </>
+      )}
+
+      {/* 成品图操作：单张放入图片回收站 */}
+      {canTrashOutput && !isZoomed && !showInputActions && (
+        <div className="absolute bottom-8 left-1/2 z-10 flex w-max -translate-x-1/2 items-center gap-2 rounded-2xl bg-white/90 dark:bg-black/60 p-2 backdrop-blur-xl border border-gray-200/80 dark:border-white/15 shadow-2xl transition-colors" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/15 transition active:scale-95"
+            onClick={() => {
+              const taskId = ownerOutputTask?.id
+              if (!taskId) return
+              setConfirmDialog({
+                title: '移入图片回收站',
+                message: '这张图会从画廊和交付里移除，原图仍保留，可在「回收站」里还原。',
+                action: () => trashOutputImage(taskId, imageId),
+              })
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+            </svg>
+            <span>放入回收站</span>
+          </button>
+        </div>
       )}
 
       {/* 参考图操作 */}

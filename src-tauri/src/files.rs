@@ -311,8 +311,84 @@ pub async fn save_dir_pick(
     register_dir(&dirs, path).map(Some)
 }
 
+/// 按已保存的绝对路径登记一个保存目录，供自动交付使用。
+///
+/// 与 save_dir_pick 的区别：不弹目录选择框，路径来自用户此前在业务树上配置并存在本机设置里的交付地址。
+/// 仍然做与选择框同等的校验（不能落在数据目录内、目录不存在就创建、实际探测可写），
+/// 所以前端并不能借这条命令写到任意位置：路径只可能是用户自己配过、且不越界的目录。
+#[tauri::command]
+pub async fn save_dir_use(
+    state: State<'_, StorageState>,
+    dirs: State<'_, SaveDirs>,
+    path: String,
+) -> Result<SaveDir, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("交付地址为空。".to_string());
+    }
+    let target = PathBuf::from(trimmed);
+    if !target.is_absolute() {
+        return Err("交付地址必须是绝对路径。".to_string());
+    }
+    let data_dir = data_root(&state);
+    tokio::task::block_in_place(|| {
+        check_outside(&target, data_dir.as_deref())?;
+        ensure_writable(&target).map_err(|err| format!("交付地址不可写：{err}"))
+    })?;
+    register_dir(&dirs, target)
+}
+
+/// 弹出目录选择框，只返回所选路径、不登记写入权限。
+///
+/// 用于「配置交付地址」这种先记路径、之后才写入的场景：此时用户还没触发交付，
+/// 只是想把这个位置存进设置里。真正写入仍要走 save_dir_use，那条命令会再校验一次。
+#[tauri::command]
+pub async fn pick_directory(
+    window: WebviewWindow,
+    state: State<'_, StorageState>,
+) -> Result<Option<String>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(move || pick_folder(window, None))
+        .await
+        .map_err(|err| format!("目录选择框异常结束：{err}"))??;
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+    let data_dir = data_root(&state);
+    tokio::task::block_in_place(|| check_outside(&path, data_dir.as_deref()))?;
+    Ok(Some(path.display().to_string()))
+}
+
+/// 在资源管理器中打开一个目录；路径须为绝对路径且不在数据目录内。
+///
+/// 供「打开交付文件夹」使用：这个路径是用户自己配置并存在本机设置里的，
+/// 所以这里不接受任意路径——与保存链路的越界校验保持一致。
+#[tauri::command]
+pub async fn open_directory(
+    state: State<'_, StorageState>,
+    path: String,
+) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("目录为空。".to_string());
+    }
+    let target = PathBuf::from(trimmed);
+    if !target.is_absolute() {
+        return Err("目录必须是绝对路径。".to_string());
+    }
+    let data_dir = data_root(&state);
+    check_outside(&target, data_dir.as_deref())?;
+    if !target.exists() {
+        return Err("目录不存在，可能已被移动或删除。".to_string());
+    }
+    tauri_plugin_opener::open_path(&target, None::<&str>)
+        .map_err(|err| format!("打开目录失败：{err}"))
+}
+
 /// 在 save_dir_pick 或 download_dir_use 登记的目录中开始一次分块写入，返回写入序号；
-/// 提交时已有同名文件则加序号。folder 为 save_dir_folder 建好的任务卡文件夹名
+/// 提交时已有同名文件则加序号。folder 为 save_dir_folder 建好的任务卡文件夹名。
+///
+/// overwrite 为 true 时同名文件直接覆盖（自动交付反复写同一张卡用，避免每次都堆出「名称 (2)」）；
+/// 默认 false，保持下载路径「绝不覆盖用户已有文件」的既有行为。
 #[tauri::command]
 pub async fn save_dir_begin(
     dirs: State<'_, SaveDirs>,
@@ -320,6 +396,7 @@ pub async fn save_dir_begin(
     token: usize,
     name: String,
     folder: Option<String>,
+    overwrite: Option<bool>,
 ) -> Result<u32, String> {
     check_name(&name)?;
     let dir = dirs
@@ -339,18 +416,27 @@ pub async fn save_dir_begin(
             }
             None => dir.clone(),
         };
+        let target = if overwrite.unwrap_or(false) {
+            Target::Replace(target_dir.join(&name))
+        } else {
+            Target::Unique(target_dir.clone(), name.clone())
+        };
         writes
-            .begin(&target_dir, Target::Unique(target_dir.clone(), name.clone()))
+            .begin(&target_dir, target)
             .map_err(|err| format!("创建 {name} 失败：{err}"))
     })
 }
 
 /// 在登记目录里建一个任务卡文件夹：已存在同名文件夹时依次用“名称-02”“名称-03”……
+///
+/// reuse 为 true 时同名文件夹直接复用（自动交付要让同一张卡的多次写入落在同一个文件夹里）；
+/// 默认 false，保持下载路径每次新建文件夹的既有行为。
 #[tauri::command]
 pub async fn save_dir_folder(
     dirs: State<'_, SaveDirs>,
     token: usize,
     name: String,
+    reuse: Option<bool>,
 ) -> Result<SaveFolder, String> {
     check_name(&name)?;
     let dir = dirs
@@ -360,6 +446,15 @@ pub async fn save_dir_folder(
         .and_then(|list| list.get(token).cloned())
         .ok_or_else(|| "保存目录无效".to_string())?;
     tokio::task::block_in_place(|| {
+        if reuse.unwrap_or(false) {
+            let path = dir.join(&name);
+            fs::create_dir_all(&path)
+                .map_err(|err| format!("创建文件夹 {name} 失败：{err}"))?;
+            return Ok(SaveFolder {
+                name,
+                path: path.display().to_string(),
+            });
+        }
         for n in 1..=999 {
             let candidate = if n == 1 { name.clone() } else { format!("{name}-{n:02}") };
             let path = dir.join(&candidate);

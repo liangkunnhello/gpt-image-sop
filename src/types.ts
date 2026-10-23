@@ -193,6 +193,11 @@ export interface AppSettings {
   taskFolderTemplate: string
   /** 模板里 {custom} 的取值 */
   taskFolderCustom: string
+  /**
+   * 生图完成后自动把成品图交付到「业务线 / 产品 / 方向」上配置的交付地址。
+   * 三级都没配时回退到默认保存地址；默认关闭。
+   */
+  autoDeliver: boolean
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean
@@ -271,6 +276,44 @@ export interface AgentInputDraft {
 // ===== 任务记录 =====
 
 export type TaskStatus = 'running' | 'done' | 'error'
+
+/**
+ * 普通模式的发图方式：
+ * - batch：每张变量图各发一次请求
+ * - merge：融图，一次请求带上整组图
+ *
+ * 定义放在 types.ts（而不是 lib/plainImagePlan.ts）是因为 TaskRecord 的快照要引用它，
+ * 而 plainImagePlan.ts 已经 import 本文件，反向引用会形成循环。原处仅做再导出。
+ */
+export type PlainImageMode = 'merge' | 'batch'
+
+/**
+ * 发送瞬间的输入框状态快照。
+ *
+ * 「复用配置」的本意是把输入框恢复成当时发送前的样子，但任务卡落库时
+ * 只保留了合并后的 inputImageIds，分不清哪几张是固定图、哪几张是参考图 / 变量图，
+ * 也不知道当时是融图还是批量。这里把发送前的分池与模式单独记一份。
+ *
+ * 只记录「恢复输入框需要」的东西，不记选择器状态（系统提示词 / 卖点 / 风格的选择
+ * 已经在 task.sopSystemPrompt、task.variablePromptName 等字段里另存）。
+ */
+export interface TaskInputSnapshot {
+  /** 发送前所处的模式：普通（融图/批量）/ SOP / 变量 */
+  mode: 'plain' | 'sop' | 'variable'
+  /** 普通模式：发送前输入框里的提示词原文（不含提交时拼上的卖点 / 风格前缀） */
+  prompt?: string
+  /** 普通模式的发图方式 */
+  plainImageMode?: PlainImageMode
+  /** 固定图区的图片 id（普通模式融图 / 变量模式图生图） */
+  fixedImageIds?: string[]
+  /**
+   * 变量图区的图片 id。
+   * 普通模式下就是输入框里的参考图（planPlainRequests 的 variableImages），
+   * 变量模式下是整池变量图 —— 旧字段 variableImageId 只记了本条用到的那一张，
+   * 复用时会丢掉池里其他图，所以整池在这里补全。
+   */
+  variableImageIds?: string[]
+}
 
 export interface TaskRecord {
   id: string
@@ -402,12 +445,25 @@ export interface TaskRecord {
   /** 变量模式：该策略的完整提取结果（Markdown），详情页回看策略用 */
   variableSpecText?: string
   /**
+   * 发送瞬间的输入框状态快照，供「复用配置」把输入框恢复成发送前的样子。
+   * 老任务没有这个字段，复用时会退回按 inputImageIds 推断的旧逻辑。
+   */
+  inputSnapshot?: TaskInputSnapshot
+  /**
    * 伪删除标记：有值表示已进回收站，不再出现在画廊/计数里。
    * 图片不清、任务记录保留，只有回收站里「清空」才真正删除。
    */
   deletedAt?: number
   /** 与 deletedAt 配套：同一批删除共用一个标识，便于整批恢复 */
   trashBatchId?: string
+  /**
+   * 已进「图片回收站」的成品图 id。
+   *
+   * 单独一个数组而不是从 outputImages 里摘掉：transparentOriginalImages 等字段是按
+   * outputImages 的下标对齐的，真的删元素会让这些映射整体错位。
+   * 被列在这里的图：不参与交付、不在画廊展示，但原图仍在，可从回收站还原。
+   */
+  trashedOutputImages?: string[]
 }
 
 // ===== SOP 模式 =====

@@ -99,8 +99,9 @@ export interface SaveFolder {
 }
 
 /** 仅客户端：在选定的保存目录里建一个任务卡文件夹，重名时由客户端加 -02、-03 */
-export async function createSaveFolder(dir: SaveDir, name: string): Promise<SaveFolder> {
-  return await invoke<SaveFolder>('save_dir_folder', { token: dir.token, name })
+export async function createSaveFolder(dir: SaveDir, name: string, reuse = false): Promise<SaveFolder> {
+  // reuse 只在自动交付时为 true：不传就没有这个键，既有调用方的参数形状保持不变
+  return await invoke<SaveFolder>('save_dir_folder', reuse ? { token: dir.token, name, reuse } : { token: dir.token, name })
 }
 
 /** 仅客户端：写入 pickSaveDir 选定的目录（或其中的任务卡文件夹），已有同名文件时自动加序号，返回实际写入的完整路径 */
@@ -110,9 +111,24 @@ export async function saveFileToDir(
   fileName: string,
   opts?: SaveOptions,
   folder?: string,
+  /** 同名文件直接覆盖，供自动交付反复写同一张卡；默认加序号不覆盖 */
+  overwrite = false,
 ) {
-  const id = await invoke<number>('save_dir_begin', { token: dir.token, name: fileName, folder })
+  const args: Record<string, unknown> = { token: dir.token, name: fileName }
+  if (folder) args.folder = folder
+  if (overwrite) args.overwrite = true
+  const id = await invoke<number>('save_dir_begin', args)
   return await writeInChunks(id, data, opts)
+}
+
+/**
+ * 仅客户端：按用户此前配置并保存在本机设置里的绝对路径登记一个保存目录，供自动交付写入。
+ *
+ * 与 pickSaveDir 的区别是不弹目录选择框——自动交付时没有用户手势可依附。
+ * 路径仍然由 Rust 侧做与选择框同等的越界与可写性校验。
+ */
+export async function useSaveDir(path: string): Promise<SaveDir> {
+  return await invoke<SaveDir>('save_dir_use', { path })
 }
 
 /** 仅客户端：默认保存地址，用于在设置中显示 */

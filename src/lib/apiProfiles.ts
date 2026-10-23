@@ -763,6 +763,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
       ? record.taskFolderTemplate.slice(0, 200)
       : DEFAULT_TASK_FOLDER_TEMPLATE,
     taskFolderCustom: typeof record.taskFolderCustom === 'string' ? record.taskFolderCustom.slice(0, 40) : '',
+    autoDeliver: typeof record.autoDeliver === 'boolean' ? record.autoDeliver : false,
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
@@ -1350,6 +1351,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   saveLocationMode: 'ask',
   taskFolderTemplate: DEFAULT_TASK_FOLDER_TEMPLATE,
   taskFolderCustom: '',
+  autoDeliver: false,
   agentScrollToBottomAfterSubmit: true,
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,

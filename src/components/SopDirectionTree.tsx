@@ -12,6 +12,7 @@ import { isTaskUnread } from '../lib/unread'
 import type { PostTemplateScope } from '../lib/applyPostTemplate'
 import PostTemplateModal from './PostTemplateModal'
 import MoveNodeModal from './MoveNodeModal'
+import DeliveryDirModal from './DeliveryDirModal'
 
 const FolderIcon = ({ className = 'h-4 w-4' }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={className}>
@@ -57,6 +58,9 @@ export default function SopDirectionTree() {
   /** 右键菜单：位置 + 目标节点 */
   const [menu, setMenu] = useState<{ x: number; y: number; node: SopDirectionNode | null } | null>(null)
   const [moveTarget, setMoveTarget] = useState<SopDirectionNode | null>(null)
+  /** 配置交付地址的目标节点：三级都可配 */
+  const [deliveryTarget, setDeliveryTarget] = useState<SopDirectionNode | null>(null)
+  const deliveryDirs = useSopStore((s) => s.deliveryDirs)
 
   // 预览底图由弹窗里自己选（按比例存、默认底色），这里只负责打开。
   // 产品上的是通用模板，方向上的是专属模板 —— 两者各存各的，互不出现在对方的列表里。
@@ -340,6 +344,11 @@ export default function SopDirectionTree() {
         onSelect: () => { openPostTemplate(node, 'direction') },
       })
     }
+    // 三级都可配交付地址：自己配了只用专属的，没配才向上级复用
+    items.push({
+      label: deliveryDirs[node.id]?.trim() ? '交付地址（已配置）' : '配置交付地址',
+      onSelect: () => setDeliveryTarget(node),
+    })
     items.push({
       label: '重命名',
       onSelect: () => {
@@ -804,6 +813,14 @@ export default function SopDirectionTree() {
           ownerName={postTarget.name}
           scope={postTarget.scope}
           onClose={() => setPostTarget(null)}
+        />,
+        document.body,
+      )}
+
+      {deliveryTarget && createPortal(
+        <DeliveryDirModal
+          node={deliveryTarget}
+          onClose={() => setDeliveryTarget(null)}
         />,
         document.body,
       )}

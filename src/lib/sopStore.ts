@@ -124,6 +124,15 @@ interface SopState {
    * 不再自动拿生成出来的作品当底图（那种图往往还没排版，容易误判效果）。
    */
   postPreviewImages: Record<string, Record<string, string>>
+  /**
+   * 按节点存的交付地址（绝对路径）：业务线 / 产品 / 方向三级都可配。
+   * 下层级配了只用专属的，没配才沿祖先链向上复用（见 deliveryDir.ts）。
+   *
+   * 刻意不进 SopLibraryExport：这是本机路径，导出给别人只会指向一个不存在的位置。
+   */
+  deliveryDirs: Record<string, string>
+  /** 设置 / 清除某个节点的交付地址，传空串表示清除 */
+  setDeliveryDir: (nodeId: string, path: string) => void
   /** 设置 / 清除某个比例档的预览底图，传 null 表示恢复默认 */
   setPostPreviewImage: (ownerId: string, ratioKey: string, imageId: string | null) => void
   /** 提示词库弹窗当前打开的分组，null 表示关闭。运行时状态，不落盘 */
@@ -202,6 +211,14 @@ export const useSopStore = create<SopState>()(
       avoidOverlay: true,
       postTemplates: {},
       postPreviewImages: {},
+      deliveryDirs: {},
+      setDeliveryDir: (nodeId, path) => set((state) => {
+        const next = { ...state.deliveryDirs }
+        const trimmed = path.trim()
+        if (trimmed) next[nodeId] = trimmed
+        else delete next[nodeId]
+        return { deliveryDirs: next }
+      }),
       libraryTab: null,
       trashOpen: false,
       setTrashOpen: (value) => set({ trashOpen: value }),
@@ -389,6 +406,7 @@ export const useSopStore = create<SopState>()(
             variablePrompts: state.variablePrompts.filter((item) => !doomed.has(item.productId)),
             postTemplates: dropNodeConfig(state.postTemplates, doomed),
             postPreviewImages: dropNodeConfig(state.postPreviewImages, doomed),
+            deliveryDirs: dropNodeConfig(state.deliveryDirs, doomed),
           }
         })
       },
@@ -401,6 +419,7 @@ export const useSopStore = create<SopState>()(
             variablePrompts: state.variablePrompts.filter((item) => !doomed.has(item.productId)),
             postTemplates: dropNodeConfig(state.postTemplates, doomed),
             postPreviewImages: dropNodeConfig(state.postPreviewImages, doomed),
+            deliveryDirs: dropNodeConfig(state.deliveryDirs, doomed),
           }
         })
       },
@@ -448,10 +467,13 @@ export const useSopStore = create<SopState>()(
     {
       name: 'gpt-image-sop-store',
       // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边；v5：变量提示词库；v6：节点伪删除；
-      // v7：productId 为空的配置认领到顶层节点
-      version: 7,
+      // v7：productId 为空的配置认领到顶层节点；v8：新增按节点存的交付地址
+      version: 8,
       migrate: (persisted, version) => {
         const state = (persisted ?? {}) as Partial<SopState>
+
+        // v8：老存档没有交付地址，补个空对象，避免读到的 undefined 到处判空
+        if (version < 8) state.deliveryDirs = state.deliveryDirs ?? {}
 
         // v2：系统提示词补齐 productId
         if (version < 2 && state.systemPrompts?.length) {
@@ -522,7 +544,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages }),
+      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
     },
   ),
 )

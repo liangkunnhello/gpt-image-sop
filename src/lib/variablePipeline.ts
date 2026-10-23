@@ -545,6 +545,16 @@ async function runJob(job: VariableJobRequest) {
           assignments: item.fill.assignments,
         })),
       },
+      /**
+       * 发送前快照：变量模式输入框里是三分区 —— 参考图（= sopReferenceImageIds）、
+       * 固定图、变量图。这里记固定图与**整池**变量图；本条用到的那张另存
+       * 在 variableImageId，复用配置时只还原池，不还原「当时轮到哪一张」。
+       */
+      inputSnapshot: {
+        mode: 'variable',
+        fixedImageIds: (job.fixedImages ?? []).map((img) => img.id),
+        variableImageIds: (job.variableImages ?? []).map((img) => img.id),
+      },
     })
   } catch (err) {
     // 不能删卡：删掉就只剩「转圈后卡片消失」这一个现象，用户完全看不到原因。

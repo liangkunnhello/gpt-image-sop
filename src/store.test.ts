@@ -5679,6 +5679,180 @@ describe('reused task API profile', () => {
   })
 })
 
+/**
+ * 「复用配置」应把输入框恢复成发送前的样子：模式、图片分池、提示词一起回来。
+ * 核心是不能像以前那样把固定图 / 变量图混进参考图区。
+ */
+describe('reuse config restores input snapshot', () => {
+  const openaiProfile = createDefaultOpenAIProfile({ id: 'openai-profile', apiKey: 'openai-key' })
+  const refImage = { id: 'snap-ref', dataUrl: 'data:image/png;base64,ref' }
+  const fixedA = { id: 'snap-fixed-a', dataUrl: 'data:image/png;base64,fa' }
+  const fixedB = { id: 'snap-fixed-b', dataUrl: 'data:image/png;base64,fb' }
+  const varA = { id: 'snap-var-a', dataUrl: 'data:image/png;base64,va' }
+  const varB = { id: 'snap-var-b', dataUrl: 'data:image/png;base64,vb' }
+
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    for (const img of [refImage, fixedA, fixedB, varA, varB]) {
+      await putImage({ id: img.id, dataUrl: img.dataUrl, createdAt: 1, source: 'upload' })
+    }
+    useStore.setState({
+      settings: normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        profiles: [openaiProfile],
+        activeProfileId: openaiProfile.id,
+        reuseTaskApiProfileTemporarily: false,
+      }),
+      prompt: '',
+      inputImages: [],
+      fixedImages: [],
+      variableImages: [],
+      maskDraft: null,
+      params: { ...DEFAULT_PARAMS },
+      tasks: [],
+      reusedTaskApiProfileId: null,
+      reusedTaskApiProfileMissing: false,
+      showToast: vi.fn(),
+      setConfirmDialog: vi.fn(),
+    })
+    useSopStore.getState().setSopMode(false)
+  })
+
+  /**
+   * 这些用例会真的切模式（setSopMode / setVariableMode 落在全局 sopStore 上），
+   * 也会往固定图 / 变量图池里填图；都是模块级单例，不清就会污染后面的 describe ——
+   * 后面的 submitTask 看到 sopMode 还是 true、或图池里还有图，就会走错分支。
+   */
+  afterEach(() => {
+    useSopStore.setState({ sopMode: false, variableMode: false })
+    useStore.setState({ fixedImages: [], variableImages: [] })
+  })
+
+  it('普通模式：固定图与变量图各自回位，提示词还原原文，发图方式也回来', async () => {
+    useStore.getState().setPlainImageMode('merge')
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: '提交时拼过前缀的完整提示词',
+      inputImageIds: [refImage.id, fixedA.id, fixedB.id],
+      inputSnapshot: {
+        mode: 'plain',
+        prompt: '用户当时写的原文',
+        plainImageMode: 'merge',
+        fixedImageIds: [fixedA.id, fixedB.id],
+        variableImageIds: [refImage.id],
+      },
+    }))
+
+    const state = useStore.getState()
+    // 参考图区只放变量图（普通模式下就是输入框里的图），固定图不进这里
+    expect(state.inputImages.map((img) => img.id)).toEqual([refImage.id])
+    expect(state.fixedImages.map((img) => img.id)).toEqual([fixedA.id, fixedB.id])
+    expect(state.variableImages).toHaveLength(0)
+    // 提示词还原成用户原文，而不是提交时拼了卖点 / 风格前缀的那串
+    expect(state.prompt).toBe('用户当时写的原文')
+    expect(state.plainImageMode).toBe('merge')
+    expect(useSopStore.getState().sopMode).toBe(false)
+    expect(useSopStore.getState().variableMode).toBe(false)
+  })
+
+  it('变量模式：切回变量模式，固定图与整池变量图分别回位', async () => {
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: '骨架填出来的这一条提示词',
+      variableMode: true,
+      // 变量模式下 inputImageIds 是「本条用到的固定图 + 那 1 张变量图」
+      inputImageIds: [fixedA.id, varA.id],
+      sopReferenceImageIds: [refImage.id],
+      variableFixedImageIds: [fixedA.id],
+      variableImageId: varA.id,
+      inputSnapshot: {
+        mode: 'variable',
+        // 变量图池有 2 张，旧字段只记了 varA，快照要能把整池还回来
+        fixedImageIds: [fixedA.id],
+        variableImageIds: [varA.id, varB.id],
+      },
+    }))
+
+    const state = useStore.getState()
+    expect(useSopStore.getState().variableMode).toBe(true)
+    expect(useSopStore.getState().sopMode).toBe(false)
+    expect(state.inputImages.map((img) => img.id)).toEqual([refImage.id])
+    expect(state.fixedImages.map((img) => img.id)).toEqual([fixedA.id])
+    expect(state.variableImages.map((img) => img.id)).toEqual([varA.id, varB.id])
+    // SOP / 变量模式按约定保留生成出的提示词，便于微调重发
+    expect(state.prompt).toBe('骨架填出来的这一条提示词')
+  })
+
+  it('SOP 模式：切回 SOP 模式并把参考图放回输入区', async () => {
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: 'SOP 生成出来的提示词',
+      sopText: '## SOP',
+      sopReferenceImageIds: [refImage.id],
+      inputImageIds: [],
+      inputSnapshot: {
+        mode: 'sop',
+        fixedImageIds: [],
+        variableImageIds: [],
+      },
+    }))
+
+    const state = useStore.getState()
+    expect(useSopStore.getState().sopMode).toBe(true)
+    expect(useSopStore.getState().variableMode).toBe(false)
+    expect(state.inputImages.map((img) => img.id)).toEqual([refImage.id])
+    expect(state.fixedImages).toHaveLength(0)
+    expect(state.prompt).toBe('SOP 生成出来的提示词')
+  })
+
+  it('快照里的图已被删除时跳过，不影响其余还原', async () => {
+    useStore.getState().setPlainImageMode('batch')
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: 'p',
+      inputImageIds: [refImage.id, fixedA.id],
+      inputSnapshot: {
+        mode: 'plain',
+        prompt: 'p',
+        plainImageMode: 'batch',
+        // ghost 从未入库，应当被静默跳过；fixedA 正常还原
+        fixedImageIds: [fixedA.id, 'snap-ghost'],
+        variableImageIds: [refImage.id, 'snap-ghost'],
+      },
+    }))
+
+    const state = useStore.getState()
+    expect(state.fixedImages.map((img) => img.id)).toEqual([fixedA.id])
+    expect(state.inputImages.map((img) => img.id)).toEqual([refImage.id])
+    expect(state.plainImageMode).toBe('batch')
+  })
+
+  it('老任务没有快照时退回旧逻辑：变量模式按 variableFixedImageIds 拆池', async () => {
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: '旧任务',
+      variableMode: true,
+      inputImageIds: [fixedA.id, varA.id],
+      sopReferenceImageIds: [refImage.id],
+      variableFixedImageIds: [fixedA.id],
+      variableImageId: varA.id,
+    }))
+
+    const state = useStore.getState()
+    expect(state.inputImages.map((img) => img.id)).toEqual([refImage.id])
+    expect(state.fixedImages.map((img) => img.id)).toEqual([fixedA.id])
+    expect(state.variableImages.map((img) => img.id)).toEqual([varA.id])
+    // 没有快照就不切模式，保持用户当前所处的模式
+    expect(useSopStore.getState().variableMode).toBe(false)
+  })
+})
+
 describe('task failure notification', () => {
   const responsesProfile = createDefaultOpenAIProfile({
     id: 'responses-profile',

@@ -22,7 +22,7 @@ import type {
   StoredImage,
   StoredImageThumbnail,
 } from './types'
-import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
+import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS, type TaskInputSnapshot } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, resolveApiProfileModel, splitModelList, validateApiProfile } from './lib/apiProfiles'
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
@@ -88,9 +88,11 @@ import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage } from './lib/postTemplate'
 import { dataUrlByteSize, limitDataUrlSize, shouldLimitOutputSize } from './lib/outputFileSize'
 import { finishedFileName, finishedFolderName, writeFinishedImage } from './lib/postFinished'
+import { deliverCardGroup, deliverTaskCard, type DeliverResult } from './lib/deliver'
+import { resolveDeliveryDir } from './lib/deliveryDir'
 import { useClipStore } from './lib/clipSimilarity'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
-import { pickSaveDir, saveFile, saveFileToDir, type SaveOptions } from './lib/saveFile'
+import { pickSaveDir, saveFile, saveFileToDir, getDefaultSaveDir, type SaveOptions } from './lib/saveFile'
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
 import { throwIfAborted } from './lib/serverSentEvents'
 import { tauriStorage } from './lib/tauriStorage'
@@ -1644,6 +1646,8 @@ async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<Return
   useStore.getState().showToast(`fal.ai 任务已恢复，共 ${outputIds.length} 张图片`, 'success')
   if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `fal.ai 任务已恢复，共 ${outputIds.length} 张图片。`)
   else void continueRecoveredAgentRound(task.id)
+  const recoveredFalTask = useStore.getState().tasks.find((item) => item.id === task.id)
+  if (recoveredFalTask) scheduleAutoDeliver(recoveredFalTask)
 }
 
 async function recoverFalTask(taskId: string) {
@@ -1990,6 +1994,11 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     meta?: Pick<TaskRecord, 'sopJobId' | 'sopPromptIndex' | 'sopName'>,
     /** 单个请求的尺寸覆盖：批量模式按各自参考图比例取基准尺寸 */
     sizeOverride?: string,
+    /**
+     * 发送瞬间的输入框状态快照，供「复用配置」还原。
+     * 拆分出的多个请求共用同一份（它们来自同一次发送）。
+     */
+    snapshot?: TaskInputSnapshot,
   ) => {
     const paramsForTask: TaskParams = {
       ...(n == null ? taskParams : { ...taskParams, n }),
@@ -2023,6 +2032,8 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       // 点「未归属」筛选时 activeFilterId 是 __unassigned__ 这种视图标记，
       // 写进任务会变成一个查不到节点的脏方向；点类目筛选也不该把图挂到分组容器上。
       sopDirectionId: useSopStore.getState().activeDirectionId || undefined,
+      // 恢复输入框用；同一批拆出的请求共用同一份快照
+      inputSnapshot: snapshot,
       ...(meta ? {
         sopJobId: meta.sopJobId,
         sopPromptIndex: meta.sopPromptIndex,
@@ -2058,7 +2069,20 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     requestBatchId = planBatchId
     // 同一批拆分请求共用一个 jobId，画廊与详情页按它聚合成一张任务卡
     const planJobId = `plain-${genId()}`
-    const planModeLabel = useStore.getState().plainImageMode === 'merge' ? '融图' : '批量'
+    const planImageMode = useStore.getState().plainImageMode
+    const planModeLabel = planImageMode === 'merge' ? '融图' : '批量'
+    /**
+     * 发送前快照：按分池记录，复用配置时才分得清哪几张进固定图区。
+     * 这里用 prompt（用户原文）而不是 finalPrompt，避免把提交时拼上的
+     * 卖点 / 风格前缀也写回输入框。
+     */
+    const plainSnapshot: TaskInputSnapshot = {
+      mode: 'plain',
+      prompt: prompt.trim(),
+      plainImageMode: planImageMode,
+      fixedImageIds: useStore.getState().fixedImages.map((img) => img.id),
+      variableImageIds: orderedInputImages.map((img) => img.id),
+    }
     // 批量模式每个请求只带一张参考图。尺寸填 auto 又横竖混排时，渠道会把画幅统一成一个，
     // 所以同批参考图比例不一致时，按各请求自己那张图的比例取 2K 基准尺寸；
     // 比例都一样就保持 auto 不动。融图一个请求里有多张图，比例不唯一，也保持 auto。
@@ -2080,7 +2104,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
             sopJobId: planJobId,
             sopPromptIndex: index + 1,
             sopName: planModeLabel,
-          }, sizeOverride)
+          }, sizeOverride, plainSnapshot)
           await waitForTaskSettled(taskId, () => planBatchId !== activeBatchId)
         } catch (err) {
           console.error('提交图片请求失败', err)
@@ -2117,7 +2141,19 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   if (batchPrompts.length) {
     useStore.getState().showToast(`已开始批量提交 ${batchPrompts.length} 条提示词`, 'success')
   } else {
-    await startTask(finalPrompt)
+    /**
+     * 走到这里说明没有走上面的分池拆分：要么是纯文生图（没有参考图），
+     * 要么是批量提示词。这些情况仍记一份快照，复用配置时至少能把提示词、
+     * 发图方式和当时的图片分池还原回输入框。
+     */
+    const fallbackSnapshot: TaskInputSnapshot = {
+      mode: 'plain',
+      prompt: prompt.trim(),
+      plainImageMode: useStore.getState().plainImageMode,
+      fixedImageIds: useStore.getState().fixedImages.map((img) => img.id),
+      variableImageIds: orderedInputImages.map((img) => img.id),
+    }
+    await startTask(finalPrompt, undefined, undefined, undefined, undefined, fallbackSnapshot)
     useStore.getState().showToast('任务已提交', 'success')
   }
 
@@ -2169,7 +2205,19 @@ function waitForTaskSettled(taskId: string, isCancelled: () => boolean) {
   })
 }
 
-async function runBatchPrompts(batchId: number, prompts: string[], limit: number, startTask: (taskPrompt: string) => Promise<string>) {
+async function runBatchPrompts(
+  batchId: number,
+  prompts: string[],
+  limit: number,
+  startTask: (
+    taskPrompt: string,
+    images?: InputImage[],
+    n?: number,
+    meta?: Pick<TaskRecord, 'sopJobId' | 'sopPromptIndex' | 'sopName'>,
+    sizeOverride?: string,
+    snapshot?: TaskInputSnapshot,
+  ) => Promise<string>,
+) {
   const isStopped = () => batchId !== activeBatchId
   const total = prompts.length
   let started = 0
@@ -2179,7 +2227,18 @@ async function runBatchPrompts(batchId: number, prompts: string[], limit: number
     started += 1
     useStore.getState().setBatchProgress({ total, started, finished })
     try {
-      const taskId = await startTask(taskPrompt)
+      /**
+       * 批量提示词每条各自是一条任务：快照里的 prompt 用该条提示词，
+       * 复用配置时才能还原到「当时发的这一条」，而不是整段多行文本。
+       */
+      const snapshot: TaskInputSnapshot = {
+        mode: 'plain',
+        prompt: taskPrompt.trim(),
+        plainImageMode: useStore.getState().plainImageMode,
+        fixedImageIds: useStore.getState().fixedImages.map((img) => img.id),
+        variableImageIds: useStore.getState().inputImages.map((img) => img.id),
+      }
+      const taskId = await startTask(taskPrompt, undefined, undefined, undefined, undefined, snapshot)
       await waitForTaskSettled(taskId, isStopped)
       if (useStore.getState().tasks.find((item) => item.id === taskId)?.status === 'error') failed += 1
     } catch (err) {
@@ -2455,6 +2514,98 @@ function finishedFolderFor(task: TaskRecord): string {
   const settings = useStore.getState().settings
   const productId = productIdForDirection(sop.directions, task.sopDirectionId)
   return finishedFolderName(task, sop.directions, settings.taskFolderTemplate, settings.taskFolderCustom, productId)
+}
+
+/**
+ * 交付上下文：三级交付地址、业务树、命名模板，以及兜底的默认保存地址。
+ *
+ * 兜底地址只在「三级都没配交付地址」时才用；文件保存位置设成「每次询问」时
+ * 没有默认地址可取，此时宁可跳过自动交付，也不弹一个没人点的保存对话框。
+ */
+async function buildDeliverContext(): Promise<Parameters<typeof deliverTaskCard>[1]> {
+  const sop = useSopStore.getState()
+  const settings = useStore.getState().settings
+  let fallbackDir: string | undefined
+  if (isTauri && settings.saveLocationMode === 'default') {
+    try {
+      fallbackDir = await getDefaultSaveDir()
+    } catch (err) {
+      console.warn('读取默认保存地址失败，自动交付将回退到已配置的交付地址', err)
+    }
+  }
+  return {
+    tasks: useStore.getState().tasks,
+    directions: sop.directions,
+    deliveryDirs: sop.deliveryDirs,
+    template: settings.taskFolderTemplate,
+    custom: settings.taskFolderCustom,
+    fallbackDir,
+  }
+}
+
+/**
+ * 单条提示词完成后自动交付它自己的那几张图。
+ *
+ * 用 fire-and-forget：交付是「复制一份到外部目录」，不该拖慢任务转成 done 的时机；
+ * 失败也只提示，不回滚任务状态。
+ */
+function scheduleAutoDeliver(task: TaskRecord) {
+  const settings = useStore.getState().settings
+  if (!settings.autoDeliver) return
+  if (!isTauri) return
+  // 进回收站的任务不交付
+  if (task.deletedAt) return
+  const latest = useStore.getState().tasks.find((item) => item.id === task.id)
+  if (!latest) return
+  void (async () => {
+    try {
+      const context = await buildDeliverContext()
+      const result = await deliverTaskCard(latest, context)
+      reportDeliverResult(result)
+    } catch (err) {
+      console.error('自动交付失败：', err)
+    }
+  })()
+}
+
+/** 交付结果的统一提示：失败给原因，成功给落点 */
+function reportDeliverResult(result: DeliverResult) {
+  const { showToast } = useStore.getState()
+  if (result.ok) {
+    showToast(`已交付 ${result.written} 张到 ${result.location ?? result.folder ?? '交付地址'}`, 'success')
+    return
+  }
+  if (result.noTarget) {
+    showToast('未配置交付地址，也没设置默认保存地址，这次没有自动交付', 'info')
+    return
+  }
+  if (result.nothingToDeliver) return
+  if (result.error) showToast(`交付失败：${result.error}`, 'error')
+}
+
+/** 手动「立即交付」：把整张卡（同 sopJobId 的所有任务）一次写全 */
+export async function deliverTaskNow(taskId: string): Promise<DeliverResult> {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task) return { ok: false, written: 0, error: '任务不存在' }
+  if (!isTauri) return { ok: false, written: 0, error: '网页版请用「下载到文件夹」' }
+  const context = await buildDeliverContext()
+  const result = await deliverCardGroup(task, context)
+  reportDeliverResult(result)
+  return result
+}
+
+/** 供界面显示：这张卡最终会交付到哪（含继承来源与兜底） */
+export async function resolveTaskDeliveryTarget(task: TaskRecord) {
+  const sop = useSopStore.getState()
+  const settings = useStore.getState().settings
+  const resolved = resolveDeliveryDir(sop.deliveryDirs, sop.directions, task.sopDirectionId)
+  if (resolved) return resolved
+  if (!isTauri || settings.saveLocationMode !== 'default') return null
+  try {
+    return { ownerId: '', path: await getDefaultSaveDir() }
+  } catch {
+    return null
+  }
 }
 
 async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
@@ -3324,6 +3475,10 @@ async function executeAgentRound(
         agentToolAction: image.action,
       })
       useStore.getState().setTaskStreamPreview(taskId)
+      {
+        const doneAgentTask = useStore.getState().tasks.find((item) => item.id === taskId)
+        if (doneAgentTask) scheduleAutoDeliver(doneAgentTask)
+      }
       return { taskId, committed: true }
     }
 
@@ -4341,6 +4496,11 @@ async function executeTask(taskId: string) {
       useStore.getState().showToast(completionMessage, failedCount > 0 ? 'error' : 'success')
       if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `${completionMessage}。`)
     }
+    // 自动交付：这一条提示词自己的成品图（同卡的多次交付落在同一个文件夹，同名覆盖）
+    if (outputIds.length) {
+      const doneTask = useStore.getState().tasks.find((item) => item.id === taskId)
+      if (doneTask) scheduleAutoDeliver(doneTask)
+    }
     const currentMask = useStore.getState().maskDraft
     if (
       maskDataUrl &&
@@ -4620,47 +4780,127 @@ export async function reuseConfig(task: TaskRecord) {
   clearMaskDraft()
 
   /**
-   * 恢复参考图。
-   * 变量模式图生图的 inputImageIds 是「固定图 + 变量图」，参考图存在 sopReferenceImageIds，
-   * 所以这里只回填参考图，固定图 / 变量图 在下面单独拆回各自的池。
+   * 还原输入框。
+   *
+   * 有 inputSnapshot（新任务）就按当时的模式与分池精确还原：
+   *   plain    → 提示词 + 分池图片（固定图回固定图区、其余回参考图区）+ 融图/批量
+   *   sop      → 切回 SOP 模式，参考图回输入区；提示词保留 task.prompt（模型生成的那条）
+   *   variable → 切回变量模式，参考图 / 固定图 / 变量图各自回位；提示词保留 task.prompt
+   *
+   * 没有快照（老任务）时退回旧逻辑：参考图取 inputImageIds，变量模式的
+   * inputImageIds 是「固定图 + 变量图」，按 variableFixedImageIds 拆回各自的池。
    */
-  const sourceImageIds = task.variableMode
+  const snapshot = task.inputSnapshot
+  const isVariableMode = snapshot ? snapshot.mode === 'variable' : Boolean(task.variableMode)
+  const referenceIds = snapshot
     ? (task.sopReferenceImageIds ?? [])
-    : (task.inputImageIds.length ? task.inputImageIds : (task.sopReferenceImageIds ?? []))
-  const imgs: InputImage[] = []
-  for (const imgId of sourceImageIds) {
-    const dataUrl = await ensureImageCached(imgId)
-    if (dataUrl) {
-      imgs.push({ id: imgId, dataUrl })
-    }
-  }
-  setInputImages(imgs)
-  // 变量模式图生图：把固定图 / 变量图拆回对应的池，否则下次发送会混进参考图里
-  if (task.variableMode && task.inputImageIds.length) {
-    const fixedIds = new Set(task.variableFixedImageIds ?? [])
-    const fixedImgs: InputImage[] = []
-    const variableImgs: InputImage[] = []
-    for (const imgId of task.inputImageIds) {
+    : (task.variableMode
+        ? (task.sopReferenceImageIds ?? [])
+        : (task.inputImageIds.length ? task.inputImageIds : (task.sopReferenceImageIds ?? [])))
+
+  const loadImages = async (ids: string[]): Promise<InputImage[]> => {
+    const out: InputImage[] = []
+    for (const imgId of ids) {
       const dataUrl = await ensureImageCached(imgId)
-      if (!dataUrl) continue
-      if (fixedIds.has(imgId)) fixedImgs.push({ id: imgId, dataUrl })
-      else variableImgs.push({ id: imgId, dataUrl })
+      if (dataUrl) out.push({ id: imgId, dataUrl })
     }
-    // 早期任务没存 fixedImageIds，退回「只有变量图的那张算变量图」
-    if (!task.variableFixedImageIds?.length && task.variableImageId) {
-      const isVariable = fixedImgs.find((img) => img.id === task.variableImageId)
-      if (isVariable) {
-        variableImgs.push(isVariable)
-        fixedImgs.splice(fixedImgs.indexOf(isVariable), 1)
-      }
+    return out
+  }
+
+  /**
+   * 取任务里记录的某张图 id → InputImage。
+   * 快照里的 id 可能已被用户删图（孤儿清理），取不到就跳过，不让整个还原失败。
+   */
+  const loadOne = async (imgId: string): Promise<InputImage | null> => {
+    const dataUrl = await ensureImageCached(imgId)
+    return dataUrl ? { id: imgId, dataUrl } : null
+  }
+
+  // 参考图 / 变量图区（普通模式下就是输入框里的那些图）
+  const inputIds = snapshot
+    ? (snapshot.mode === 'plain' ? (snapshot.variableImageIds ?? []) : referenceIds)
+    : referenceIds
+  setInputImages(await loadImages(inputIds))
+
+  // 固定图区：有快照按快照，老任务在变量模式下才拆得出来；两种来源都要真的写回 store
+  const fixedIds = snapshot
+    ? (snapshot.fixedImageIds ?? [])
+    : (isVariableMode ? (task.variableFixedImageIds ?? []) : [])
+  {
+    const fixedImgs: InputImage[] = []
+    for (const imgId of fixedIds) {
+      const img = await loadOne(imgId)
+      if (img) fixedImgs.push(img)
     }
     setFixedImages(fixedImgs)
-    setVariableImages(variableImgs)
   }
+
+  // 变量图区：快照里存的是整池；老任务只能退回「本条用到的那一张」
+  if (isVariableMode) {
+    const variableImgs: InputImage[] = []
+    if (snapshot) {
+      const fixedSet = new Set(fixedIds)
+      for (const imgId of snapshot.variableImageIds ?? []) {
+        if (fixedSet.has(imgId)) continue
+        const img = await loadOne(imgId)
+        if (img) variableImgs.push(img)
+      }
+    } else if (task.inputImageIds.length) {
+      const fixedSet = new Set(task.variableFixedImageIds ?? [])
+      for (const imgId of task.inputImageIds) {
+        if (fixedSet.has(imgId)) continue
+        const img = await loadOne(imgId)
+        if (img) variableImgs.push(img)
+      }
+      // 更早的任务连 variableFixedImageIds 都没有，只能认 variableImageId 这一张
+      if (!task.variableFixedImageIds?.length && task.variableImageId && !variableImgs.some((img) => img.id === task.variableImageId)) {
+        const img = await loadOne(task.variableImageId)
+        if (img) variableImgs.push(img)
+      }
+    }
+    setVariableImages(variableImgs)
+  } else if (snapshot) {
+    // 非变量模式：清掉上一次复用留下的变量图，避免混进这一批
+    setVariableImages([])
+  }
+
+  /**
+   * 切回当时的模式。三种模式互斥：setSopMode / setVariableMode 的实现里
+   * 会各自把另一个关掉（setSopMode(false) 同时把 variableMode 置 false），
+   * 所以普通模式只调 setSopMode(false) 就够了。
+   * 放在图片还原之后：模式一开，三分区面板会立刻按新的池渲染。
+   */
+  if (snapshot) {
+    const sopState = useSopStore.getState()
+    if (snapshot.mode === 'sop') {
+      sopState.setSopMode(true)
+    } else if (snapshot.mode === 'variable') {
+      sopState.setVariableMode(true)
+    } else {
+      sopState.setSopMode(false)
+      useStore.getState().setPlainImageMode(snapshot.plainImageMode ?? 'batch')
+    }
+    /**
+     * 归属方向：恢复成当时所用的方向，出图才会落回同一个地方。
+     * 方向可能已被删除，先确认还在树里再设，避免把归属指向一个不存在的节点。
+     */
+    const directionId = task.sopDirectionId
+    if (directionId && sopState.directions.some((node) => node.id === directionId)) {
+      sopState.setActiveDirection(directionId)
+    }
+  }
+
+  /**
+   * 提示词：普通模式还原发送前的原文（快照里有）；
+   * SOP / 变量模式按约定保留 task.prompt（模型生成的那条），方便微调重发。
+   */
+  const restorePrompt = snapshot
+    ? (snapshot.mode === 'plain' ? (snapshot.prompt ?? task.prompt) : task.prompt)
+    : task.prompt
   // 部分参考图可能已被删除，按图片 id 重新对齐提示词中的图片序号，避免评论和提及错位到其他图片
-  setPrompt(remapImageMentionsForOrder(task.prompt, sourceImageIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
+  setPrompt(remapImageMentionsForOrder(restorePrompt, inputIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
-  if (maskTargetImageId && task.maskImageId && imgs.some((img) => img.id === maskTargetImageId)) {
+  if (maskTargetImageId && task.maskImageId && useStore.getState().inputImages.some((img) => img.id === maskTargetImageId)) {
     const maskDataUrl = await ensureImageCached(task.maskImageId)
     if (maskDataUrl) {
       setMaskDraft({
@@ -5057,6 +5297,46 @@ export async function trashTask(task: TaskRecord) {
   await trashTasks(ids)
 }
 
+/**
+ * 把单张成品图放进「图片回收站」。
+ *
+ * 只记 id，不动 outputImages：那条数组的下标被 transparentOriginalImages 等字段依赖，
+ * 真删元素会让映射错位。被回收的图不再交付、不在画廊出现，原图仍在，可还原。
+ */
+export async function trashOutputImage(taskId: string, imageId: string) {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task || !imageId) return
+  const current = task.trashedOutputImages ?? []
+  if (current.includes(imageId)) return
+  const next = { ...task, trashedOutputImages: [...current, imageId] }
+  useStore.setState((state) => ({
+    tasks: state.tasks.map((item) => (item.id === taskId ? next : item)),
+  }))
+  await putTask(next)
+  useStore.getState().showToast('已移入图片回收站，可在回收站里还原', 'success')
+}
+
+/** 从图片回收站还原若干张图 */
+export async function restoreOutputImages(taskId: string, imageIds: string[]) {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task || !imageIds.length) return
+  const removing = new Set(imageIds)
+  const remaining = (task.trashedOutputImages ?? []).filter((id) => !removing.has(id))
+  const next = { ...task, trashedOutputImages: remaining.length ? remaining : undefined }
+  useStore.setState((state) => ({
+    tasks: state.tasks.map((item) => (item.id === taskId ? next : item)),
+  }))
+  await putTask(next)
+  useStore.getState().showToast(`已还原 ${imageIds.length} 张图片`, 'success')
+}
+
+/** 图片回收站里的全部条目：按任务卡分组，供回收站弹窗渲染 */
+export function collectTrashedOutputImages(tasks: TaskRecord[]): Array<{ task: TaskRecord; imageIds: string[] }> {
+  return tasks
+    .filter((task) => (task.trashedOutputImages?.length ?? 0) > 0)
+    .map((task) => ({ task, imageIds: task.trashedOutputImages ?? [] }))
+}
+
 /** 批量把选中的任务归到某个「产品-方向」下，传 null 表示清空归属 */
 export async function assignTasksDirection(taskIds: string[], directionId: string | null) {
   if (!taskIds.length) return 0
@@ -5216,6 +5496,8 @@ async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<Ret
   useStore.getState().showToast(`自定义异步任务已恢复，共 ${outputIds.length} 张图片`, 'success')
   if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `自定义异步任务已恢复，共 ${outputIds.length} 张图片。`)
   else void continueRecoveredAgentRound(task.id)
+  const recoveredCustomTask = useStore.getState().tasks.find((item) => item.id === task.id)
+  if (recoveredCustomTask) scheduleAutoDeliver(recoveredCustomTask)
 }
 
 async function recoverCustomTask(taskId: string) {
@@ -5700,6 +5982,11 @@ export async function submitSopTasks(input: {
     /** 与 prompts 一一对应：填词用的策略名 + 各变量取值 */
     fills: Array<{ skeleton: string; assignments: Record<string, string> }>
   }
+  /**
+   * 发送瞬间的输入框快照（模式 / 分池图片），供「复用配置」还原输入框。
+   * SOP 与变量模式的分池情况不同，由调用方按当时的模式构造。
+   */
+  inputSnapshot?: TaskInputSnapshot
 }): Promise<string[]> {
   const state = useStore.getState()
   const settings = state.settings
@@ -5746,6 +6033,14 @@ export async function submitSopTasks(input: {
       variableImageId: input.variableImageIds?.[index],
       // 同一批的固定图都一样；存下来是为了复用配置时能拆回「固定图」区
       variableFixedImageIds: fixedImageIds.length ? fixedImageIds : undefined,
+      /**
+       * 快照整批共用一份，但变量模式每条的 prompt 是「本条的填词结果」。
+       * SOP 模式下 inputSnapshot.prompt 留空：输入框里的提示词是模型生成的，
+       * 复用配置时按约定保留 task.prompt（见 reuseConfig），不还原成空的。
+       */
+      inputSnapshot: input.inputSnapshot
+        ? { ...input.inputSnapshot, prompt: input.inputSnapshot.mode === 'sop' ? undefined : prompt }
+        : undefined,
     }
   })
 

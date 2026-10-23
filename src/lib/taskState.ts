@@ -98,3 +98,19 @@ export function mapRevisedPromptsByImage(outputIds: string[], revisedPrompts: Ar
   }, {})
   return mapped && Object.keys(mapped).length > 0 ? mapped : undefined
 }
+
+/**
+ * 把进「图片回收站」的图从 outputImages 的渲染副本里排掉。
+ *
+ * 刻意不真的从 outputImages 里删元素：transparentOriginalImages、actualParamsByImage
+ * 一类字段是按 outputImages 的下标对齐的，删元素会让这些映射整体错位。
+ * 只在「展示 / 计数 / 下载 / 交付」这些按图逐张处理的场景用这个结果。
+ * 传 undefined 的 trashedOutputImages 时原样返回，避免给老任务多分配数组。
+ */
+export function visibleOutputImages(task: Pick<TaskRecord, 'outputImages' | 'trashedOutputImages'>): string[] {
+  const list = task.outputImages ?? []
+  const trashed = task.trashedOutputImages
+  if (!trashed?.length) return list
+  const hidden = new Set(trashed)
+  return list.filter((id) => !hidden.has(id))
+}

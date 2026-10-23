@@ -10,6 +10,7 @@ import { DEFAULT_FAL_MODEL, DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskPromptText } from '../lib/promptImageMentions'
 import { isTaskUnread } from '../lib/unread'
+import { visibleOutputImages } from '../lib/taskState'
 import { CodeIcon, TransparentBgIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -292,7 +293,7 @@ export default function TaskCard({
     setThumbSrc('')
 
     let cancelled = false
-    const imageId = task.outputImages?.[0]
+    const imageId = visibleOutputImages(task)[0]
     let unsubscribe: (() => void) | undefined
 
     const applyThumbnail = (thumbnail: { src: string; width?: number; height?: number }) => {
@@ -322,7 +323,8 @@ export default function TaskCard({
 
   // 一卡多图（SOP 聚合卡）：加载前四张缩略图拼成网格
   useEffect(() => {
-    const ids = task.outputImages.length > 1 ? task.outputImages.slice(0, 4) : []
+    const visibleIds = visibleOutputImages(task)
+    const ids = visibleIds.length > 1 ? visibleIds.slice(0, 4) : []
     if (!nearViewport || !ids.length) {
       setGridThumbs([])
       return
@@ -336,7 +338,7 @@ export default function TaskCard({
     return () => {
       cancelled = true
     }
-  }, [nearViewport, task.outputImages])
+  }, [nearViewport, task.outputImages, task.trashedOutputImages])
 
   const duration = (() => {
     let seconds: number
@@ -376,7 +378,9 @@ export default function TaskCard({
   const showPendingPrompt = isAgentTaskPromptPending(task)
   const showN = !isAgentTask && (task.params.n > 1 || nDisplay.isMismatch)
   const outputErrorCount = task.outputErrors?.length ?? 0
-  const outputSuccessCount = task.outputImages?.length ?? 0
+  /** 画廊里按「未进图片回收站」的图来展示与计数 */
+  const visibleOutputIds = visibleOutputImages(task)
+  const outputSuccessCount = visibleOutputIds.length
   const requestedOutputCount = Math.max(task.params.n, outputSuccessCount + outputErrorCount)
   const hasPartialOutputFailure = task.status === 'done' && outputErrorCount > 0
 
@@ -428,10 +432,10 @@ export default function TaskCard({
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchCancel}
-        draggable={task.status === 'done' && task.outputImages?.length > 0}
+        draggable={task.status === 'done' && visibleOutputIds.length > 0}
         onDragStart={(e) => {
-          if (task.status !== 'done' || !task.outputImages?.length) return;
-          const imageIds = task.outputImages;
+          if (task.status !== 'done' || !visibleOutputIds.length) return;
+          const imageIds = visibleOutputIds;
           e.dataTransfer.setData('text/plain', `agent-images:${imageIds.join(',')}`);
           e.dataTransfer.effectAllowed = 'copy';
           // Optionally set drag image if we have thumbSrc
@@ -547,7 +551,7 @@ export default function TaskCard({
                     <img
                       key={`${src}-${index}`}
                       src={src}
-                      data-output-image-ids={task.outputImages.join(',')}
+                      data-output-image-ids={visibleOutputIds.join(',')}
                       className="saveable-image h-full w-full object-cover"
                       loading="lazy"
                       alt=""
@@ -557,8 +561,8 @@ export default function TaskCard({
               ) : (
                 <img
                   src={thumbSrc}
-                  data-image-id={task.outputImages[0]}
-                  data-output-image-ids={task.outputImages.join(',')}
+                  data-image-id={visibleOutputIds[0]}
+                  data-output-image-ids={visibleOutputIds.join(',')}
                   className="saveable-image w-full h-full object-cover"
                   loading="lazy"
                   alt=""
@@ -592,9 +596,9 @@ export default function TaskCard({
                   )}
                 </div>
               )}
-              {(hasPartialOutputFailure || task.outputImages.length > 1) && (
+              {(hasPartialOutputFailure || visibleOutputIds.length > 1) && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-                  {hasPartialOutputFailure ? <>{requestedOutputCount} | <span className="font-semibold text-yellow-300">{outputSuccessCount}</span></> : task.outputImages.length}
+                  {hasPartialOutputFailure ? <>{requestedOutputCount} | <span className="font-semibold text-yellow-300">{outputSuccessCount}</span></> : visibleOutputIds.length}
                 </span>
               )}
             </>

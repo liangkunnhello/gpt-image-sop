@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, retryTask, updateSopText, trashTask } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, retryTask, updateSopText, trashTask, trashOutputImage, deliverTaskNow, resolveTaskDeliveryTarget } from '../store'
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
@@ -305,6 +305,26 @@ export default function DetailModal() {
   // 这几个 Hook 必须在下面的 `if (!task) return null` 之前调用：
   // 否则详情关闭时少调用、打开时多调用，Hook 数量变化会让 React 直接报错并卸载整棵树（表现为点开详情变空白）
   const [reapplying, setReapplying] = useState(false)
+  /** 立即交付进行中 */
+  const [delivering, setDelivering] = useState(false)
+  /** 这张卡最终会交付到哪（配置地址或兜底的默认保存地址），没配则为 null */
+  const [deliveryTarget, setDeliveryTarget] = useState<{ ownerId: string; path: string } | null>(null)
+  const deliveryDirs = useSopStore((s) => s.deliveryDirs)
+
+  // 交付地址可能在任何一次配置 / 切换任务后变化，依赖里的 deliveryDirs 保证改完就重算
+  useEffect(() => {
+    if (!task || !isTauri) {
+      setDeliveryTarget(null)
+      return
+    }
+    let cancelled = false
+    void resolveTaskDeliveryTarget(task).then((resolved) => {
+      if (!cancelled) setDeliveryTarget(resolved)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [task, deliveryDirs])
   const clipScores = useClipStore((s) => s.scores)
   const clipQc = useClipStore((s) => s.qc)
   const clipLimit = useClipStore((s) => s.limit)
@@ -494,6 +514,16 @@ export default function DetailModal() {
       message: '确定要删除这个任务吗？会先放进回收站，可以在「回收站」里恢复，清空回收站才真正删除图片。',
       action: () => trashTask(task),
     })
+  }
+
+  const handleDeliverNow = async () => {
+    if (!task || delivering) return
+    setDelivering(true)
+    try {
+      await deliverTaskNow(task.id)
+    } finally {
+      setDelivering(false)
+    }
   }
 
   const handleToggleFavorite = () => {
@@ -689,6 +719,28 @@ export default function DetailModal() {
                   </ViewportTooltip>
                 </div>
               )}
+              {currentOutputImageId && (
+                <div className="relative group flex">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setConfirmDialog({
+                        title: '移入图片回收站',
+                        message: '这张图会从画廊和交付里移除，原图仍保留，可在「回收站」里还原。',
+                        action: () => trashOutputImage(task.id, currentOutputImageId),
+                      })
+                    }}
+                    className="flex items-center justify-center px-1.5 py-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-red-500/80 transition focus:outline-none focus:ring-1 focus:ring-white/50"
+                    aria-label="放入回收站"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                  <ViewportTooltip visible={false} className="whitespace-nowrap">
+                    放入回收站
+                  </ViewportTooltip>
+                </div>
+              )}
               {task.outputImages.length > 1 && (
                 <div className="relative group flex">
                   <button
@@ -869,6 +921,49 @@ export default function DetailModal() {
                     </span>
                   )
                 )}
+                {/*
+                 * 打开成品图位置 / 打开原图位置 / 收藏：原本占底部操作区一整排，
+                 * 但这三个是「对着当前这张图」的动作，跟左下角的尺寸信息是同一件事，
+                 * 放一起看更顺手，底部那排就只留任务级的操作。
+                 * 底图可能是深色成品图，浅色底会糊掉，这里统一用黑底半透明。
+                 */}
+                <button
+                  type="button"
+                  onClick={() => void handleRevealCurrentImage('output')}
+                  className="flex h-7 w-7 items-center justify-center rounded bg-black/50 text-white backdrop-blur-sm transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50"
+                  title="打开文件所在位置（当前这张成品图）"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleRevealCurrentImage('original')}
+                  className="flex h-7 w-7 items-center justify-center rounded bg-black/50 text-white backdrop-blur-sm transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50"
+                  title="打开文件所在位置（当前这张原图）"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                    <rect x="3" y="4" width="18" height="16" rx="2" />
+                    <circle cx="8.5" cy="9.5" r="1.5" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 16l-5-5-4 4-2-2-4 4" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleToggleFavorite}
+                  className={`flex h-7 w-7 items-center justify-center rounded backdrop-blur-sm transition focus:outline-none focus:ring-1 focus:ring-white/50 ${
+                    task.isFavorite
+                      ? 'bg-yellow-500/80 text-white hover:bg-yellow-500'
+                      : 'bg-black/50 text-white hover:bg-black/70'
+                  }`}
+                  title={task.isFavorite ? '编辑收藏夹' : '收藏任务'}
+                >
+                  <svg className="w-4 h-4" fill={task.isFavorite ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                  </svg>
+                </button>
               </div>
               {currentOriginalOutputImageId && (
                 <div className="absolute bottom-4 right-4 z-20 flex">
@@ -1593,40 +1688,22 @@ export default function DetailModal() {
               <TrashIcon className="w-4 h-4 flex-shrink-0" />
               删除任务
             </button>
-            <button
-              onClick={() => void handleRevealCurrentImage('output')}
-              className="col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 transition hover:bg-blue-50 hover:text-blue-500 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
-              title="打开文件所在位置（当前这张成品图）"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18" />
-              </svg>
-            </button>
-            <button
-              onClick={() => void handleRevealCurrentImage('original')}
-              className="col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 transition hover:bg-blue-50 hover:text-blue-500 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
-              title="打开文件所在位置（当前这张原图）"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <circle cx="8.5" cy="9.5" r="1.5" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 16l-5-5-4 4-2-2-4 4" />
-              </svg>
-            </button>
-            <button
-              onClick={handleToggleFavorite}
-              className={`col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl transition ${
-                task.isFavorite
-                  ? 'bg-yellow-50 text-yellow-500 hover:bg-yellow-100 dark:bg-yellow-500/10 dark:hover:bg-yellow-500/20'
-                  : 'bg-gray-50 text-gray-400 hover:bg-yellow-50 hover:text-yellow-500 dark:bg-white/[0.04] dark:hover:bg-yellow-500/10'
-              }`}
-              title={task.isFavorite ? '编辑收藏夹' : '收藏任务'}
-            >
-              <svg className="w-5 h-5" fill={task.isFavorite ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-              </svg>
-            </button>
+            {isTauri && (
+              <button
+                onClick={handleDeliverNow}
+                disabled={delivering || !outputLen}
+                title={deliveryTarget
+                  ? `交付到 ${deliveryTarget.path}（同卡所有提示词的图会写到同一个文件夹）`
+                  : '还没配置交付地址，先在左侧「产品-方向」右键配置'}
+                className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 11v6m0 0l-2.5-2.5M12 17l2.5-2.5" />
+                </svg>
+                {delivering ? '交付中…' : '立即交付'}
+              </button>
+            )}
           </div>
         </div>
       </div>

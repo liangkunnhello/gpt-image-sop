@@ -656,6 +656,15 @@ async function runJob(job: SopJobRequest) {
       directionId: job.directionId,
       referenceImageIds: job.imageIds,
       prompts,
+      /**
+       * 发送前快照：SOP 模式下输入框只有参考图（存在 sopReferenceImageIds），
+       * 固定图 / 变量图不参与，所以两个池都留空。
+       */
+      inputSnapshot: {
+        mode: 'sop',
+        fixedImageIds: [],
+        variableImageIds: [],
+      },
     })
   } catch (err) {
     // 不删卡：删掉只剩「转圈后卡片消失」，用户看不到原因。转成错误卡，原因留在卡上。

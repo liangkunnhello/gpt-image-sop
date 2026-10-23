@@ -9,9 +9,10 @@
  * 无论哪种模式，每个请求都只生成 1 张图。
  */
 
-import type { InputImage } from '../types'
+import type { InputImage, PlainImageMode } from '../types'
 
-export type PlainImageMode = 'merge' | 'batch'
+/** 单纯再导出，定义已移到 types.ts（TaskRecord 的快照需要引用它） */
+export type { PlainImageMode }
 
 export interface PlainRequestPlan {
   /** 这个请求要带的参考图，顺序就是变量图在前、固定图在后 */

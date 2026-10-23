@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import type { SopDirectionNode, TaskRecord } from '../types'
 import { useSopStore, directionPath } from '../lib/sopStore'
 import { purgeTrashBatchWithTasks, restoreTrashBatchWithTasks } from '../lib/directionTree'
-import { purgeAllTrashTasks, useStore } from '../store'
+import { collectTrashedOutputImages, purgeAllTrashTasks, restoreOutputImages, useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { CloseIcon } from './icons'
@@ -39,6 +39,7 @@ export default function TrashModal() {
   const setTrashOpen = useSopStore((s) => s.setTrashOpen)
   const directions = useSopStore((s) => s.directions)
   const purgeAllTrash = useSopStore((s) => s.purgeAllTrash)
+  const tasks = useStore((s) => s.tasks)
   const trashedTasks = useStore((s) => s.trashedTasks)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
@@ -81,6 +82,9 @@ export default function TrashModal() {
     return [...map.values()].sort((a, b) => b.deletedAt - a.deletedAt)
   }, [directions, trashedTasks])
 
+  // Hook 必须无条件调用：放在 `if (!trashOpen) return null` 之前
+  const trashedImages = useMemo(() => collectTrashedOutputImages(tasks), [tasks])
+
   if (!trashOpen) return null
 
   const totalNodes = batches.reduce((sum, batch) => sum + batch.nodes.length, 0)
@@ -89,6 +93,7 @@ export default function TrashModal() {
     (sum, batch) => sum + batch.tasks.reduce((count, task) => count + task.outputImages.length, 0),
     0,
   )
+  const totalTrashedImages = trashedImages.reduce((sum, item) => sum + item.imageIds.length, 0)
 
   const formatTime = (value: number) => {
     const date = new Date(value)
@@ -145,12 +150,40 @@ export default function TrashModal() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          {!batches.length && (
+          {!batches.length && !totalTrashedImages && (
             <p className="px-2 py-16 text-center text-xs leading-relaxed text-gray-400">
               回收站是空的
               <br />
               删除方向或任务卡后会先出现在这里，可以随时恢复
             </p>
+          )}
+
+          {/* 图片回收站：详情页里单张「放入回收站」的图。与任务卡回收站分开，
+              这里只回收图本身，还原不回任务状态 */}
+          {totalTrashedImages > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-100 bg-amber-50/40 p-2.5 dark:border-amber-500/20 dark:bg-amber-500/[0.06]">
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="text-xs font-medium text-gray-800 dark:text-gray-100">图片回收站</span>
+                <span className="text-[11px] text-gray-400">{totalTrashedImages} 张</span>
+              </div>
+              {trashedImages.map(({ task, imageIds }) => (
+                <div key={task.id} className="mb-1.5 flex items-start gap-2 rounded-md bg-white/70 px-2 py-1.5 dark:bg-white/[0.04]">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[11px] font-medium text-gray-700 dark:text-gray-200">
+                      {task.sopName || task.prompt?.slice(0, 30) || '(无提示词)'}
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-gray-400">{imageIds.length} 张图已筛出，不再展示与交付</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { void restoreOutputImages(task.id, imageIds) }}
+                    className="shrink-0 rounded-lg bg-blue-500 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-600"
+                  >
+                    还原
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
 
           {batches.map((batch) => {
