@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { calculateImageSize, normalizeCodexCliImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
-import { DEFAULT_CAPABILITY, isSizeSupported, maxSizeForRatio } from '../lib/sizeCapability'
+import { DEFAULT_CAPABILITY, isSizeSupported, maxSizeForRatio, planGenerationSize } from '../lib/sizeCapability'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -25,6 +25,11 @@ interface Props {
   onClose: () => void
   allowAuto?: boolean
   codexCli?: boolean
+  /**
+   * 渠道不支持的尺寸是否也能选：按同比例更大尺寸生成、再缩回目标尺寸。
+   * 有后处理模板时不允许（模板字号按成品像素写死，先缩会错位）。
+   */
+  allowUpscale?: boolean
 }
 
 type Mode = 'auto' | 'ratio' | 'resolution'
@@ -47,7 +52,7 @@ function findPresetForSize(size: string) {
   return null
 }
 
-export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true, codexCli = false }: Props) {
+export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true, codexCli = false, allowUpscale = false }: Props) {
   usePreventBackgroundScroll(true)
 
   const modalRef = useRef<HTMLDivElement>(null)
@@ -85,17 +90,24 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   const [tier, setTier] = useState<SizeTier>(currentPreset?.tier ?? '1K')
   const [ratio, setRatio] = useState(currentPreset?.ratio ?? (allowAuto ? '1:1' : '4:3'))
 
+  /**
+   * 某个比例在当前档位能不能用：
+   * 渠道直接支持就算可用；不支持但能靠「放大生成再缩回」实现的也算可用（没开后处理时）。
+   */
+  const ratioUsable = useCallback((value: string, currentTier: SizeTier = tier) => {
+    const size = calculateImageSize(currentTier, value)
+    if (!size) return false
+    if (isSizeSupported(size)) return true
+    return planGenerationSize(size, { postProcess: !allowUpscale }).scaled
+  }, [tier, allowUpscale])
+
   // 切换档位后当前比例可能变得不受支持，自动退到该档第一个可用比例
   useEffect(() => {
     if (mode !== 'ratio' || ratio === 'custom') return
-    const size = calculateImageSize(tier, ratio)
-    if (size && isSizeSupported(size)) return
-    const fallback = RATIOS.find((item) => {
-      const candidate = calculateImageSize(tier, item.value)
-      return Boolean(candidate) && isSizeSupported(candidate as string)
-    })
+    if (ratioUsable(ratio)) return
+    const fallback = RATIOS.find((item) => ratioUsable(item.value))
     if (fallback) setRatio(fallback.value)
-  }, [tier, mode, ratio])
+  }, [tier, mode, ratio, ratioUsable])
   const [customRatio, setCustomRatio] = useState('16:9')
 
   // Resolution mode state
@@ -144,6 +156,15 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
     return ''
   }, [mode, tier, activeRatio, customW, customH, normalizeSize])
 
+  // 渠道不支持这个尺寸时的替代方案：按同比例更大的尺寸生成，出图后再缩回来。
+  // 勾上这个选项后，界面上任何尺寸都能选，不用再灰掉一半比例。
+  const previewPlan = useMemo(
+    () => planGenerationSize(previewSize, { postProcess: !allowUpscale }),
+    [previewSize, allowUpscale],
+  )
+  const previewSupported = previewSize === 'auto' || isSizeSupported(previewSize)
+  const previewUsable = Boolean(previewSize) && (previewSupported || previewPlan.scaled)
+
   const isClamped = useMemo(() => {
     if (!previewSize || previewSize === 'auto') return false
     if (mode === 'ratio' && ratio === 'custom') return customRatioClamped
@@ -176,7 +197,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   }
 
   const applySize = () => {
-    if (!previewSize) return
+    if (!previewSize || !previewUsable) return
     onSelect(previewSize)
     onClose()
   }
@@ -324,15 +345,24 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                       const isSquare = w === h
                       const size = calculateImageSize(tier, item.value) ?? ''
                       const supported = Boolean(size) && isSizeSupported(size)
+                      const plan = size ? planGenerationSize(size, { postProcess: !allowUpscale }) : null
+                      // 渠道不支持、但能靠「放大生成再缩回」实现时，这个比例就是可用的
+                      const scaled = !supported && Boolean(plan?.scaled)
+                      const usable = ratioUsable(item.value)
                       const maxSize = maxSizeForRatio(item.value)
+                      const title = supported
+                        ? `当前 ${size} · 最大 ${maxSize?.size ?? size}`
+                        : scaled
+                          ? `渠道不支持 ${size}，将按 ${plan?.requestSize} 生成后缩到 ${size}`
+                          : `该渠道不支持 ${size}`
                       return (
                         <button
                           key={item.value}
-                          disabled={!supported}
-                          title={supported ? `当前 ${size} · 最大 ${maxSize?.size ?? size}` : `该渠道不支持 ${size}`}
-                          className={`${buttonClass(ratio === item.value)} flex flex-col items-center justify-center gap-1 !py-2 ${supported ? '' : 'cursor-not-allowed opacity-35'}`}
+                          disabled={!usable}
+                          title={title}
+                          className={`${buttonClass(ratio === item.value)} flex flex-col items-center justify-center gap-1 !py-2 ${usable ? '' : 'cursor-not-allowed opacity-35'}`}
                           onClick={() => {
-                            if (supported) setRatio(item.value)
+                            if (usable) setRatio(item.value)
                           }}
                         >
                           <div className="flex h-5 w-5 items-center justify-center">
@@ -345,8 +375,8 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                             />
                           </div>
                           <span className="text-xs">{item.label}</span>
-                          <span className={`text-[10px] leading-none ${supported ? 'text-gray-400 dark:text-gray-500' : 'text-red-400'}`}>
-                            {supported ? size.replace('x', '×') : '不支持'}
+                          <span className={`text-[10px] leading-none ${supported ? 'text-gray-400 dark:text-gray-500' : scaled ? 'text-blue-500/90 dark:text-blue-400/90' : 'text-red-400'}`}>
+                            {supported ? size.replace('x', '×') : scaled ? `↑${size.replace('x', '×')}` : '不支持'}
                           </span>
                         </button>
                       )
@@ -355,15 +385,23 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                       自定义比例
                     </button>
                   </div>
-                  {ratio !== 'custom' && (
-                    <div className="mt-2 text-[11px] text-gray-400 dark:text-gray-500">
-                      {(() => {
-                        const largest = maxSizeForRatio(ratio)
-                        if (!largest) return '该比例在渠道允许范围内没有可用尺寸'
-                        return `该比例最大可用：${largest.size.replace('x', '×')}（${largest.tier}）`
-                      })()}
-                    </div>
-                  )}
+                  <div className="mt-2 space-y-1 text-[11px] text-gray-400 dark:text-gray-500">
+                    {ratio !== 'custom' && (() => {
+                      const size = calculateImageSize(tier, ratio) ?? ''
+                      const plan = size ? planGenerationSize(size, { postProcess: !allowUpscale }) : null
+                      if (plan?.scaled) {
+                        const target = plan.targetSize.replace('x', '×')
+                        const request = plan.requestSize.replace('x', '×')
+                        return <div className="text-blue-500/90 dark:text-blue-400/90">渠道不支持 {target}，将按 {request} 生成后缩到 {target}</div>
+                      }
+                      const largest = maxSizeForRatio(ratio)
+                      if (!largest) return <div>该比例在渠道允许范围内没有可用尺寸</div>
+                      return <div>该比例最大可用：{largest.size.replace('x', '×')}（{largest.tier}）</div>
+                    })()}
+                    {allowUpscale && (
+                      <div>带 ↑ 的尺寸渠道不直接支持：会按同比例更大的尺寸生成，出图后缩回该尺寸</div>
+                    )}
+                  </div>
                 </section>
 
                 {ratio === 'custom' && (
@@ -453,6 +491,16 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 </div>
               )}
             </div>
+            {previewPlan.scaled && (
+              <div className="mt-1 text-[11px] leading-relaxed text-blue-500/90 dark:text-blue-400/90">
+                渠道不支持该尺寸，实际按 {previewPlan.requestSize.replace('x', '×')} 生成，出图后缩到 {previewPlan.targetSize.replace('x', '×')}
+              </div>
+            )}
+            {Boolean(previewSize) && !previewSupported && !previewPlan.scaled && (
+              <div className="mt-1 text-[11px] leading-relaxed text-red-400">
+                该渠道不支持这个尺寸（{DEFAULT_CAPABILITY.note}）；关掉后处理后可改用「放大生成再缩回」
+              </div>
+            )}
           </div>
         </div>
 
@@ -465,7 +513,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
           </button>
           <button
             onClick={applySize}
-            disabled={!previewSize}
+            disabled={!previewUsable}
             className="flex-1 rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             确定

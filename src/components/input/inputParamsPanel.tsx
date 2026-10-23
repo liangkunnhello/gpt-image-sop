@@ -136,6 +136,7 @@ export default function InputParamsPanel({
   streamConcurrentByN,
   streamConcurrentHint,
   sizeHint,
+  sizeScaleHint,
   qualityHint,
   onOpenSizePicker,
   showBatch,
@@ -194,6 +195,8 @@ export default function InputParamsPanel({
   streamConcurrentByN: boolean
   streamConcurrentHint: HintTooltipState
   sizeHint: HintTooltipState
+  /** 尺寸渠道不支持时的说明（会按更大尺寸生成再缩回），空串表示不需要提示 */
+  sizeScaleHint?: string
   qualityHint: HintTooltipState
   onOpenSizePicker: () => void
   showBatch: boolean
@@ -253,10 +256,12 @@ export default function InputParamsPanel({
           <span className="font-mono">{displaySize}</span>
         </button>
         <ButtonTooltip
-          visible={(isFalTextToImage || activeProfile.codexCli) && sizeHint.visible}
+          visible={sizeHint.visible && (isFalTextToImage || activeProfile.codexCli || Boolean(sizeScaleHint))}
           text={isFalTextToImage
             ? <>fal.ai 的文生图模式不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 参数</>
-            : 'Codex CLI 不支持尺寸参数，此处设置仅基于提示词工程'}
+            : activeProfile.codexCli
+              ? 'Codex CLI 不支持尺寸参数，此处设置仅基于提示词工程'
+              : sizeScaleHint}
         />
       </div>
       <div
