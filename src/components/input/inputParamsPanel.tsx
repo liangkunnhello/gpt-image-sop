@@ -6,6 +6,7 @@ import { dismissAllTooltips } from '../../lib/tooltipDismiss'
 import Select from '../Select'
 import ButtonTooltip from './buttonTooltip'
 import ParamPopoverChip, { CHIP_BASE_CLASS, CHIP_IDLE_CLASS } from './paramPopoverChip'
+import { shouldLimitOutputSize } from '../../lib/outputFileSize'
 
 const CHIP_CLASS = `${CHIP_BASE_CLASS} ${CHIP_IDLE_CLASS}`
 const CHIP_DISABLED_CLASS = 'h-8 px-3.5 rounded-full bg-black/[0.03] dark:bg-white/[0.04] opacity-50 cursor-not-allowed text-xs text-gray-700 dark:text-gray-200'
@@ -109,12 +110,11 @@ export default function InputParamsPanel({
   transparentOutputEnabled,
   transparentOutputHint,
   onTransparentOutputMenuOpenChange,
-  compressionHint,
-  compressionDisabled,
-  outputCompressionInput,
-  setOutputCompressionInput,
-  commitOutputCompression,
-  moderationHint,
+  sizeLimitHint,
+  sizeLimitDisabled,
+  sizeLimitInput,
+  setSizeLimitInput,
+  commitSizeLimit,  moderationHint,
   moderationDisabled,
   postProcessEnabled,
   postProcessAvailable,
@@ -163,11 +163,12 @@ export default function InputParamsPanel({
   transparentOutputEnabled: boolean
   transparentOutputHint: HintTooltipState
   onTransparentOutputMenuOpenChange: (open: boolean) => void
-  compressionHint: HintTooltipState
-  compressionDisabled: boolean
-  outputCompressionInput: string
-  setOutputCompressionInput: (value: string) => void
-  commitOutputCompression: () => void
+  sizeLimitHint: HintTooltipState
+  /** PNG 无损，降画质压不下去，所以只有 JPEG / WebP 时可用 */
+  sizeLimitDisabled: boolean
+  sizeLimitInput: string
+  setSizeLimitInput: (value: string) => void
+  commitSizeLimit: () => void
   moderationHint: HintTooltipState
   moderationDisabled: boolean
   /** 出图后是否套用后处理模板 */
@@ -206,11 +207,12 @@ export default function InputParamsPanel({
   onStopBatch: () => void
 }) {
   // 折叠时也展示弹层内每一项的当前值，不支持的参数不显示
+  // PNG 时体积限制不生效，摘要里也不写，免得说了做不到
+  const sizeLimitKb = shouldLimitOutputSize(params) ? params.max_file_kb ?? null : null
   const moreSummary = [
     params.output_format.toUpperCase(),
-    showTransparentOutputControl
-      ? `透明 ${transparentOutputEnabled}`
-      : compressionDisabled ? null : `压缩 ${outputCompressionInput || '默认'}`,
+    showTransparentOutputControl ? `透明 ${transparentOutputEnabled}` : null,
+    sizeLimitKb ? `≤${sizeLimitKb}KB` : null,
     moderationDisabled ? null : `审核 ${params.moderation}`,
     postProcessEnabled ? null : '后处理 关',
   ].filter(Boolean).join(' · ')
@@ -383,38 +385,43 @@ export default function InputParamsPanel({
                 />
               </div>
             )}
-            {!showTransparentOutputControl && (
-              <label
-                className={ROW_CLASS}
-                onMouseEnter={compressionHint.show}
-                onMouseLeave={compressionHint.hide}
-                onTouchStart={compressionHint.startTouch}
-                onTouchEnd={compressionHint.clearTimer}
-                onTouchCancel={compressionHint.hide}
-                onClick={compressionHint.show}
-              >
-                <span className={ROW_LABEL_CLASS}>压缩率</span>
+            {/*
+              限制大小常驻显示：PNG 时禁用并提示换格式。
+              这里不能像原来的「压缩率」那样跟着透明背景行互斥 —— PNG 是默认格式，
+              一上来就看不到这一行，用户根本发现不了这个开关。
+            */}
+            <label
+              className={ROW_CLASS}
+              onMouseEnter={sizeLimitHint.show}
+              onMouseLeave={sizeLimitHint.hide}
+              onTouchStart={sizeLimitHint.startTouch}
+              onTouchEnd={sizeLimitHint.clearTimer}
+              onTouchCancel={sizeLimitHint.hide}
+              onClick={sizeLimitHint.show}
+            >
+              <span className={ROW_LABEL_CLASS}>限制大小</span>
+              <div className="flex w-28 items-center gap-1">
                 <input
-                  value={outputCompressionInput}
-                  onChange={(e) => setOutputCompressionInput(e.target.value)}
-                  onBlur={commitOutputCompression}
-                  disabled={compressionDisabled}
-                  type="number"
-                  min={0}
-                  max={100}
-                  placeholder="0-100"
-                  className={`w-28 px-3 py-1.5 rounded-xl border border-transparent focus:border-blue-300 dark:focus:border-blue-500/50 focus:outline-none text-xs transition-all duration-200 ${
-                    compressionDisabled
+                  value={sizeLimitInput}
+                  onChange={(e) => setSizeLimitInput(e.target.value.replace(/[^\d]/g, ''))}
+                  onBlur={commitSizeLimit}
+                  disabled={sizeLimitDisabled}
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="不限"
+                  className={`min-w-0 flex-1 px-3 py-1.5 rounded-xl border border-transparent focus:border-blue-300 dark:focus:border-blue-500/50 focus:outline-none text-xs transition-all duration-200 ${
+                    sizeLimitDisabled
                       ? 'bg-black/[0.03] dark:bg-white/[0.04] opacity-50 cursor-not-allowed'
                       : 'bg-black/[0.04] dark:bg-white/[0.06]'
                     }`}
                 />
-                <ButtonTooltip
-                  visible={compressionHint.visible}
-                  text={isFalProvider ? 'fal.ai 不支持压缩率参数' : '仅 JPEG 和 WebP 支持压缩率'}
-                />
-              </label>
-            )}
+                <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">KB</span>
+              </div>
+              <ButtonTooltip
+                visible={sizeLimitHint.visible}
+                text="PNG 无损，压不下去；换成 JPEG 或 WebP 才能限制体积"
+              />
+            </label>
             <div
               className={ROW_CLASS}
               onMouseEnter={moderationHint.show}

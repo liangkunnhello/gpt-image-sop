@@ -212,6 +212,11 @@ export interface TaskParams {
    * 只在本机生效，不会进接口请求；老任务没有这个字段，按「开启」处理。
    */
   post_process?: boolean
+  /**
+   * 输出文件大小上限（KB）。空/null 表示不限。
+   * 生成完成后在本地按画质逼近这个体积（仅 JPEG / WebP，PNG 无损压不下去）。
+   */
+  max_file_kb?: number | null
 }
 
 export const DEFAULT_PARAMS: TaskParams = {
@@ -223,6 +228,7 @@ export const DEFAULT_PARAMS: TaskParams = {
   n: 1,
   transparent_output: false,
   post_process: true,
+  max_file_kb: null,
 }
 
 // ===== 输入图片（UI 层面） =====

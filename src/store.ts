@@ -84,6 +84,7 @@ import { applyPostTemplate, productIdForDirection } from './lib/applyPostTemplat
 import { buildAvoidHintForTask, withAvoidHint } from './lib/postReserve'
 import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage } from './lib/postTemplate'
+import { dataUrlByteSize, limitDataUrlSize, shouldLimitOutputSize } from './lib/outputFileSize'
 import { saveFinishedCopy } from './lib/openImagesFolder'
 import { useClipStore } from './lib/clipSimilarity'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
@@ -2401,8 +2402,8 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
     ? []
     : postProductId ? (sopState.postTemplates[postProductId] ?? []) : []
   let finalImages = images
+  const appliedIndexes: number[] = []
   if (postTemplates.some((item) => item.enabled)) {
-    const appliedIndexes: number[] = []
     finalImages = await Promise.all(images.map(async (url, index) => {
       const size = imageSizeFromDataUrl(url)
       const template = size ? pickTemplateForImage(postTemplates, size.width, size.height, task.channel) : null
@@ -2416,17 +2417,19 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
         return url
       }
     }))
-    // 顺手落一份到 data/finished，方便直接去文件夹取成品
-    if (appliedIndexes.length) {
-      const stamp = Date.now()
-      for (const index of appliedIndexes) {
-        void saveFinishedCopy(`${task.id.slice(0, 8)}-${stamp}-${index + 1}`, finalImages[index])
-      }
-    }
   }
 
+  // 限制文件大小：压的是最终要存的那一份，所以放在透明背景处理之后
+  // PNG 无损、压不下去，这种情况 shouldLimitOutputSize 会直接返回 false
+  const limitBytes = shouldLimitOutputSize(task.params) ? Math.round((task.params.max_file_kb ?? 0) * 1024) : 0
+  const limitFormat: 'jpeg' | 'webp' = task.params.output_format === 'webp' ? 'webp' : 'jpeg'
+  let overflowCount = 0
+  let largestBytes = 0
+  const stamp = appliedIndexes.length ? Date.now() : 0
+
   try {
-    for (const dataUrl of finalImages) {
+    for (let index = 0; index < finalImages.length; index += 1) {
+      const dataUrl = finalImages[index]
       let outputDataUrl = dataUrl
       if (task.transparentOutput) {
         const original = await storeImageWithSize(dataUrl, 'generated')
@@ -2448,12 +2451,38 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
         }
       }
 
+      if (limitBytes > 0) {
+        try {
+          const limited = await limitDataUrlSize(outputDataUrl, limitFormat, limitBytes)
+          outputDataUrl = limited.dataUrl
+          if (!limited.fits) {
+            overflowCount += 1
+            largestBytes = Math.max(largestBytes, dataUrlByteSize(outputDataUrl))
+          }
+        } catch (err) {
+          console.warn('限制文件大小失败，已保留原图', err)
+        }
+      }
+
       const stored = await storeImageWithSize(outputDataUrl, 'generated')
       storedImageIds.push(stored.id)
       cacheImage(stored.id, outputDataUrl)
       outputIds.push(stored.id)
       outputDataUrls.push(outputDataUrl)
       outputImageSizes.push(stored)
+
+      // 顺手落一份到 data/finished，方便直接去文件夹取成品（带后处理、已压到目标体积的那份）
+      if (appliedIndexes.includes(index)) {
+        void saveFinishedCopy(`${task.id.slice(0, 8)}-${stamp}-${index + 1}`, outputDataUrl)
+      }
+    }
+
+    // 上限是硬要求，达不到要让用户知道，不能静默放过
+    if (overflowCount > 0) {
+      useStore.getState().showToast(
+        `有 ${overflowCount} 张图压到最低画质仍有 ${Math.round(largestBytes / 1024)}KB，超过 ${Math.round(limitBytes / 1024)}KB 上限`,
+        'info',
+      )
     }
 
     return {

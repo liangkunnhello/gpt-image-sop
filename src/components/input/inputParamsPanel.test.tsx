@@ -31,7 +31,23 @@ function unmount() {
   document.body.replaceChildren()
 }
 
-function renderPanel({ postProcessEnabled = true, postProcessAvailable = true } = {}) {
+type PanelOptions = {
+  postProcessEnabled?: boolean
+  postProcessAvailable?: boolean
+  params?: TaskParams
+  sizeLimitDisabled?: boolean
+  sizeLimitInput?: string
+  showTransparentOutputControl?: boolean
+}
+
+function renderPanel({
+  postProcessEnabled = true,
+  postProcessAvailable = true,
+  params = DEFAULT_PARAMS,
+  sizeLimitDisabled = false,
+  sizeLimitInput = '',
+  showTransparentOutputControl = false,
+}: PanelOptions = {}) {
   unmount()
   const patches: Array<Partial<TaskParams>> = []
   const container = document.createElement('div')
@@ -40,7 +56,7 @@ function renderPanel({ postProcessEnabled = true, postProcessAvailable = true } 
   act(() => {
     root!.render(
       <InputParamsPanel
-        params={DEFAULT_PARAMS}
+        params={params}
         setParams={(patch) => patches.push(patch)}
         activeProfile={DEFAULT_SETTINGS.profiles[0]}
         modelOptions={[{ label: 'gpt-image-1', value: 'gpt-image-1' }]}
@@ -51,15 +67,15 @@ function renderPanel({ postProcessEnabled = true, postProcessAvailable = true } 
         qualityOptions={[{ label: 'auto', value: 'auto' }]}
         selectClass=""
         transparentOutputAvailable={false}
-        showTransparentOutputControl={false}
+        showTransparentOutputControl={showTransparentOutputControl}
         transparentOutputEnabled={false}
         transparentOutputHint={hint()}
         onTransparentOutputMenuOpenChange={() => {}}
-        compressionHint={hint()}
-        compressionDisabled={false}
-        outputCompressionInput=""
-        setOutputCompressionInput={() => {}}
-        commitOutputCompression={() => {}}
+        sizeLimitHint={hint()}
+        sizeLimitDisabled={sizeLimitDisabled}
+        sizeLimitInput={sizeLimitInput}
+        setSizeLimitInput={() => {}}
+        commitSizeLimit={() => {}}
         moderationHint={hint()}
         moderationDisabled={false}
         postProcessEnabled={postProcessEnabled}
@@ -144,5 +160,45 @@ describe('InputParamsPanel 的「后处理」下拉', () => {
     click(row.querySelector('[class*="select-none"]'))
     click(container.querySelector('[data-option-value="off"]'))
     expect(patches).toEqual([{ post_process: false }])
+  })
+})
+
+describe('InputParamsPanel 的「限制大小」', () => {
+  const jpegParams: TaskParams = { ...DEFAULT_PARAMS, output_format: 'jpeg' }
+
+  function sizeLimitRow(container: HTMLElement) {
+    click(container.querySelector('[aria-expanded]'))
+    const label = [...container.querySelectorAll('span')].find((node) => node.textContent === '限制大小')
+    expect(label).toBeTruthy()
+    return label!.closest('label') as HTMLElement
+  }
+
+  it('默认不填，占位是「不限」，单位是 KB', () => {
+    const { container } = renderPanel({ params: jpegParams })
+    const row = sizeLimitRow(container)
+    const input = row.querySelector('input')!
+    expect(input.getAttribute('placeholder')).toBe('不限')
+    expect(input.value).toBe('')
+    expect(input.disabled).toBe(false)
+    expect(row.textContent).toContain('KB')
+  })
+
+  it('填了值后胶囊摘要显示上限', () => {
+    const { container } = renderPanel({ params: { ...jpegParams, max_file_kb: 500 }, sizeLimitInput: '500' })
+    expect(container.textContent).toContain('≤500KB')
+  })
+
+  it('PNG 时输入框禁用（无损压不下去）', () => {
+    const { container } = renderPanel({ params: DEFAULT_PARAMS, sizeLimitDisabled: true })
+    const row = sizeLimitRow(container)
+    expect(row.querySelector('input')!.disabled).toBe(true)
+  })
+
+  it('PNG 下同时显示「透明背景」行，限制大小这一行也还在（不会被挤掉）', () => {
+    const { container } = renderPanel({ params: DEFAULT_PARAMS, sizeLimitDisabled: true, showTransparentOutputControl: true })
+    click(container.querySelector('[aria-expanded]'))
+    const texts = container.textContent ?? ''
+    expect(texts).toContain('透明背景')
+    expect(texts).toContain('限制大小')
   })
 })

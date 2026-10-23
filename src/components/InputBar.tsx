@@ -32,6 +32,7 @@ import { useInputImageLimit } from '../hooks/useInputImageLimit'
 import { useSopStore } from '../lib/sopStore'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { productIdForDirection } from '../lib/applyPostTemplate'
+import { parseSizeLimitKb } from '../lib/outputFileSize'
 import { buildPromptBundle } from '../lib/promptBundle'
 import { taskMatchesChannel } from '../lib/channel'
 import { enqueueSopJobs, splitEven } from '../lib/sopPipeline'
@@ -471,8 +472,8 @@ export default function InputBar() {
     }
   }, [promptExpanded])
   const imageHintTimerRef = useRef<number | null>(null)
-  const [outputCompressionInput, setOutputCompressionInput] = useState(
-    params.output_compression == null ? '' : String(params.output_compression),
+  const [sizeLimitInput, setSizeLimitInput] = useState(
+    params.max_file_kb == null ? '' : String(params.max_file_kb),
   )
   const [nInput, setNInput] = useState(String(params.n))
   const [nInputFocused, setNInputFocused] = useState(false)
@@ -686,7 +687,8 @@ export default function InputBar() {
   const transparentOutputAvailable = appMode === 'gallery'
   const showTransparentOutputControl = transparentOutputAvailable && (params.output_format === 'png' || params.output_format === 'webp')
   const transparentOutputEnabled = transparentOutputAvailable && showTransparentOutputControl && params.transparent_output
-  const compressionDisabled = params.output_format === 'png' || isFalProvider
+  // 限制大小靠本地重压实现，PNG 无损压不下去，所以只在 JPEG / WebP 下可填
+  const sizeLimitDisabled = params.output_format === 'png'
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
   const isFalTextToImage = isFalProvider && inputImages.length === 0
   const nDraftValue = Number(nInput)
@@ -720,7 +722,7 @@ export default function InputBar() {
   const handleTransparentOutputMenuOpenChange = useCallback((open: boolean) => {
     if (open) transparentOutputHint.hide()
   }, [transparentOutputHint.hide])
-  const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
+  const sizeLimitHint = useHintTooltip({ enabled: () => sizeLimitDisabled })
   const moderationHint = useHintTooltip({ enabled: () => moderationDisabled })
   const postProcessHint = useHintTooltip({ enabled: () => !postProcessAvailable })
   const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage || activeProfile.codexCli })
@@ -847,10 +849,10 @@ export default function InputBar() {
   }, [setPrompt])
 
   useEffect(() => {
-    setOutputCompressionInput(
-      params.output_compression == null ? '' : String(params.output_compression),
+    setSizeLimitInput(
+      params.max_file_kb == null ? '' : String(params.max_file_kb),
     )
-  }, [params.output_compression])
+  }, [params.max_file_kb])
 
   useEffect(() => {
     setNInput(agentAutoImageCount ? 'auto' : String(params.n))
@@ -891,22 +893,12 @@ export default function InputBar() {
     }
   }, [maskDraft, maskTargetImage?.id, maskTargetImage?.dataUrl])
 
-  const commitOutputCompression = useCallback(() => {
-    if (outputCompressionInput.trim() === '') {
-      setOutputCompressionInput('')
-      setParams({ output_compression: null })
-      return
-    }
-
-    const nextValue = Number(outputCompressionInput)
-    if (Number.isNaN(nextValue)) {
-      setOutputCompressionInput(params.output_compression == null ? '' : String(params.output_compression))
-      return
-    }
-
-    setOutputCompressionInput(String(nextValue))
-    setParams({ output_compression: nextValue })
-  }, [outputCompressionInput, params.output_compression, setParams])
+  // 空 = 不限；填了就取整成 KB，0 和空同义
+  const commitSizeLimit = useCallback(() => {
+    const nextValue = parseSizeLimitKb(sizeLimitInput)
+    setSizeLimitInput(nextValue == null ? '' : String(nextValue))
+    if ((nextValue ?? null) !== (params.max_file_kb ?? null)) setParams({ max_file_kb: nextValue })
+  }, [sizeLimitInput, params.max_file_kb, setParams])
 
   const commitN = useCallback(() => {
     nLimitHint.hide()
@@ -1926,11 +1918,11 @@ export default function InputBar() {
       transparentOutputEnabled={transparentOutputEnabled}
       transparentOutputHint={transparentOutputHint}
       onTransparentOutputMenuOpenChange={handleTransparentOutputMenuOpenChange}
-      compressionHint={compressionHint}
-      compressionDisabled={compressionDisabled}
-      outputCompressionInput={outputCompressionInput}
-      setOutputCompressionInput={setOutputCompressionInput}
-      commitOutputCompression={commitOutputCompression}
+      sizeLimitHint={sizeLimitHint}
+      sizeLimitDisabled={sizeLimitDisabled}
+      sizeLimitInput={sizeLimitInput}
+      setSizeLimitInput={setSizeLimitInput}
+      commitSizeLimit={commitSizeLimit}
       moderationHint={moderationHint}
       moderationDisabled={moderationDisabled}
       postProcessEnabled={params.post_process !== false}

@@ -90,6 +90,9 @@ function normalizeParams(value: unknown, fallback: TaskParams): TaskParams {
     n: typeof value.n === 'number' && Number.isFinite(value.n) ? value.n : fallback.n,
     transparent_output: typeof value.transparent_output === 'boolean' ? value.transparent_output : fallback.transparent_output,
     post_process: typeof value.post_process === 'boolean' ? value.post_process : fallback.post_process,
+    max_file_kb: typeof value.max_file_kb === 'number' && Number.isFinite(value.max_file_kb) && value.max_file_kb > 0
+      ? value.max_file_kb
+      : value.max_file_kb === null ? null : fallback.max_file_kb,
   }
 }
 
