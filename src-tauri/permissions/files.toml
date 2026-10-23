@@ -4,6 +4,7 @@ description = "允许主窗口弹出保存对话框或目录选择框并分块�
 commands.allow = [
   "save_file",
   "save_dir_pick",
+  "save_dir_folder",
   "save_dir_begin",
   "save_write",
   "save_commit",

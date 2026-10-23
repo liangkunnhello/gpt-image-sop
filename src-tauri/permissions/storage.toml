@@ -24,6 +24,7 @@ commands.allow = [
   "kv_remove",
   "storage_info",
   "storage_open_dir",
+  "storage_reveal_image",
   "data_dir_notice",
   "data_dir_pick",
   "data_dir_change",
