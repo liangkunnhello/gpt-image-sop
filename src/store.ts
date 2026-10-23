@@ -80,7 +80,7 @@ import { createPersistedState, mergePersistedAgentConversations, migratePersiste
 import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
 import { stripInjectedCodexCliSizePrompt, withAspectRatioHint, normalizeCodexCliImageSize } from './lib/size'
 import { sizeOverridesForMixedRatios } from './lib/referenceSize'
-import { applyPostTemplate, productIdForDirection } from './lib/applyPostTemplate'
+import { applyPostTemplate, resolvePostTemplates } from './lib/applyPostTemplate'
 import { buildAvoidHintForTask, withAvoidHint } from './lib/postReserve'
 import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage } from './lib/postTemplate'
@@ -2397,10 +2397,10 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
   // 后处理：按这张图自己的比例挑模板，没有对得上的模板就原样保留
   // 参数面板里可以把「后处理」关掉，关掉时一张都不套，原图直出
   const sopState = useSopStore.getState()
-  const postProductId = productIdForDirection(sopState.directions, task.sopDirectionId)
+  // 方向下配了专属模板就只套它，没配才用产品模板（见 resolvePostTemplates）
   const postTemplates = task.params.post_process === false
     ? []
-    : postProductId ? (sopState.postTemplates[postProductId] ?? []) : []
+    : resolvePostTemplates(sopState.postTemplates, sopState.directions, task.sopDirectionId).templates
   let finalImages = images
   const appliedIndexes: number[] = []
   if (postTemplates.some((item) => item.enabled)) {
@@ -4033,7 +4033,7 @@ async function executeTask(taskId: string) {
       ? ''
       : buildAvoidHintForTask(
         task,
-        sopState.postTemplates[productIdForDirection(sopState.directions, task.sopDirectionId)] ?? [],
+        resolvePostTemplates(sopState.postTemplates, sopState.directions, task.sopDirectionId).templates,
         ratioReferenceDataUrls,
       )
 

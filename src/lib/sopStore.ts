@@ -35,6 +35,13 @@ const SEED_DIRECTIONS: SopDirectionNode[] = [
 
 const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 
+/** 丢掉按节点存的配置（模板 / 预览底图）：节点被彻底删除后用 */
+function dropNodeConfig<T>(record: Record<string, T>, doomed: Set<string>): Record<string, T> {
+  const next = { ...record }
+  for (const id of doomed) delete next[id]
+  return next
+}
+
 /** 侧栏「未归属」筛选项的特殊值 */
 export const UNASSIGNED_FILTER = '__unassigned__'
 
@@ -105,16 +112,20 @@ interface SopState {
   variablesPerCard: number
   /** 生成提示词时自动避让后处理预留区（Logo / 警示语），默认开启 */
   avoidOverlay: boolean
-  /** 按产品存的后处理模板，同一产品可以有多套（按比例匹配） */
+  /**
+   * 按节点存的后处理模板：产品上的是通用模板（整个产品共用），
+   * 方向上的是方向专属模板（只对那个方向生效，配了就不再套产品模板）。
+   * 两层各存各的键，所以方向模板不会出现在产品的模板列表里。
+   */
   postTemplates: Record<string, PostTemplate[]>
   /**
-   * 后处理模板预览用的底图：productId → 比例档 → imageId。
+   * 后处理模板预览用的底图：节点 id → 比例档 → imageId。
    * 同一比例的多套模板共用一张底图；没设置时预览用默认白底，
    * 不再自动拿生成出来的作品当底图（那种图往往还没排版，容易误判效果）。
    */
   postPreviewImages: Record<string, Record<string, string>>
   /** 设置 / 清除某个比例档的预览底图，传 null 表示恢复默认 */
-  setPostPreviewImage: (productId: string, ratioKey: string, imageId: string | null) => void
+  setPostPreviewImage: (ownerId: string, ratioKey: string, imageId: string | null) => void
   /** 提示词库弹窗当前打开的分组，null 表示关闭。运行时状态，不落盘 */
   libraryTab: SopLibraryTab | null
   /** 回收站弹窗是否打开。运行时状态，不落盘 */
@@ -126,7 +137,7 @@ interface SopState {
   setLibraryTab: (tab: SopLibraryTab | null) => void
   setPromptsPerGroup: (value: number) => void
   setVariablesPerCard: (value: number) => void
-  setPostTemplates: (productId: string, templates: PostTemplate[]) => void
+  setPostTemplates: (ownerId: string, templates: PostTemplate[]) => void
   setSopMode: (value: boolean) => void
   setVariableMode: (value: boolean) => void
   setIgnoreCompliance: (value: boolean) => void
@@ -200,18 +211,18 @@ export const useSopStore = create<SopState>()(
       setVariableMode: (value) => set({ variableMode: value, sopMode: false }),
       setPromptsPerGroup: (value) => set({ promptsPerGroup: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
       setVariablesPerCard: (value) => set({ variablesPerCard: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
-      setPostTemplates: (productId, templates) => set((state) => ({
-        postTemplates: { ...state.postTemplates, [productId]: templates },
+      setPostTemplates: (ownerId, templates) => set((state) => ({
+        postTemplates: { ...state.postTemplates, [ownerId]: templates },
       })),
-      setPostPreviewImage: (productId, ratioKey, imageId) => set((state) => {
-        const current = state.postPreviewImages[productId] ?? {}
+      setPostPreviewImage: (ownerId, ratioKey, imageId) => set((state) => {
+        const current = state.postPreviewImages[ownerId] ?? {}
         const next = { ...current }
         if (imageId) next[ratioKey] = imageId
         else delete next[ratioKey]
         const all = { ...state.postPreviewImages }
-        // 清空后把产品这一层也删掉，避免存档里堆一堆空对象
-        if (Object.keys(next).length) all[productId] = next
-        else delete all[productId]
+        // 清空后把这一层也删掉，避免存档里堆一堆空对象
+        if (Object.keys(next).length) all[ownerId] = next
+        else delete all[ownerId]
         return { postPreviewImages: all }
       }),
       setIgnoreCompliance: (value) => set({ ignoreCompliance: value }),
@@ -373,9 +384,11 @@ export const useSopStore = create<SopState>()(
           )
           return {
             directions: state.directions.filter((node) => !doomed.has(node.id)),
-            // 提示词与模板挂在产品上，真正删除时才跟着清
+            // 提示词与模板挂在节点上（产品通用 / 方向专属都是），真正删除时才跟着清
             systemPrompts: state.systemPrompts.filter((item) => !doomed.has(item.productId)),
             variablePrompts: state.variablePrompts.filter((item) => !doomed.has(item.productId)),
+            postTemplates: dropNodeConfig(state.postTemplates, doomed),
+            postPreviewImages: dropNodeConfig(state.postPreviewImages, doomed),
           }
         })
       },
@@ -386,6 +399,8 @@ export const useSopStore = create<SopState>()(
             directions: state.directions.filter((node) => !node.deletedAt),
             systemPrompts: state.systemPrompts.filter((item) => !doomed.has(item.productId)),
             variablePrompts: state.variablePrompts.filter((item) => !doomed.has(item.productId)),
+            postTemplates: dropNodeConfig(state.postTemplates, doomed),
+            postPreviewImages: dropNodeConfig(state.postPreviewImages, doomed),
           }
         })
       },

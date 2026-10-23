@@ -116,7 +116,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "get_library",
-            "description": "读取工作台的库数据：方向树、卖点与风格、系统提示词、后处理模板。默认只返回名称等摘要，需要正文时把 include_content 设为 true。",
+            "description": "读取工作台的库数据：方向树、卖点与风格、系统提示词、后处理模板。默认只返回名称等摘要，需要正文时把 include_content 设为 true。postTemplates 以节点 id 为键：产品上的是通用模板，方向上的是方向专属模板（该方向配了专属模板后不再套用产品模板）。",
             "inputSchema": {
                 "type": "object",
                 "properties": {

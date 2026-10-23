@@ -7,6 +7,7 @@ import { resolvePickedPreset } from './SopPresetPicker'
 import { resolveVariablePrompt } from './VariablePromptPicker'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { effectiveNodeKind } from '../lib/directionTree'
+import { resolvePostTemplates } from '../lib/applyPostTemplate'
 
 export interface VariableRunOptions {
   directionId: string
@@ -89,13 +90,15 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
     .join(' / ')
 
   const overlayInfo = useMemo(() => {
-    const list = (postTemplates[productId] ?? []).filter((item) => item.enabled)
+    // 方向专属模板优先，没配才看产品模板（与出图时的取法一致）
+    const list = resolvePostTemplates(postTemplates, directions, currentDirectionId || productId).templates
+      .filter((item) => item.enabled)
     const withZones = list.map((item) => collectAvoidZones(item).length).filter((count) => count > 0)
     return {
       templates: withZones.length,
       zones: withZones.length ? Math.max(...withZones) : 0,
     }
-  }, [postTemplates, productId])
+  }, [postTemplates, directions, currentDirectionId, productId])
 
   // 未归属（productId 为空）也能跑：不挂方向，变量提示词退回内置提取策略；
   // 选了产品就必须落到具体方向，避免「看着选了产品其实没归到任何方向」
@@ -273,8 +276,8 @@ export default function VariableRunModal({ imageCount, onClose, onConfirm }: Pro
                 把后处理模板的预留区写进提示词要求，出图后叠 Logo 和警示语就不会压住画面。
                 {' '}
                 {overlayInfo.templates
-                  ? `当前产品 ${overlayInfo.templates} 套模板配了预留区，最多 ${overlayInfo.zones} 处。`
-                  : '当前产品还没配后处理模板。'}
+                  ? `当前方向实际生效的 ${overlayInfo.templates} 套模板配了预留区，最多 ${overlayInfo.zones} 处。`
+                  : '当前方向没有生效的后处理模板，可在方向树里给方向或产品打开后处理模板设置。'}
               </span>
             </span>
           </label>

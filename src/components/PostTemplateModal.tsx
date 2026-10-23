@@ -18,6 +18,7 @@ import {
   type PostTemplate,
 } from '../lib/postTemplate'
 import { useSopStore } from '../lib/sopStore'
+import { productIdForDirection, type PostTemplateScope } from '../lib/applyPostTemplate'
 
 /** 尺寸下限：太小既排不了版，后端也撑不住 */
 const MIN_SIZE = 64
@@ -136,13 +137,24 @@ function PreviewThumb({ imageId, active, onPick }: { imageId: string; active: bo
 }
 
 interface Props {
-  productId: string
-  productName: string
+  /** 模板挂在哪个节点上：产品 id 或方向 id，两者各存各的键 */
+  ownerId: string
+  ownerName: string
+  /**
+   * 模板作用域。方向下配的是「方向专属模板」：只对这一个方向生效，
+   * 配了之后该方向不再套产品模板；产品下配的则被整个产品共用。
+   */
+  scope?: PostTemplateScope
   onClose: () => void
 }
 
-export default function PostTemplateModal({ productId, productName, onClose }: Props) {
-  const stored = useSopStore((s) => s.postTemplates[productId])
+export default function PostTemplateModal({ ownerId, ownerName, scope = 'product', onClose }: Props) {
+  const stored = useSopStore((s) => s.postTemplates[ownerId])
+  /**
+   * 全量模板：只用来提示「这个方向现在会不会回落到产品模板」。
+   * 弹窗里的编辑还没保存，所以这层信息始终读存档值。
+   */
+  const storedAll = useSopStore((s) => s.postTemplates)
   const setPostTemplates = useSopStore((s) => s.setPostTemplates)
   const setPostPreviewImage = useSopStore((s) => s.setPostPreviewImage)
   const directions = useSopStore((s) => s.directions)
@@ -159,7 +171,7 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
    * 跟模板一样本地编辑、点保存才落盘，取消就还原。
    */
   const [previewMap, setPreviewMap] = useState<Record<string, string>>(
-    () => ({ ...(useSopStore.getState().postPreviewImages[productId] ?? {}) }),
+    () => ({ ...(useSopStore.getState().postPreviewImages[ownerId] ?? {}) }),
   )
   /** 底图解码后的 dataUrl；空表示用默认底色 */
   const [previewSrc, setPreviewSrc] = useState('')
@@ -290,9 +302,9 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
     }
   }, [previewImageId])
 
-  /** 可选底图：这个产品下面已完成的成品图，最近完成的排前面 */
+  /** 可选底图：这个节点（产品及其方向 / 单个方向）下已完成的成品图，最近完成的排前面 */
   const previewCandidates = useMemo(() => {
-    const subtree = new Set([productId])
+    const subtree = new Set([ownerId])
     let grew = true
     while (grew) {
       grew = false
@@ -316,7 +328,7 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
       }
     }
     return list
-  }, [tasks, directions, productId])
+  }, [tasks, directions, ownerId])
 
   /** 选一张本地图当底图：先入图片库拿 id，和成品图走同一套引用 */
   const uploadPreviewImage = async (file: File) => {
@@ -492,13 +504,13 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
   }
 
   const save = () => {
-    setPostTemplates(productId, templates)
+    setPostTemplates(ownerId, templates)
     // 底图只写有变化的档位，顺便把本次清空的档位删掉
-    const prev = useSopStore.getState().postPreviewImages[productId] ?? {}
+    const prev = useSopStore.getState().postPreviewImages[ownerId] ?? {}
     const keys = new Set([...Object.keys(prev), ...Object.keys(previewMap)])
     for (const key of keys) {
       const next = previewMap[key] ?? null
-      if ((prev[key] ?? null) !== next) setPostPreviewImage(productId, key, next)
+      if ((prev[key] ?? null) !== next) setPostPreviewImage(ownerId, key, next)
     }
     onClose()
   }
@@ -508,6 +520,18 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
   // 预览按成品宽等比缩小，字号与描边都要跟着缩
   const scale = active && active.width > 0 && previewWidth > 0 ? previewWidth / active.width : 1
   const enabledCount = templates.filter((item) => item.enabled).length
+  // 方向专属模板与产品模板是二选一：这里把「现在到底用哪层」说清楚，
+  // 否则在方向里配了一套、产品里也配了，出图效果对不上也看不出原因
+  const parentProductId = scope === 'direction' ? productIdForDirection(directions, ownerId) : ''
+  const parentProductName = directions.find((node) => node.id === parentProductId)?.name ?? ''
+  const parentProductEnabled = parentProductId
+    ? (storedAll[parentProductId] ?? []).filter((item) => item.enabled).length
+    : 0
+  const scopeHint = scope === 'direction'
+    ? templates.length
+      ? `方向专属模板：只对「${ownerName}」生效。这个方向已不再套用产品「${parentProductName || '上级产品'}」的模板。`
+      : `方向专属模板：保存后只对「${ownerName}」生效。现在还没配，出图仍沿用产品「${parentProductName || '上级产品'}」的模板${parentProductEnabled ? `（已启用 ${parentProductEnabled} 套）` : ''}。`
+    : '产品通用模板：这个产品下的方向共用；某个方向配了专属模板后，那个方向改用自己的。'
   // 预留区：这套模板里参与避让的 Logo / 警示语位置，写提示词时会原样带进去
   const avoidHint = useMemo(() => buildAvoidHint(active), [active])
   const avoidZoneCount = useMemo(() => collectAvoidZones(active).length, [active])
@@ -519,7 +543,9 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 px-4 py-3 dark:border-white/[0.08]">
-          <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">{productName} · 后处理模板</h2>
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+            {ownerName} · {scope === 'direction' ? '方向专属模板' : '后处理模板'}
+          </h2>
           <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-white/10 dark:text-gray-400">
             {enabledCount} 套启用 / 共 {templates.length} 套
           </span>
@@ -554,6 +580,15 @@ export default function PostTemplateModal({ productId, productName, onClose }: P
           </div>
           <button type="button" onClick={onClose} className="rounded-lg px-3 py-1 text-sm text-gray-500 hover:bg-gray-100 dark:hover:bg-white/[0.06]">取消</button>
           <button type="button" onClick={save} className="rounded-lg bg-blue-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-600">保存</button>
+        </div>
+
+        {/* 作用域说明：方向专属与产品通用只能生效一层，不写清楚很难判断为什么没套上 */}
+        <div className={`border-b px-4 py-1.5 text-[11px] ${
+          scope === 'direction'
+            ? 'border-amber-100 bg-amber-50/70 text-amber-700 dark:border-amber-400/20 dark:bg-amber-400/[0.08] dark:text-amber-300'
+            : 'border-gray-100 bg-gray-50/70 text-gray-500 dark:border-white/[0.06] dark:bg-white/[0.03] dark:text-gray-400'
+        }`}>
+          {scopeHint}
         </div>
 
         {/* 模板筛选：渠道 + 尺寸（按比例归组），只筛列表，不影响按比例自动套用 */}

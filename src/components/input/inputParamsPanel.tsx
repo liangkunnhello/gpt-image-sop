@@ -173,7 +173,7 @@ export default function InputParamsPanel({
   moderationDisabled: boolean
   /** 出图后是否套用后处理模板 */
   postProcessEnabled: boolean
-  /** 当前方向下有没有启用的模板，没有时只给提示、不禁用开关 */
+  /** 当前方向下有没有启用的模板（方向专属优先，其次产品），没有时只给提示、不禁用开关 */
   postProcessAvailable: boolean
   postProcessHint: HintTooltipState
   agentAutoImageCount: boolean
@@ -474,7 +474,7 @@ export default function InputParamsPanel({
               </div>
               <ButtonTooltip
                 visible={!postProcessAvailable && postProcessHint.visible}
-                text="当前方向还没有启用的后处理模板，出图会保持原样"
+                text="当前方向（含所属产品）还没有启用的后处理模板，出图会保持原样"
               />
             </div>
       </ParamPopoverChip>

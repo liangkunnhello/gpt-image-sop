@@ -4,7 +4,7 @@ import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage } from './imageApiShared'
 import { apiFetch } from './platform'
-import { productIdForDirection } from './applyPostTemplate'
+import { resolvePostTemplates } from './applyPostTemplate'
 import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
 import { dedupePrompts } from './copyDedupe'
 import { variationCandidates } from './promptVariation'
@@ -546,7 +546,7 @@ async function runJob(job: SopJobRequest) {
   const avoidHint = sopState.avoidOverlay === false || state.params.post_process === false
     ? ''
     : buildAvoidHint(pickAvoidTemplate(
-      sopState.postTemplates[productIdForDirection(sopState.directions, job.directionId)] ?? [],
+      resolvePostTemplates(sopState.postTemplates, sopState.directions, job.directionId).templates,
       state.params.size,
       job.imageDataUrls,
     ))

@@ -10,7 +10,7 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   })
 }
 
-/** 方向节点 → 所属产品 id（模板挂在产品上） */
+/** 方向节点 → 所属产品 id（产品级模板挂在这一层） */
 export function productIdForDirection(
   directions: SopDirectionNode[],
   directionId: string | undefined,
@@ -19,6 +19,41 @@ export function productIdForDirection(
   const node = directions.find((item) => item.id === directionId)
   if (!node) return ''
   return node.kind === 'direction' ? node.parentId ?? '' : node.id
+}
+
+/** 一套模板配在哪一层：产品通用，还是某个方向专属 */
+export type PostTemplateScope = 'product' | 'direction'
+
+export interface ResolvedPostTemplates {
+  /** 实际生效的节点 id（方向或产品），没有对应模板时为空串 */
+  ownerId: string
+  scope: PostTemplateScope | 'none'
+  /** 生效的模板列表：方向专属与产品模板不混用 */
+  templates: PostTemplate[]
+}
+
+/**
+ * 取某个方向真正生效的后处理模板。
+ *
+ * 方向专属模板优先：方向下配了模板就只用它，不再叠产品模板——
+ * 两层各配一半再合并会出现「方向模板 + 产品 Logo」这种谁都没设计过的排版。
+ * 方向下没配（或配置被删空）才回落到产品模板。
+ *
+ * 参数名保留 productId 的语义：两者都按节点 id 存，产品与方向各存各的键。
+ */
+export function resolvePostTemplates(
+  templates: Record<string, PostTemplate[]>,
+  directions: SopDirectionNode[],
+  directionId: string | undefined,
+): ResolvedPostTemplates {
+  const productId = productIdForDirection(directions, directionId)
+  // 任务挂在产品上时不看「方向专属」这一层：那个键就是产品自己的模板
+  const ownList = directionId && directionId !== productId ? templates[directionId] ?? [] : []
+  if (ownList.length) {
+    return { ownerId: directionId ?? '', scope: 'direction', templates: ownList }
+  }
+  if (!productId) return { ownerId: '', scope: 'none', templates: [] }
+  return { ownerId: productId, scope: 'product', templates: templates[productId] ?? [] }
 }
 
 function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: number, height: number, logo: HTMLImageElement | null) {

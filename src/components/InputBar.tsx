@@ -31,7 +31,7 @@ import PlainImageModeSwitch from './PlainImageModeSwitch'
 import { useInputImageLimit } from '../hooks/useInputImageLimit'
 import { useSopStore } from '../lib/sopStore'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
-import { productIdForDirection } from '../lib/applyPostTemplate'
+import { resolvePostTemplates } from '../lib/applyPostTemplate'
 import { parseSizeLimitKb } from '../lib/outputFileSize'
 import { buildPromptBundle } from '../lib/promptBundle'
 import { taskMatchesChannel } from '../lib/channel'
@@ -582,12 +582,13 @@ export default function InputBar() {
   const currentProduct = sopDirections.find((node) => node.id === currentProductId)
     ?? currentDirection
   /**
-   * 后处理模板挂产品上；当前方向所属产品没配启用的模板时，
-   * 「后处理」开着也不会有变化，面板里给个提示但不禁用（用户可能先把它设成关）。
+   * 后处理模板可以是方向专属，也可以是产品通用；方向配了专属模板就只认它。
+   * 当前方向实际能套上的模板都没有启用时，「后处理」开着也不会有变化，
+   * 面板里给个提示但不禁用（用户可能先把它设成关）。
    */
   const postProcessAvailable = useMemo(() => {
-    const productId = productIdForDirection(sopDirections, activeDirectionId)
-    return productId ? (sopPostTemplates[productId] ?? []).some((item) => item.enabled) : false
+    const list = resolvePostTemplates(sopPostTemplates, sopDirections, activeDirectionId).templates
+    return list.some((item) => item.enabled)
   }, [sopDirections, activeDirectionId, sopPostTemplates])
   const pickedPoint = currentDirection
     ? resolvePickedPreset(sopPresets, currentDirection.id, sopScopeIds, 'point', sopLastPick, sopDefaultPick)

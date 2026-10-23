@@ -5,6 +5,7 @@ import { collectAvoidZones, pickAvoidTemplate } from '../lib/postReserve'
 import { resolveSystemPrompt } from './SopSystemPromptPicker'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { effectiveNodeKind } from '../lib/directionTree'
+import { resolvePostTemplates } from '../lib/applyPostTemplate'
 
 export interface SopRunOptions {
   directionId: string
@@ -91,15 +92,17 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
     .map((group) => group.length)
     .join(' / ')
 
-  // 后处理预留区：这个产品下启用的模板里有几处要避开
+  // 后处理预留区：这个方向实际生效的模板里有几处要避开
+  // （方向专属优先，没配才看产品模板，和出图时的取法一致）
   const overlayInfo = useMemo(() => {
-    const list = (postTemplates[productId] ?? []).filter((item) => item.enabled)
+    const list = resolvePostTemplates(postTemplates, directions, currentDirectionId || productId).templates
+      .filter((item) => item.enabled)
     const withZones = list.map((item) => collectAvoidZones(item).length).filter((count) => count > 0)
     return {
       templates: withZones.length,
       zones: withZones.length ? Math.max(...withZones) : 0,
     }
-  }, [postTemplates, productId])
+  }, [postTemplates, directions, currentDirectionId, productId])
 
   // 系统提示词在外面选，这里不再拦截；参考图可以没有（纯卖点生图）。
   // 未归属（productId 为空）也能跑：不挂方向、不继承提示词，靠内置规则反推 SOP；
@@ -283,8 +286,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
                 开启后写提示词会带上后处理模板里的预留区（位置、大小），主体和文字会避开这些区域，出图后再叠 Logo 和警示语就不会压住画面内容。
                 {' '}
                 {overlayInfo.templates
-                  ? `当前产品 ${overlayInfo.templates} 套模板配了预留区，最多 ${overlayInfo.zones} 处。`
-                  : '当前产品还没配后处理模板，可在方向树里给产品打开后处理模板设置。'}
+                  ? `当前方向实际生效的 ${overlayInfo.templates} 套模板配了预留区，最多 ${overlayInfo.zones} 处。`
+                  : '当前方向没有生效的后处理模板，可在方向树里给方向或产品打开后处理模板设置。'}
               </span>
             </span>
           </label>

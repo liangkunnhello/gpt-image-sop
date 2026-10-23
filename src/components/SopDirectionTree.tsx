@@ -9,6 +9,7 @@ import { effectiveNodeKind, trashNodeWithTasks } from '../lib/directionTree'
 import { nearestScopeId } from '../lib/sopScope'
 import { taskMatchesChannel } from '../lib/channel'
 import { isTaskUnread } from '../lib/unread'
+import type { PostTemplateScope } from '../lib/applyPostTemplate'
 import PostTemplateModal from './PostTemplateModal'
 import MoveNodeModal from './MoveNodeModal'
 
@@ -40,13 +41,14 @@ export default function SopDirectionTree() {
   const addNode = useSopStore((s) => s.addNode)
   const moveNode = useSopStore((s) => s.moveNode)
   const renameNode = useSopStore((s) => s.renameNode)
+  const postTemplates = useSopStore((s) => s.postTemplates)
   const setTrashOpen = useSopStore((s) => s.setTrashOpen)
   const tasks = useStore((s) => s.tasks)
   const channelFilter = useStore((s) => s.channelFilter)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
 
-  const [postTarget, setPostTarget] = useState<{ id: string; name: string } | null>(null)
+  const [postTarget, setPostTarget] = useState<{ id: string; name: string; scope: PostTemplateScope } | null>(null)
   const [folded, setFolded] = useState<Set<string>>(new Set())
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
@@ -56,9 +58,10 @@ export default function SopDirectionTree() {
   const [menu, setMenu] = useState<{ x: number; y: number; node: SopDirectionNode | null } | null>(null)
   const [moveTarget, setMoveTarget] = useState<SopDirectionNode | null>(null)
 
-  // 预览底图由弹窗里自己选（按比例存、默认底色），这里只负责打开
-  const openPostTemplate = (product: SopDirectionNode) => {
-    setPostTarget({ id: product.id, name: product.name })
+  // 预览底图由弹窗里自己选（按比例存、默认底色），这里只负责打开。
+  // 产品上的是通用模板，方向上的是专属模板 —— 两者各存各的，互不出现在对方的列表里。
+  const openPostTemplate = (node: SopDirectionNode, scope: PostTemplateScope) => {
+    setPostTarget({ id: node.id, name: node.name, scope })
   }
   const [search, setSearch] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -328,7 +331,13 @@ export default function SopDirectionTree() {
       items.push({ label: '新建方向', onSelect: () => beginAdd(node.id, 'direction') })
       items.push({
         label: '后处理模板',
-        onSelect: () => { void openPostTemplate(node) },
+        onSelect: () => { openPostTemplate(node, 'product') },
+      })
+    } else if (kind === 'direction') {
+      // 方向专属模板：配了之后这个方向就不再套产品模板
+      items.push({
+        label: '方向专属模板',
+        onSelect: () => { openPostTemplate(node, 'direction') },
       })
     }
     items.push({
@@ -418,9 +427,20 @@ export default function SopDirectionTree() {
     </span>
   )
 
+  /** 方向行的紫色胶囊：这个方向配了几套专属模板（配了就不再套产品模板） */
+  const templateBadge = (count: number, enabled: number) => (
+    <span
+      title={`方向专属后处理模板 ${count} 套（启用 ${enabled} 套）：这个方向不再套用产品模板`}
+      className="shrink-0 cursor-default rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] leading-none text-violet-500 dark:bg-violet-500/15 dark:text-violet-300"
+    >
+      模板
+    </span>
+  )
+
   const renderDirection = (node: SopDirectionNode) => {
     const highlight = rowHighlight(node.id)
     const isCurrent = node.id === activeDirectionId
+    const ownTemplates = postTemplates[node.id] ?? []
     return (
       <div key={node.id} className="group flex items-center pl-8">
         <button
@@ -433,7 +453,9 @@ export default function SopDirectionTree() {
             event.preventDefault()
             setMenu({ x: event.clientX, y: event.clientY, node })
           }}
-          title={isCurrent ? '当前归属：新生成的图会归到这个方向（右键：更多操作）' : '点击设为当前归属并筛选（右键：更多操作）'}
+          title={isCurrent
+            ? '当前归属：新生成的图会归到这个方向（右键：方向专属模板 / 重命名 / 删除）'
+            : '点击设为当前归属并筛选（右键：方向专属模板 / 重命名 / 删除）'}
           className={rowClass(highlight)}
         >
           {highlight.current && currentBar}
@@ -443,6 +465,7 @@ export default function SopDirectionTree() {
               {unreadDot(node.id)}
             </span>
           </span>
+          {ownTemplates.length > 0 && templateBadge(ownTemplates.length, ownTemplates.filter((item) => item.enabled).length)}
           {counts.get(node.id) ? tailBadge(counts.get(node.id) ?? 0) : <span className="shrink-0 text-[11px] tabular-nums text-gray-300">0</span>}
         </button>
         <button
@@ -777,8 +800,9 @@ export default function SopDirectionTree() {
 
       {postTarget && createPortal(
         <PostTemplateModal
-          productId={postTarget.id}
-          productName={postTarget.name}
+          ownerId={postTarget.id}
+          ownerName={postTarget.name}
+          scope={postTarget.scope}
           onClose={() => setPostTarget(null)}
         />,
         document.body,
