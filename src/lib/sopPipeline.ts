@@ -7,6 +7,7 @@ import { apiFetch } from './platform'
 import { resolvePostTemplates } from './applyPostTemplate'
 import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
 import { dedupePrompts } from './copyDedupe'
+import { checkPromptCopy, describeCopyIssues } from './copyCheck'
 import { variationCandidates } from './promptVariation'
 
 /** 生成 SOP 与提示词所用的文本模型 */
@@ -474,6 +475,43 @@ export async function generatePrompts(
   return copyText.trim() ? dedupePrompts(prompts).prompts : prompts
 }
 
+/**
+ * 生图前校正：把提示词里「」内的文字改回卖点原文，其余内容一个字都不动。
+ * 条数对不上时放弃本次结果，避免把整批提示词弄乱。
+ */
+export async function fixPromptCopy(
+  profile: ApiProfile,
+  prompts: string[],
+  copyText: string,
+): Promise<string[]> {
+  const system = [
+    '你是广告生图提示词的校对员。用户会给你一份「卖点文案」和若干条生图提示词，你要把提示词里印在画面上的文字改回卖点原文。',
+    '只改被「」包裹的文字：逐字替换成卖点里的原句，不得改写、缩写、扩写、合并或新增。',
+    '「」以外的所有内容（场景、机位、人物、配色、光线、版式、装饰描述）一个字都不要动。',
+    '每条提示词都要把全部卖点用上，可以换顺序；同一张图里同一句卖点只能出现一次。',
+    '不要新增卖点以外的任何文字，也不要把卖点拆成两行或换个说法重写。',
+    '只输出编号列表，一行一条，不要任何解释、不要小标题、不要代码块。',
+  ].join('\n')
+  const user = [
+    `【卖点文案（唯一来源，必须逐字使用）】\n${copyText.trim()}`,
+    `【待修正的提示词】\n${prompts.map((prompt, index) => `${index + 1}. ${prompt}`).join('\n')}`,
+  ].join('\n\n')
+
+  const raw = await chat(
+    profile,
+    [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    240,
+    tokensForPrompts(prompts.length),
+    // 校对要稳，不要自由发挥
+    0.2,
+  )
+  const fixed = parseNumberedList(raw)
+  return fixed.length === prompts.length ? fixed : prompts
+}
+
 /** 解析编号列表；解析不到编号时退回按空行切分 */
 export function parseNumberedList(text: string): string[] {
   const body = text.replace(/^```[a-z]*\n?/i, '').replace(/```$/, '').trim()
@@ -565,7 +603,7 @@ async function runJob(job: SopJobRequest) {
       job.copyText ?? '',
       job.avoidCta !== false,
     )
-    const prompts = await generatePrompts(
+    let prompts = await generatePrompts(
       profile,
       sop,
       job.promptsPerGroup,
@@ -575,6 +613,24 @@ async function runJob(job: SopJobRequest) {
       job.avoidCta !== false,
     )
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
+
+    // 生图前校验：选了卖点就必须逐字一致，不一致先让模型改回原文再验一次
+    const copyText = (job.copyText ?? '').trim()
+    if (copyText) {
+      const before = checkPromptCopy(prompts, copyText)
+      if (!before.ok) {
+        updateTaskInStore(placeholderId, { prompt: `${job.label} · 正在校正卖点…` })
+        prompts = await fixPromptCopy(profile, prompts, copyText)
+        const after = checkPromptCopy(prompts, copyText)
+        if (!after.ok) {
+          console.warn('卖点校正后仍有不一致：', after.issues)
+          useStore.getState().showToast(
+            `${job.label}：${describeCopyIssues(after.issues)}，已按校正结果继续`,
+            'info',
+          )
+        }
+      }
+    }
 
     await removeSopPlaceholder(placeholderId)
     // 出图任务由 submitSopTasks 内部再限并发，这里不等待，避免占住队列
