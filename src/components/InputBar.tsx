@@ -613,7 +613,7 @@ export default function InputBar() {
       style: pickedStyle?.content,
     })
     // 没有参考图时 splitEven 会返回一个空组：这一组只靠系统提示词与卖点反推文字版 SOP
-    // 每张卡最多 MAX_INPUT_IMAGES 张图，超出的自动多分卡
+    // 参考图不进生图接口，只按用户选的卡数均分，不限张数、也不再自动多分卡
     const groups = splitReferenceGroups(inputImages, options.groupCount)
     enqueueSopJobs(groups.map((group, index) => ({
       label: `第 ${index + 1}/${groups.length} 张卡`,
@@ -635,7 +635,7 @@ export default function InputBar() {
     setVariableRunOpen(false)
     // 三种图都算来源：只拖了固定图也要能跑（纯靠固定图 + 提示词出图），漏判会导致点确认后毫无反应
     if (!inputImages.length && !fixedImages.length && !variableImages.length) return
-    // 每张卡最多 MAX_INPUT_IMAGES 张参考图（只影响反推分组），超出的自动多分卡
+    // 参考图只用于提取策略、不进生图接口，按用户选的卡数均分，不限张数
     const referenceGroups = inputImages.length
       ? splitReferenceGroups(inputImages, options.groupCount)
       : [[]]

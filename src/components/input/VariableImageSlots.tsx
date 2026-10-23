@@ -165,8 +165,9 @@ export default function VariableImageSlots({ referenceLimit, requestLimit }: Pro
     const accent = ACCENT[config.accent]!
     const limit = slotLimit(config.key)
     const isOver = dragOverSlot === config.key
-    const total = config.key === 'reference'
-      ? `${images.length} / ${referenceLimit}`
+    // 参考图不限张数：显示「已选 N 张」而不是「N / Infinity」
+    const total = limit === Number.POSITIVE_INFINITY
+      ? `${images.length} 张`
       : `${images.length} / ${limit}`
 
     return (

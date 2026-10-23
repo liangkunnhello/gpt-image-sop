@@ -19,10 +19,11 @@ describe('参考图数量上限', () => {
     expect(resolveInputImageLimit({ ...base, n: 100 })).toBe(Number.POSITIVE_INFINITY)
   })
 
-  it('SOP / 变量模式放宽到 60 张（参考图不进生图接口）', () => {
-    expect(MAX_SOP_INPUT_IMAGES).toBeGreaterThan(MAX_INPUT_IMAGES)
-    expect(resolveInputImageLimit({ ...base, sopMode: true, plainImageMode: 'batch' })).toBe(MAX_SOP_INPUT_IMAGES)
-    expect(resolveInputImageLimit({ ...base, variableMode: true, n: 8 })).toBe(MAX_SOP_INPUT_IMAGES)
+  it('SOP / 变量模式不限张数（参考图不进生图接口）', () => {
+    expect(MAX_SOP_INPUT_IMAGES).toBe(Number.POSITIVE_INFINITY)
+    expect(resolveInputImageLimit({ ...base, sopMode: true, plainImageMode: 'batch' })).toBe(Number.POSITIVE_INFINITY)
+    expect(resolveInputImageLimit({ ...base, sopMode: true, n: 1 })).toBe(Number.POSITIVE_INFINITY)
+    expect(resolveInputImageLimit({ ...base, variableMode: true, n: 8 })).toBe(Number.POSITIVE_INFINITY)
   })
 
   it('数量还没填时按 1 处理，不会误放开', () => {

@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useSopStore } from '../lib/sopStore'
 import { splitReferenceGroups } from '../lib/sopPipeline'
-import { MAX_INPUT_IMAGES } from '../types'
 import { collectAvoidZones } from '../lib/postReserve'
 import { BUILTIN_VARIABLE_PROMPT } from '../lib/variablePipeline'
 import { resolvePickedPreset } from './SopPresetPicker'
@@ -94,7 +93,7 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
         ? imageCount
         : Math.max(1, Math.min(Number(customCount) || 1, imageCount))
 
-  // 每张卡最多 MAX_INPUT_IMAGES 张图，超出自动多分卡
+  // 参考图只用于反推、不进生图接口，分组只按用户选的卡数均分，不再自动多分卡
   const referenceGroups = imageCount
     ? splitReferenceGroups(Array.from({ length: imageCount }, (_, i) => i + 1), groupCount)
     : [[]]
@@ -233,7 +232,6 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
               {imageCount
                 ? `共 ${actualCardCount} 张卡，参考图分配：${preview}`
                 : '没有参考图：这一批只按固定图与变量图出图，策略仍按提示词与卖点提取'}
-              {actualCardCount > groupCount && `（每张卡最多 ${MAX_INPUT_IMAGES} 张，多的已自动分卡）`}
             </div>
           </div>
 

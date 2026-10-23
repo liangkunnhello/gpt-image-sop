@@ -23,11 +23,12 @@ export const DEFAULT_AGENT_MAX_TOOL_ROUNDS = 15
 /** 接口允许的参考图数量上限（普通模式融图会把图塞进同一个请求） */
 export const MAX_INPUT_IMAGES = 16
 /**
- * SOP / 变量模式的参考图上限。
- * 这两种模式的图只用来反推 SOP / 提取变量，不进生图接口，所以不受 16 限制；
- * 但一次反推请求塞太多图会撑爆请求体，分组时仍按 MAX_INPUT_IMAGES 切。
+ * SOP / 变量模式的参考图上限：不限。
+ *
+ * 这两种模式的图只用来反推 SOP / 提取变量，不进生图接口，所以不受 MAX_INPUT_IMAGES 约束。
+ * 拖入阶段不再有任何数量上限，反推时也不再按 16 张自动分卡（见 splitReferenceGroups）。
  */
-export const MAX_SOP_INPUT_IMAGES = 60
+export const MAX_SOP_INPUT_IMAGES = Number.POSITIVE_INFINITY
 
 export type CustomProviderRequestMethod = 'GET' | 'POST'
 export type CustomProviderContentType = 'json' | 'multipart'

@@ -16,6 +16,9 @@ import VariableImageSlots from './input/VariableImageSlots'
 
 const img = (id: string) => ({ id, dataUrl: `data:image/png;base64,${id}` })
 
+/** 参考图不限张数，用 Infinity 表示；固定图 / 变量图仍受请求上限约束 */
+const UNLIMITED = Number.POSITIVE_INFINITY
+
 let root: ReturnType<typeof createRoot> | null = null
 
 function reset() {
@@ -42,7 +45,7 @@ function render(props: { referenceLimit?: number; requestLimit?: number } = {}) 
   act(() => {
     root!.render(
       <VariableImageSlots
-        referenceLimit={props.referenceLimit ?? 60}
+        referenceLimit={props.referenceLimit ?? UNLIMITED}
         requestLimit={props.requestLimit ?? 16}
       />,
     )
@@ -64,14 +67,16 @@ describe('变量模式三分区图片入口', () => {
     expect(slot('变量图')?.textContent).toContain('轮换取一张')
   })
 
-  it('三个池各自显示自己的张数与上限', () => {
+  it('三个池各自显示自己的张数：参考图不限、固定图与变量图共用请求上限', () => {
     useStore.setState({
       inputImages: [img('r1'), img('r2')],
       fixedImages: [img('f1')],
       variableImages: [img('v1'), img('v2'), img('v3')],
     })
-    const { slot } = render({ referenceLimit: 60, requestLimit: 16 })
-    expect(slot('参考图')?.textContent).toContain('2 / 60')
+    const { slot } = render({ referenceLimit: UNLIMITED, requestLimit: 16 })
+    // 不限张数时只显示「已选 N 张」，不显示「N / Infinity」
+    expect(slot('参考图')?.textContent).toContain('2 张')
+    expect(slot('参考图')?.textContent).not.toContain('Infinity')
     // 固定图 / 变量图共用一个请求上限，显示的是「还能再加几张」
     expect(slot('固定图')?.textContent).toContain('1 / 13')
     expect(slot('变量图')?.textContent).toContain('3 / 15')

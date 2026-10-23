@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useSopStore } from '../lib/sopStore'
 import { splitReferenceGroups } from '../lib/sopPipeline'
-import { MAX_INPUT_IMAGES } from '../types'
 import { collectAvoidZones, pickAvoidTemplate } from '../lib/postReserve'
 import { resolveSystemPrompt } from './SopSystemPromptPicker'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
@@ -89,7 +88,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
         ? imageCount
         : Math.max(1, Math.min(Number(customCount) || 1, imageCount))
 
-  // 每张卡最多 MAX_INPUT_IMAGES 张图，超出会自动多分卡，预览按实际分组算
+  // 参考图只用于反推、不进生图接口，分组只按用户选的卡数均分，不再自动多分卡
   const referenceGroups = splitReferenceGroups(
     Array.from({ length: imageCount }, (_, i) => i + 1),
     groupCount,
@@ -212,7 +211,6 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               </div>
               <div className="mt-1.5 text-[11px] text-gray-400">
                 共 {actualCardCount} 张卡，参考图分配：{preview || '—'}
-                {actualCardCount > groupCount && `（每张卡最多 ${MAX_INPUT_IMAGES} 张，多的已自动分卡）`}
               </div>
             </div>
           ) : (

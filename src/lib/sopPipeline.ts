@@ -1,5 +1,4 @@
 import type { ApiProfile } from '../types'
-import { MAX_INPUT_IMAGES } from '../types'
 import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, updateTaskInStore, useStore } from '../store'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
@@ -199,17 +198,14 @@ function sopFormatLines(sections: string[]): string[] {
 }
 
 /**
- * 参考图分组：先按用户选的卡数均分，再把每张卡里超过 MAX_INPUT_IMAGES 的部分继续切开。
- * 一次反推请求塞不下几十张图，所以选「1 张卡」但拖了 40 张时，实际会变成 3 张卡。
+ * 参考图分组：只按用户选的卡数均分，不再因为超过 16 张而自动多分卡。
+ *
+ * 参考图只用于反推 SOP / 提取变量，不进生图接口，所以不存在「一个请求塞不下」的硬限制。
+ * 拖了 40 张又选了「1 张卡」，就是这 40 张一起送去反推，而不是被悄悄切成 3 张卡。
+ * 想拆成多张卡请在上层直接选卡数（perImage / 自定义）。
  */
 export function splitReferenceGroups<T>(items: T[], groups: number): T[][] {
-  return splitEven(items, groups).flatMap((group) => {
-    const chunks: T[][] = []
-    for (let i = 0; i < group.length; i += MAX_INPUT_IMAGES) {
-      chunks.push(group.slice(i, i + MAX_INPUT_IMAGES))
-    }
-    return chunks.length ? chunks : [group]
-  })
+  return splitEven(items, groups)
 }
 
 /** 反推 SOP 的系统提示词；单独导出便于测试哪些规则被写进去了 */

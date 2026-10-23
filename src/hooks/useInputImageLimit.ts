@@ -18,11 +18,10 @@ export interface InputImageLimitOptions {
  * 超过 16 张接口直接报错。批量模式每请求只带 1 张、融图数量大于 1 会把变量图分组，
  * 拖入阶段都不该被卡住。
  *
- * SOP / 变量模式按「一组图一张卡」切分，输入阶段放宽到 MAX_SOP_INPUT_IMAGES，
- * 真正反推时每组仍不超过 MAX_INPUT_IMAGES（见 splitReferenceGroups）。
+ * SOP / 变量模式的图不进生图接口，只用于反推，所以完全不限张数。
  */
 export function resolveInputImageLimit({ sopMode, variableMode, plainImageMode, n }: InputImageLimitOptions): number {
-  // SOP / 变量模式的图不进生图接口，只用于反推，放宽到 60；分组时每组再按 16 切
+  // SOP / 变量模式的图不进生图接口，只用于反推，不设上限
   if (sopMode || variableMode) return MAX_SOP_INPUT_IMAGES
   if (plainImageMode === 'batch') return Number.POSITIVE_INFINITY
   if ((n ?? 1) > 1) return Number.POSITIVE_INFINITY
