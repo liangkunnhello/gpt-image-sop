@@ -11,6 +11,7 @@ import { taskMatchesChannel } from '../lib/channel'
 import { isTaskUnread } from '../lib/unread'
 import type { PostTemplateScope } from '../lib/applyPostTemplate'
 import PostTemplateModal from './PostTemplateModal'
+import PostTemplateImportModal from './PostTemplateImportModal'
 import MoveNodeModal from './MoveNodeModal'
 import DeliveryDirModal from './DeliveryDirModal'
 
@@ -60,6 +61,8 @@ export default function SopDirectionTree() {
   const [moveTarget, setMoveTarget] = useState<SopDirectionNode | null>(null)
   /** 配置交付地址的目标节点：三级都可配 */
   const [deliveryTarget, setDeliveryTarget] = useState<SopDirectionNode | null>(null)
+  /** 导入后处理模板的目标节点：产品 / 方向两级可导入 */
+  const [importTarget, setImportTarget] = useState<SopDirectionNode | null>(null)
   const deliveryDirs = useSopStore((s) => s.deliveryDirs)
 
   // 预览底图由弹窗里自己选（按比例存、默认底色），这里只负责打开。
@@ -337,11 +340,19 @@ export default function SopDirectionTree() {
         label: '后处理模板',
         onSelect: () => { openPostTemplate(node, 'product') },
       })
+      items.push({
+        label: '导入其他模板',
+        onSelect: () => { setImportTarget(node) },
+      })
     } else if (kind === 'direction') {
       // 方向专属模板：配了之后这个方向就不再套产品模板
       items.push({
         label: '方向专属模板',
         onSelect: () => { openPostTemplate(node, 'direction') },
+      })
+      items.push({
+        label: '导入其他模板',
+        onSelect: () => { setImportTarget(node) },
       })
     }
     // 三级都可配交付地址：自己配了只用专属的，没配才向上级复用
@@ -813,6 +824,15 @@ export default function SopDirectionTree() {
           ownerName={postTarget.name}
           scope={postTarget.scope}
           onClose={() => setPostTarget(null)}
+        />,
+        document.body,
+      )}
+
+      {importTarget && createPortal(
+        <PostTemplateImportModal
+          ownerId={importTarget.id}
+          ownerName={importTarget.name}
+          onClose={() => setImportTarget(null)}
         />,
         document.body,
       )}
