@@ -21,7 +21,10 @@ export interface VariableRunOptions {
   fillsPerCard: number
   ignoreCompliance: boolean
   avoidCta: boolean
-  /** 直出：不调模型，直接把变量提示词解析成「骨架 + 可变项」 */
+  /**
+   * 直出：不调模型，直接把变量提示词解析成「骨架 + 可变项」。
+   * 不再让用户勾，由「有没有参考图」自动决定：没参考图就没法提取。
+   */
   skipExtract: boolean
 }
 
@@ -58,8 +61,6 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
   const postTemplates = useSopStore((s) => s.postTemplates)
   const variablesPerCard = useSopStore((s) => s.variablesPerCard)
   const setVariablesPerCard = useSopStore((s) => s.setVariablesPerCard)
-  const skipExtract = useSopStore((s) => s.variableSkipExtract)
-  const setSkipExtract = useSopStore((s) => s.setVariableSkipExtract)
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
 
   // 产品下拉按层级判断，不信可能写错的 kind：只有第三层及更深的才算方向
@@ -120,11 +121,18 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
   // 选了产品就必须落到具体方向，避免「看着选了产品其实没归到任何方向」
   const hasSourceImages = imageCount > 0 || fixedCount > 0 || variableCount > 0
   const isBuiltin = selectedPrompt?.id === BUILTIN_VARIABLE_PROMPT.id
+  /**
+   * 提取策略必须看参考图，所以「有没有参考图」就是唯一的通道判定：
+   * 有参考图 → 调模型提取（变量提示词当提取指令）；没参考图 → 直接把变量提示词当生图提示词。
+   * 这样用户不用记开关：拖了图就是反推，只填提示词 + 变量图就是直出。
+   */
+  const willExtract = imageCount > 0
+  const skipExtract = !willExtract
   // 直出模式必须有一份自己写的变量提示词：内置那份是「让模型去提取」的指令，
   // 拿来当生图提示词发出去只会得到一堆关于「如何提炼策略」的文字
   const canRun = (!productId || Boolean(currentDirectionId))
     && hasSourceImages
-    && (!skipExtract || !isBuiltin)
+    && (willExtract || !isBuiltin)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-6" onClick={onClose}>
@@ -204,25 +212,32 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
             <div className="pt-0.5 text-[11px] text-gray-400">以上三项在输入框上方切换</div>
           </div>
 
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-2 dark:border-violet-500/30 dark:bg-violet-500/[0.08]">
-            <input
-              type="checkbox"
-              checked={skipExtract}
-              onChange={(e) => setSkipExtract(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-violet-500"
-            />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">直接用变量提示词，不提取策略</span>
-              <span className="block text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
-                省掉模型分析那一步：变量提示词里的提示词正文和「可变项」原样拿来填词，
-                仍然按最远点采样挑差异最大的组合。没有 {'{{'}变量{'}}'} 时按设置条数复制，差异全来自变量图。
+          {/* 通道不再让用户勾：提取策略必须有参考图，所以按「有没有参考图」自动决定 */}
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] leading-relaxed dark:border-white/10 dark:bg-white/[0.04]">
+            <div className="flex items-center gap-2">
+              <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                willExtract
+                  ? 'bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300'
+                  : 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
+              }`}>
+                {willExtract ? '提取策略' : '直接出图'}
               </span>
-            </span>
-          </label>
-          {skipExtract && isBuiltin && (
+              <span className="min-w-0 text-gray-600 dark:text-gray-300">
+                {willExtract
+                  ? `参考图 ${imageCount} 张 → 先调模型提取策略`
+                  : '没有参考图 → 不调模型，直接用变量提示词'}
+              </span>
+            </div>
+            <div className="mt-1 text-gray-400 dark:text-gray-500">
+              {willExtract
+                ? '变量提示词这次当「提取指令」用：模型看完参考图产出骨架与可变项，再按最远点采样填词。想直接拿自己写的提示词生图，把参考图去掉。'
+                : `变量提示词里的提示词正文与「可变项」原样拿来填词，按最远点采样挑差异最大的组合；没有 {'{{'}变量{'}}'} 时按设置条数复制，差异全来自变量图。`}
+            </div>
+          </div>
+          {!willExtract && isBuiltin && (
             <p className="text-[11px] leading-relaxed text-red-500">
-              当前选的是「内置提取策略」，它是给模型看的指令，不能直接当提示词用。
-              先在输入框上方选一份自己写的变量提示词。
+              提取策略需要参考图，而现在没有参考图。拖入参考图反推，
+              或先在输入框上方选一份自己写的变量提示词（骨架 + 可变项）。
             </p>
           )}
 
@@ -262,9 +277,7 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
             <div className="mt-1.5 text-[11px] text-gray-400">
               {imageCount
                 ? `共 ${actualCardCount} 张卡，参考图分配：${preview}`
-                : skipExtract
-                  ? '没有参考图：直接用你写的变量提示词，不再调模型提取'
-                  : '没有参考图：这一批只按固定图与变量图出图，策略仍按提示词与卖点提取'}
+                : '没有参考图：直接用你写的变量提示词出图，固定图与变量图按条分配'}
             </div>
           </div>
 

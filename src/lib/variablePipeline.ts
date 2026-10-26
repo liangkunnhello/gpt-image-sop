@@ -565,7 +565,8 @@ export interface VariableJobRequest {
   /**
    * 直出模式：不调模型提取策略，直接把 variablePromptText 当「提示词 + 可变项」解析。
    *
-   * 用户已经写好骨架和变量选项时用它，省掉一次模型往返，也不会被模型改写措辞。
+   * 不再由用户勾选，由「有没有参考图」自动决定：提取策略必须看参考图，
+   * 所以没有参考图时调用方直接置 true。省掉一次模型往返，也不会被模型改写措辞。
    * 解析出来的策略照样走最远点采样填词，变量图照样逐条轮换。
    */
   skipExtract?: boolean
@@ -632,7 +633,7 @@ async function runJob(job: VariableJobRequest) {
 
   try {
     // 直出模式不调模型：用户已经把「提示词 + 可变项」写好了，
-    // 解析出来直接进采样；点错模式留空正文时宁可报错，也不要偷偷去反推
+    // 解析出来直接进采样；正文为空时宁可报错，也不要偷偷去反推
     let strategies: VariableStrategy[]
     if (job.skipExtract) {
       const parsed = parseStrategyText(job.variablePromptText)

@@ -665,7 +665,7 @@ export default function InputBar() {
       // 图生图：固定图每条都带、变量图逐条轮换；参考图不进生图接口
       fixedImages,
       variableImages,
-      // 直出：不调模型提取策略，直接解析 variablePromptText
+      // 参考图为空 = 直出：不调模型提取策略，直接把变量提示词解析成骨架 + 可变项
       skipExtract: options.skipExtract,
     })))
   }, [inputImages, fixedImages, variableImages])
