@@ -5,9 +5,11 @@ import {
   SIZE_LIMIT_MAX_QUALITY,
   SIZE_LIMIT_MIN_QUALITY,
   dataUrlByteSize,
+  dataUrlFormat,
   findQualityWithinBytes,
   limitDataUrlSize,
   parseSizeLimitKb,
+  resolveSizeLimitPlan,
   shouldLimitOutputSize,
 } from './outputFileSize'
 
@@ -51,6 +53,47 @@ describe('shouldLimitOutputSize', () => {
 
   it('透明背景的 WebP 也参与限制：重编码保留 alpha，压完再存', () => {
     expect(shouldLimitOutputSize({ ...base, output_format: 'webp' })).toBe(true)
+  })
+})
+
+describe('resolveSizeLimitPlan', () => {
+  const base = { ...DEFAULT_PARAMS, output_format: 'jpeg' as const, max_file_kb: 500 }
+
+  it('模板配了上限就优先用模板的，格式跟输出格式走', () => {
+    expect(resolveSizeLimitPlan(base, 300)).toEqual({ bytes: 300 * 1024, format: 'jpeg', fromTemplate: true })
+    expect(resolveSizeLimitPlan({ ...base, output_format: 'webp' }, 300)).toEqual({
+      bytes: 300 * 1024,
+      format: 'webp',
+      fromTemplate: true,
+    })
+  })
+
+  it('模板配了上限时 PNG 也压：转 WebP，不是静默放过', () => {
+    const plan = resolveSizeLimitPlan({ ...base, output_format: 'png', max_file_kb: null }, 200)
+    expect(plan).toEqual({ bytes: 200 * 1024, format: 'webp', fromTemplate: true })
+  })
+
+  it('模板留空时回落到输入区的全局开关', () => {
+    expect(resolveSizeLimitPlan(base, null)).toEqual({ bytes: 500 * 1024, format: 'jpeg', fromTemplate: false })
+    expect(resolveSizeLimitPlan({ ...base, output_format: 'webp' }, undefined)).toEqual({
+      bytes: 500 * 1024,
+      format: 'webp',
+      fromTemplate: false,
+    })
+  })
+
+  it('两处都没配才不限制', () => {
+    expect(resolveSizeLimitPlan({ ...base, output_format: 'png', max_file_kb: null }, null)).toBeNull()
+    expect(resolveSizeLimitPlan({ ...base, max_file_kb: 0 }, 0)).toBeNull()
+  })
+})
+
+describe('dataUrlFormat', () => {
+  it('认出实际编码格式，用于成品文件后缀', () => {
+    expect(dataUrlFormat('data:image/png;base64,AA')).toBe('png')
+    expect(dataUrlFormat('data:image/jpeg;base64,AA')).toBe('jpeg')
+    expect(dataUrlFormat('data:image/webp;base64,AA')).toBe('webp')
+    expect(dataUrlFormat('blob:http://localhost/abc')).toBeNull()
   })
 })
 

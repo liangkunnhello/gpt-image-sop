@@ -86,8 +86,8 @@ import { parsePixelSize, resizeDataUrlToSize } from './lib/imageResize'
 import { applyPostTemplate, productIdForDirection, resolvePostTemplates } from './lib/applyPostTemplate'
 import { buildAvoidHintForTask, withAvoidHint } from './lib/postReserve'
 import { imageSizeFromDataUrl } from './lib/imageDimensions'
-import { pickTemplateForImage } from './lib/postTemplate'
-import { dataUrlByteSize, limitDataUrlSize, shouldLimitOutputSize } from './lib/outputFileSize'
+import { pickTemplateForImage, type PostTemplate } from './lib/postTemplate'
+import { dataUrlByteSize, dataUrlFormat, limitDataUrlSize, resolveSizeLimitPlan } from './lib/outputFileSize'
 import { finishedFileName, finishedFolderName, writeFinishedImage } from './lib/postFinished'
 import { deliverCardGroup, deliverTaskCard, resolveCardDeliveryLocation, type DeliverResult } from './lib/deliver'
 import { openDirectoryPath } from './lib/deliveryDirPicker'
@@ -2832,6 +2832,8 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
 
   let finalImages = generatedImages
   const appliedIndexes: number[] = []
+  // 每张图实际套上的模板：体积上限挂在模板上，压体积时要按这张图自己的模板取
+  const appliedTemplates: Array<PostTemplate | null> = generatedImages.map(() => null)
   if (postProcessOn) {
     finalImages = await Promise.all(generatedImages.map(async (url, index) => {
       const size = imageSizeFromDataUrl(url)
@@ -2840,6 +2842,7 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
       try {
         const output = await applyPostTemplate(url, template)
         appliedIndexes.push(index)
+        appliedTemplates[index] = template
         return output
       } catch (err) {
         console.warn('后处理模板应用失败，已保留原图', err)
@@ -2848,12 +2851,12 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
     }))
   }
 
-  // 限制文件大小：压的是最终要存的那一份，所以放在透明背景处理之后
-  // PNG 无损、压不下去，这种情况 shouldLimitOutputSize 会直接返回 false
-  const limitBytes = shouldLimitOutputSize(task.params) ? Math.round((task.params.max_file_kb ?? 0) * 1024) : 0
-  const limitFormat: 'jpeg' | 'webp' = task.params.output_format === 'webp' ? 'webp' : 'jpeg'
+  // 限制文件大小：压的是最终要存的那一份，所以放在透明背景处理之后。
+  // 上限优先取这张图套上的模板（按渠道 + 尺寸配的），模板没配才用全局开关；
+  // 模板设了上限时 PNG 也要压 —— 会转成 WebP，所以文件名按实际编码写
   let overflowCount = 0
   let largestBytes = 0
+  let tightestLimitBytes = 0
   // 一个任务卡一个文件夹，文件名按序号 + 分辨率
   const finishedFolder = appliedIndexes.length ? finishedFolderFor(task) : ''
 
@@ -2890,13 +2893,16 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
         }
       }
 
-      if (limitBytes > 0) {
+      const sizeLimit = resolveSizeLimitPlan(task.params, appliedTemplates[index]?.maxFileKb)
+      if (sizeLimit) {
         try {
-          const limited = await limitDataUrlSize(outputDataUrl, limitFormat, limitBytes)
+          const limited = await limitDataUrlSize(outputDataUrl, sizeLimit.format, sizeLimit.bytes)
           outputDataUrl = limited.dataUrl
           if (!limited.fits) {
             overflowCount += 1
             largestBytes = Math.max(largestBytes, dataUrlByteSize(outputDataUrl))
+            // 各张图的上限可能不同（模板按尺寸配），报最严的那个更接近真实约束
+            tightestLimitBytes = tightestLimitBytes ? Math.min(tightestLimitBytes, sizeLimit.bytes) : sizeLimit.bytes
           }
         } catch (err) {
           console.warn('限制文件大小失败，已保留原图', err)
@@ -2914,7 +2920,8 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
       if (appliedIndexes.includes(index)) {
         void writeFinishedImage(
           finishedFolder,
-          finishedFileName(index, task.params.size, task.params.output_format),
+          // 模板设了体积上限时成品会被转成 WebP，后缀要跟实际编码一致
+          finishedFileName(index, task.params.size, dataUrlFormat(outputDataUrl) ?? task.params.output_format),
           outputDataUrl,
         )
       }
@@ -2928,7 +2935,7 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
     // 上限是硬要求，达不到要让用户知道，不能静默放过
     if (overflowCount > 0) {
       useStore.getState().showToast(
-        `有 ${overflowCount} 张图压到最低画质仍有 ${Math.round(largestBytes / 1024)}KB，超过 ${Math.round(limitBytes / 1024)}KB 上限`,
+        `有 ${overflowCount} 张图压到最低画质仍有 ${Math.round(largestBytes / 1024)}KB，超过 ${Math.round(tightestLimitBytes / 1024)}KB 上限`,
         'info',
       )
     }
@@ -3002,8 +3009,6 @@ export async function reapplyPostTemplate(taskId: string): Promise<void> {
 
   const folder = finishedFolderFor(task)
   const oldIds = [...task.outputImages, ...(task.transparentOriginalImages ?? [])]
-  const limitBytes = shouldLimitOutputSize(task.params) ? Math.round((task.params.max_file_kb ?? 0) * 1024) : 0
-  const limitFormat: 'jpeg' | 'webp' = task.params.output_format === 'webp' ? 'webp' : 'jpeg'
   const nextIds: string[] = []
   let applied = 0
 
@@ -3011,17 +3016,21 @@ export async function reapplyPostTemplate(taskId: string): Promise<void> {
     let dataUrl = sourceUrls[index]
     const size = imageSizeFromDataUrl(dataUrl)
     const template = size ? pickTemplateForImage(templates, size.width, size.height, task.channel) : null
+    let appliedTemplate: PostTemplate | null = null
     if (template) {
       try {
         dataUrl = await applyPostTemplate(dataUrl, template)
+        appliedTemplate = template
         applied += 1
       } catch (err) {
         console.warn('再次后处理：套模板失败，保留原图', err)
       }
     }
-    if (limitBytes > 0) {
+    // 体积上限跟模板走：模板配了就用模板的，没配才用输入区的全局值
+    const sizeLimit = resolveSizeLimitPlan(task.params, appliedTemplate?.maxFileKb)
+    if (sizeLimit) {
       try {
-        dataUrl = (await limitDataUrlSize(dataUrl, limitFormat, limitBytes)).dataUrl
+        dataUrl = (await limitDataUrlSize(dataUrl, sizeLimit.format, sizeLimit.bytes)).dataUrl
       } catch (err) {
         console.warn('再次后处理：限制体积失败，保留原图', err)
       }
@@ -3029,7 +3038,11 @@ export async function reapplyPostTemplate(taskId: string): Promise<void> {
     const stored = await storeImageWithSize(dataUrl, 'generated')
     cacheImage(stored.id, dataUrl)
     nextIds.push(stored.id)
-    void writeFinishedImage(folder, finishedFileName(index, task.params.size, task.params.output_format), dataUrl)
+    void writeFinishedImage(
+      folder,
+      finishedFileName(index, task.params.size, dataUrlFormat(dataUrl) ?? task.params.output_format),
+      dataUrl,
+    )
   }
 
   updateTaskInStore(taskId, { outputImages: nextIds })

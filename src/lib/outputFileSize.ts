@@ -42,6 +42,57 @@ export function parseSizeLimitKb(draft: string): number | null {
   return rounded >= 1 ? rounded : null
 }
 
+export type OutputImageFormat = 'png' | 'jpeg' | 'webp'
+
+/** data URL 实际编码格式；认不出来（blob:、远程 URL）返回 null */
+export function dataUrlFormat(dataUrl: string): OutputImageFormat | null {
+  const head = dataUrl.slice(0, 32).toLowerCase()
+  if (head.startsWith('data:image/png')) return 'png'
+  if (head.startsWith('data:image/jpeg') || head.startsWith('data:image/jpg')) return 'jpeg'
+  if (head.startsWith('data:image/webp')) return 'webp'
+  return null
+}
+
+export interface SizeLimitPlan {
+  /** 目标字节数 */
+  bytes: number
+  /** 重编码用的格式 */
+  format: 'jpeg' | 'webp'
+  /** 上限来自后处理模板：此时 PNG 也要压，转成 WebP */
+  fromTemplate: boolean
+}
+
+/**
+ * 这张图要不要压、压到多少、用哪种编码。
+ *
+ * 优先级：后处理模板上的 maxFileKb > 输入区「更多 → 限制大小」。
+ * 模板是按「渠道 + 尺寸」配的，比全局开关具体得多 —— 同一个全局 KB 值不可能同时满足
+ * 竖版大图和方图小图。模板没配才回落到全局值。
+ */
+export function resolveSizeLimitPlan(
+  params: TaskParams,
+  templateMaxKb?: number | null,
+): SizeLimitPlan | null {
+  const templateKb = typeof templateMaxKb === 'number' && Number.isFinite(templateMaxKb) && templateMaxKb > 0
+    ? Math.round(templateMaxKb)
+    : 0
+  if (templateKb > 0) {
+    // 模板要求的是「一定不超这个体积」，PNG 无损压不下去，只能转有损编码：
+    // 用户明确选了 JPEG 就继续 JPEG，其余（含 PNG、WebP）走 WebP 保住透明通道
+    return {
+      bytes: templateKb * 1024,
+      format: params.output_format === 'jpeg' ? 'jpeg' : 'webp',
+      fromTemplate: true,
+    }
+  }
+  if (!shouldLimitOutputSize(params)) return null
+  return {
+    bytes: Math.round((params.max_file_kb ?? 0) * 1024),
+    format: params.output_format === 'webp' ? 'webp' : 'jpeg',
+    fromTemplate: false,
+  }
+}
+
 /**
  * 二分画质找一个能落进 maxBytes 的最高画质。
  * encode 由调用方注入（真机是 canvas，测试是假的），返回 null 表示本来就没超、不用重压。

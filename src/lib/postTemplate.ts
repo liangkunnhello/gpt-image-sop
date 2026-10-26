@@ -49,6 +49,14 @@ export interface PostTemplate {
   isDefault: boolean
   /** 生成提示词时自动写入「预留区避让」说明，默认开启 */
   avoidOverlay?: boolean
+  /**
+   * 这套模板出图后的体积上限（KB）。
+   *
+   * 各家投放平台对素材体积的要求不一样，而且要求是跟「尺寸 + 渠道」绑的，
+   * 挂在模板上比放在输入区那个全局开关准。留空 / null 表示不限制，此时才回落到
+   * 输入区「更多 → 限制大小」的全局值。
+   */
+  maxFileKb?: number | null
   elements: PostElement[]
 }
 
@@ -68,6 +76,7 @@ export function createPostTemplate(width: number, height: number, label: string)
       id: `post-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 5)}`,
     })),
     avoidOverlay: true,
+    maxFileKb: null,
   }
 }
 
@@ -178,6 +187,7 @@ export function defaultPostTemplate(): PostTemplate {
     enabled: false,
     isDefault: true,
     avoidOverlay: true,
+    maxFileKb: null,
     elements: [
       {
         ...newPostElement('text', 1),

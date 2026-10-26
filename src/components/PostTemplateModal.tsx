@@ -18,6 +18,7 @@ import {
   type PostTemplate,
 } from '../lib/postTemplate'
 import { useSopStore } from '../lib/sopStore'
+import { parseSizeLimitKb } from '../lib/outputFileSize'
 import { productIdForDirection, type PostTemplateScope } from '../lib/applyPostTemplate'
 
 /** 尺寸下限：太小既排不了版，后端也撑不住 */
@@ -389,6 +390,25 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
     (prev) => prev.map((item) => (item.id === active?.id ? { ...item, ...next } : item)),
     options,
   )
+
+  /**
+   * 体积上限的输入草稿：直接绑 maxFileKb 的数字会把「清空」当场变回上一个值，
+   * 最后一位数字永远删不掉。草稿随选中的模板同步，失焦时才写回。
+   */
+  const [sizeLimitDraft, setSizeLimitDraft] = useState(
+    () => (active?.maxFileKb == null ? '' : String(active.maxFileKb)),
+  )
+  useEffect(() => {
+    setSizeLimitDraft(active?.maxFileKb == null ? '' : String(active.maxFileKb))
+  }, [active?.id, active?.maxFileKb])
+
+  const commitSizeLimit = () => {
+    const kb = parseSizeLimitKb(sizeLimitDraft)
+    if ((kb ?? null) !== (active?.maxFileKb ?? null)) {
+      patchActive({ maxFileKb: kb }, { coalesceKey: 'template:maxFileKb' })
+    }
+    setSizeLimitDraft(kb == null ? '' : String(kb))
+  }
 
   const patchElement = (
     id: string,
@@ -1013,6 +1033,29 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                       <option key={item.value} value={item.value}>{item.label}</option>
                     ))}
                   </select>
+                </div>
+
+                {/*
+                  体积上限跟模板走：各家平台的要求是绑在「渠道 + 尺寸」上的，
+                  放在输入区的全局开关里做不到一尺寸一值。留空表示这套模板不额外限制。
+                */}
+                <div className="mb-2">
+                  <div className="mb-1 text-[10px] text-gray-400">限制文件大小（留空不限制）</div>
+                  <div className="flex items-center gap-1">
+                    <input
+                      value={sizeLimitDraft}
+                      onChange={(e) => setSizeLimitDraft(e.target.value.replace(/[^\d]/g, ''))}
+                      onBlur={commitSizeLimit}
+                      inputMode="numeric"
+                      placeholder="不限"
+                      className="min-w-0 flex-1 rounded border border-gray-200 px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                    />
+                    <span className="shrink-0 text-[10px] text-gray-400">KB</span>
+                  </div>
+                  <p className="mt-1 text-[10px] leading-relaxed text-gray-400">
+                    套这套模板出图后压到这个体积以内，比输入区「更多 → 限制大小」优先。
+                    PNG 无损压不下去，会转成 WebP；模板配了上限时 PNG 也会被压。
+                  </p>
                 </div>
 
                 <div className="mb-2 flex gap-1">
