@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { CHANNELS, NO_CHANNEL, channelLabel, taskMatchesChannel } from './channel'
+import { CHANNELS, NO_CHANNEL, channelForNewTask, channelLabel, taskMatchesChannel } from './channel'
 
 describe('渠道清单', () => {
   it('固定这 6 项，取值唯一', () => {
@@ -42,5 +42,24 @@ describe('taskMatchesChannel', () => {
     expect(taskMatchesChannel({}, NO_CHANNEL)).toBe(true)
     expect(taskMatchesChannel({ channel: undefined }, NO_CHANNEL)).toBe(true)
     expect(taskMatchesChannel({ channel: 'baidu' }, NO_CHANNEL)).toBe(false)
+  })
+})
+
+describe('channelForNewTask：建卡继承当前渠道', () => {
+  it('选中具体渠道时，新卡归到那个渠道', () => {
+    expect(channelForNewTask('gdt')).toBe('gdt')
+    expect(channelForNewTask('ai-original')).toBe('ai-original')
+  })
+
+  it('「全部」和「未指定」都不往新卡写渠道', () => {
+    expect(channelForNewTask(null)).toBeUndefined()
+    expect(channelForNewTask(undefined)).toBeUndefined()
+    expect(channelForNewTask('all')).toBeUndefined()
+    expect(channelForNewTask(NO_CHANNEL)).toBeUndefined()
+  })
+
+  it('继承后的卡能通过当前筛选，不会一发送就被藏起来', () => {
+    const inherited = channelForNewTask('toutiao')
+    expect(taskMatchesChannel({ channel: inherited }, 'toutiao')).toBe(true)
   })
 })

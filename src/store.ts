@@ -28,7 +28,7 @@ import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPre
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { collectSopLibrary, mergeSopLibrary, useSopStore } from './lib/sopStore'
 import { ALL_SCOPE, filterTasksByScope, scopeNodeIds, type DirectionScope } from './lib/directionScope'
-import { channelLabel, taskMatchesChannel } from './lib/channel'
+import { channelForNewTask, channelLabel, taskMatchesChannel } from './lib/channel'
 import { planPlainRequests, type PlainImageMode } from './lib/plainImagePlan'
 import { isTaskUnread } from './lib/unread'
 import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
@@ -2033,6 +2033,9 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       // 点「未归属」筛选时 activeFilterId 是 __unassigned__ 这种视图标记，
       // 写进任务会变成一个查不到节点的脏方向；点类目筛选也不该把图挂到分组容器上。
       sopDirectionId: useSopStore.getState().activeDirectionId || undefined,
+      // 渠道跟着当前筛选走：选着「广点通」发送，新卡就该归到广点通，
+      // 否则卡一生成就被当前筛选筛掉，看起来像没归属
+      channel: channelForNewTask(useStore.getState().channelFilter),
       // 恢复输入框用；同一批拆出的请求共用同一份快照
       inputSnapshot: snapshot,
       ...(meta ? {
@@ -3483,6 +3486,8 @@ async function executeAgentRound(
         finishedAt: null,
         elapsed: null,
         sourceMode: 'agent',
+        // 走同一套规则：当前选着哪个渠道，新卡就归到哪个渠道，别被筛选藏起来
+        channel: channelForNewTask(useStore.getState().channelFilter),
         agentConversationId: conversationId,
         agentRoundId: roundId,
         agentMessageId: assistantMessageId,
@@ -6081,6 +6086,8 @@ export async function submitSopTasks(input: {
       sopLibraryName: input.savedSopName,
       sopText: input.sopText,
       sopDirectionId: input.directionId || undefined,
+      // 渠道不选在弹窗里，统一继承输入区当前的渠道筛选（「全部 / 未指定」不写）
+      channel: channelForNewTask(useStore.getState().channelFilter),
       sopReferenceImageIds: input.referenceImageIds,
       variableMode: input.variable ? true : undefined,
       variablePromptName: input.variable?.promptName,
@@ -6150,6 +6157,8 @@ export function createSopPlaceholder(
     sopName: label,
     sopPromptIndex: 0,
     sopDirectionId: directionId || undefined,
+    // 占位卡也带上渠道，否则反推/写提示词这几分钟里，卡会被渠道筛选藏住
+    channel: channelForNewTask(useStore.getState().channelFilter),
     sopPlaceholder: true,
   }
   useStore.getState().setTasks([task, ...useStore.getState().tasks])

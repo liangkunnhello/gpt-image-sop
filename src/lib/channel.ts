@@ -38,3 +38,19 @@ export function taskMatchesChannel(task: { channel?: string }, filter: string | 
   if (filter === NO_CHANNEL) return !task.channel
   return task.channel === filter
 }
+
+/**
+ * 建卡时该继承的渠道。
+ *
+ * 与业务树同一个道理：点中哪个渠道，新卡就归到哪个渠道。
+ * 但「全部」和「未指定」不是具体渠道，它们表示「不限」/「还没归渠道」，
+ * 所以这两种情况一律不往新卡上写渠道 —— 否则在「未指定」视图下发送，
+ * 新卡会突然带上一个用户没选过的渠道。
+ *
+ * 反过来，选了具体渠道却没写进新卡，卡片会被当前筛选立刻藏起来，
+ * 看起来就像「发送了但没归属」，这也是这条继承存在的理由。
+ */
+export function channelForNewTask(filter: string | null | undefined): string | undefined {
+  if (!filter || filter === 'all' || filter === NO_CHANNEL) return undefined
+  return filter
+}
