@@ -116,6 +116,11 @@ interface SopState {
   promptsPerGroup: number
   /** 变量模式：每张卡最多产出几条提示词，实际条数受组合池容量限制 */
   variablesPerCard: number
+  /**
+   * 变量模式：跳过模型提取策略，直接把变量提示词当「提示词 + 可变项」解析。
+   * 打开后不调文本模型，写完提示词就直接进最远点采样与出图。
+   */
+  variableSkipExtract: boolean
   /** 生成提示词时自动避让后处理预留区（Logo / 警示语），默认开启 */
   avoidOverlay: boolean
   /**
@@ -152,6 +157,7 @@ interface SopState {
   setLibraryTab: (tab: SopLibraryTab | null) => void
   setPromptsPerGroup: (value: number) => void
   setVariablesPerCard: (value: number) => void
+  setVariableSkipExtract: (value: boolean) => void
   setPostTemplates: (ownerId: string, templates: PostTemplate[]) => void
   setSopMode: (value: boolean) => void
   setVariableMode: (value: boolean) => void
@@ -218,6 +224,7 @@ export const useSopStore = create<SopState>()(
       avoidCtaDesign: true,
       promptsPerGroup: 5,
       variablesPerCard: 5,
+      variableSkipExtract: false,
       avoidOverlay: true,
       postTemplates: {},
       postPreviewImages: {},
@@ -238,6 +245,7 @@ export const useSopStore = create<SopState>()(
       setVariableMode: (value) => set({ variableMode: value, sopMode: false }),
       setPromptsPerGroup: (value) => set({ promptsPerGroup: clampPromptCount(value) }),
       setVariablesPerCard: (value) => set({ variablesPerCard: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
+      setVariableSkipExtract: (value) => set({ variableSkipExtract: value }),
       setPostTemplates: (ownerId, templates) => set((state) => ({
         postTemplates: { ...state.postTemplates, [ownerId]: templates },
       })),
@@ -588,7 +596,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, savedSops: state.savedSops, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
+      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, savedSops: state.savedSops, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, variableSkipExtract: state.variableSkipExtract, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
     },
   ),
 )

@@ -67,7 +67,7 @@ describe('变量模式三分区图片入口', () => {
     expect(slot('变量图')?.textContent).toContain('轮换取一张')
   })
 
-  it('三个池各自显示自己的张数：参考图不限、固定图与变量图共用请求上限', () => {
+  it('三个池各自显示自己的张数：参考图与变量图不限，只有固定图受请求上限约束', () => {
     useStore.setState({
       inputImages: [img('r1'), img('r2')],
       fixedImages: [img('f1')],
@@ -77,9 +77,11 @@ describe('变量模式三分区图片入口', () => {
     // 不限张数时只显示「已选 N 张」，不显示「N / Infinity」
     expect(slot('参考图')?.textContent).toContain('2 张')
     expect(slot('参考图')?.textContent).not.toContain('Infinity')
-    // 固定图 / 变量图共用一个请求上限，显示的是「还能再加几张」
-    expect(slot('固定图')?.textContent).toContain('1 / 13')
-    expect(slot('变量图')?.textContent).toContain('3 / 15')
+    // 固定图每条都塞进同一个请求，受接口上限约束
+    expect(slot('固定图')?.textContent).toContain('1 / 16')
+    // 变量图每条只取一张，不占请求名额，所以不设上限
+    expect(slot('变量图')?.textContent).toContain('3 张')
+    expect(slot('变量图')?.textContent).not.toContain('Infinity')
   })
 
   it('清空只清自己那一个池，其他两个不动', () => {

@@ -70,7 +70,7 @@ const ACCENT: Record<string, { ring: string; text: string; chip: string; dashed:
 interface Props {
   /** 参考图上限（SOP / 变量模式下是 60） */
   referenceLimit: number
-  /** 单次请求最多能带几张图，固定图 + 变量图要受它约束 */
+  /** 单次请求最多能带几张图：只有「固定图」受它约束，变量图每条只取一张、不占名额 */
   requestLimit: number
 }
 
@@ -135,8 +135,11 @@ export default function VariableImageSlots({ referenceLimit, requestLimit }: Pro
 
   const slotLimit = (slot: Slot) => {
     if (slot === 'reference') return referenceLimit
-    // 固定图 + 变量图要一起塞进一个请求，所以两者共用一个上限
-    return Math.max(1, requestLimit - (slot === 'fixed' ? variable.images.length : fixed.images.length))
+    // 固定图每一条都要塞进同一个请求，所以受接口张数上限约束
+    if (slot === 'fixed') return requestLimit
+    // 变量图每条只取一张、不和固定图挤进同一个请求，池子大小与接口上限无关。
+    // 这里按 16 张卡它，会让「几百张场景图轮流用」这种用法直接做不了。
+    return Number.POSITIVE_INFINITY
   }
 
   const dropFiles = async (slot: Slot, files: FileList | File[] | null) => {

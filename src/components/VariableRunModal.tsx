@@ -20,6 +20,8 @@ export interface VariableRunOptions {
   fillsPerCard: number
   ignoreCompliance: boolean
   avoidCta: boolean
+  /** 直出：不调模型，直接把变量提示词解析成「骨架 + 可变项」 */
+  skipExtract: boolean
 }
 
 interface Props {
@@ -55,6 +57,8 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
   const postTemplates = useSopStore((s) => s.postTemplates)
   const variablesPerCard = useSopStore((s) => s.variablesPerCard)
   const setVariablesPerCard = useSopStore((s) => s.setVariablesPerCard)
+  const skipExtract = useSopStore((s) => s.variableSkipExtract)
+  const setSkipExtract = useSopStore((s) => s.setVariableSkipExtract)
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
 
   // 产品下拉按层级判断，不信可能写错的 kind：只有第三层及更深的才算方向
@@ -114,8 +118,12 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
   // 未归属（productId 为空）也能跑：不挂方向，变量提示词退回内置提取策略；
   // 选了产品就必须落到具体方向，避免「看着选了产品其实没归到任何方向」
   const hasSourceImages = imageCount > 0 || fixedCount > 0 || variableCount > 0
-  const canRun = (!productId || Boolean(currentDirectionId)) && hasSourceImages
   const isBuiltin = selectedPrompt?.id === BUILTIN_VARIABLE_PROMPT.id
+  // 直出模式必须有一份自己写的变量提示词：内置那份是「让模型去提取」的指令，
+  // 拿来当生图提示词发出去只会得到一堆关于「如何提炼策略」的文字
+  const canRun = (!productId || Boolean(currentDirectionId))
+    && hasSourceImages
+    && (!skipExtract || !isBuiltin)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-6" onClick={onClose}>
@@ -195,6 +203,28 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
             <div className="pt-0.5 text-[11px] text-gray-400">以上三项在输入框上方切换</div>
           </div>
 
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-2 dark:border-violet-500/30 dark:bg-violet-500/[0.08]">
+            <input
+              type="checkbox"
+              checked={skipExtract}
+              onChange={(e) => setSkipExtract(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 accent-violet-500"
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">直接用变量提示词，不提取策略</span>
+              <span className="block text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                省掉模型分析那一步：变量提示词里的提示词正文和「可变项」原样拿来填词，
+                仍然按最远点采样挑差异最大的组合。没有 {'{{'}变量{'}}'} 时按设置条数复制，差异全来自变量图。
+              </span>
+            </span>
+          </label>
+          {skipExtract && isBuiltin && (
+            <p className="text-[11px] leading-relaxed text-red-500">
+              当前选的是「内置提取策略」，它是给模型看的指令，不能直接当提示词用。
+              先在输入框上方选一份自己写的变量提示词。
+            </p>
+          )}
+
           <div>
             <div className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">分成几个任务卡</div>
             <div className="flex flex-wrap gap-2">
@@ -231,7 +261,9 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
             <div className="mt-1.5 text-[11px] text-gray-400">
               {imageCount
                 ? `共 ${actualCardCount} 张卡，参考图分配：${preview}`
-                : '没有参考图：这一批只按固定图与变量图出图，策略仍按提示词与卖点提取'}
+                : skipExtract
+                  ? '没有参考图：直接用你写的变量提示词，不再调模型提取'
+                  : '没有参考图：这一批只按固定图与变量图出图，策略仍按提示词与卖点提取'}
             </div>
           </div>
 
@@ -335,6 +367,7 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
               fillsPerCard: variablesPerCard,
               ignoreCompliance,
               avoidCta: avoidCtaDesign,
+              skipExtract,
             })}
             className="rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
           >

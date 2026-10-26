@@ -7,6 +7,7 @@ import {
   checkCopyInSkeleton,
   parseMarkdownStrategies,
   parseStrategies,
+  parseStrategyText,
   strategiesToText,
 } from './variablePipeline'
 
@@ -293,6 +294,104 @@ describe('strategiesToText', () => {
 
   it('空列表返回空串', () => {
     expect(strategiesToText([])).toBe('')
+  })
+})
+
+describe('parseStrategyText（直出：手写提示词 + 可变项）', () => {
+  it('解析出骨架与可变项，不再经过模型', () => {
+    const text = [
+      '## 1. 月夜保单',
+      '对应图1。',
+      '',
+      '一张{{场景}}里的{{主体}}，暖色台灯照亮桌面',
+      '',
+      '可变项：',
+      '- {{场景}}：客厅 / 卧室 / 户外',
+      '- {{主体}}：猫 / 狗',
+    ].join('\n')
+    const { strategies, missing } = parseStrategyText(text)
+    expect(missing).toEqual([])
+    expect(strategies).toHaveLength(1)
+    expect(strategies[0].name).toBe('月夜保单')
+    expect(strategies[0].evidence).toBe('图1')
+    expect(strategies[0].skeleton).toContain('{{场景}}')
+    expect(strategies[0].dimensions).toEqual([
+      { name: '场景', options: ['客厅', '卧室', '户外'] },
+      { name: '主体', options: ['猫', '狗'] },
+    ])
+  })
+
+  it('用 --- 分隔的多份策略各算一份', () => {
+    const text = [
+      '## 1. 甲',
+      '{{色调}}的画面',
+      '可变项：',
+      '- {{色调}}：冷 / 暖',
+      '',
+      '---',
+      '',
+      '## 2. 乙',
+      '{{构图}}特写',
+      '可变项：',
+      '- {{构图}}：俯拍 / 平视',
+    ].join('\n')
+    const { strategies } = parseStrategyText(text)
+    expect(strategies.map((item) => item.name)).toEqual(['甲', '乙'])
+    expect(strategies[1].dimensions[0].options).toEqual(['俯拍', '平视'])
+  })
+
+  it('变量写成裸名字（不带 {{}}）也能认', () => {
+    const text = [
+      '## 1. 裸写法',
+      '{{场景}}里的一只猫',
+      '可变项：',
+      '- 场景：客厅 / 阳台',
+    ].join('\n')
+    const { strategies, missing } = parseStrategyText(text)
+    expect(missing).toEqual([])
+    expect(strategies[0].dimensions[0]).toEqual({ name: '场景', options: ['客厅', '阳台'] })
+  })
+
+  it('没有可变项时整段就是一条固定提示词', () => {
+    const text = '一张海边日落的产品特写，暖调，浅景深'
+    const { strategies, missing } = parseStrategyText(text)
+    expect(missing).toEqual([])
+    expect(strategies).toHaveLength(1)
+    expect(strategies[0].skeleton).toBe(text)
+    expect(strategies[0].dimensions).toEqual([])
+  })
+
+  it('骨架里的变量没给选项时列进 missing，调用方据此报错', () => {
+    const text = [
+      '## 1. 漏选项',
+      '{{场景}}里的{{主体}}',
+      '可变项：',
+      '- {{场景}}：客厅 / 卧室',
+    ].join('\n')
+    const { missing } = parseStrategyText(text)
+    expect(missing).toEqual(['主体'])
+  })
+
+  it('和 strategiesToText 互为逆操作：写出去的文本能原样读回来', () => {
+    const original = [{
+      name: '负形融合',
+      evidence: '图1、图3',
+      skeleton: '图片以{{轮廓}}剪出{{主体}}',
+      dimensions: [
+        { name: '轮廓', options: ['羽翼', '齿'] },
+        { name: '主体', options: ['鲸', '鹿', '塔'] },
+      ],
+      value: '适合批量换轮廓',
+    }]
+    const parsed = parseStrategyText(strategiesToText(original))
+    expect(parsed.missing).toEqual([])
+    expect(parsed.strategies[0].name).toBe('负形融合')
+    expect(parsed.strategies[0].skeleton).toBe('图片以{{轮廓}}剪出{{主体}}')
+    expect(parsed.strategies[0].dimensions).toEqual(original[0].dimensions)
+  })
+
+  it('空文本解析出空结果，不抛错', () => {
+    expect(parseStrategyText('   ')).toEqual({ strategies: [], missing: [] })
   })
 })
 

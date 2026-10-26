@@ -405,6 +405,153 @@ export function strategiesToText(strategies: VariableStrategy[]): string {
   ].filter(Boolean).join('\n')).join('\n\n---\n\n')
 }
 
+/** 骨架里的占位符，允许 {{ 变量 }} 这种带空格的写法 */
+const PLACEHOLDER = /\{\{\s*([^{}]+?)\s*\}\}/g
+
+/** 骨架里出现过的变量名（按出现顺序去重） */
+export function placeholdersIn(text: string): string[] {
+  const out: string[] = []
+  for (const match of text.matchAll(PLACEHOLDER)) {
+    const name = match[1].trim()
+    if (name && !out.includes(name)) out.push(name)
+  }
+  return out
+}
+
+/** 一行可变项 → 一个维度；`- {{场景}}：客厅 / 卧室 / 户外`，也接受不写 {{}} 的写法 */
+function parseDimensionLine(line: string): VariableDimension | null {
+  const wrapped = line.match(/^[-*•]?\s*\{\{\s*([^{}]+?)\s*\}\}\s*[：:]\s*(.+)$/)
+  if (wrapped) {
+    const options = splitDimensionOptions(wrapped[2])
+    return options.length ? { name: wrapped[1].trim(), options } : null
+  }
+  const bare = line.match(/^[-*•]\s*([^{}：:]{1,20})\s*[：:]\s*(.+)$/)
+  if (bare) {
+    const options = splitDimensionOptions(bare[2])
+    return options.length ? { name: bare[1].trim(), options } : null
+  }
+  return null
+}
+
+/** 选项分隔：`/`、`／`、`|`；顿号不拆，选项本身可能带顿号 */
+function splitDimensionOptions(text: string): string[] {
+  return text.split(/[\/／|｜]/).map((item) => item.trim()).filter(Boolean)
+}
+
+/**
+ * 把用户手写的「提示词 + 可变项」拆成一块块策略。
+ *
+ * 切块规则：`---` 分隔线，或 `## 标题` 另起一块。用户照详情页里那份格式写就能直接用，
+ * 不必记住额外的语法。
+ */
+function splitStrategyBlocks(text: string): string[] {
+  const blocks: string[] = []
+  let current: string[] = []
+  const flush = () => {
+    const joined = current.join('\n').trim()
+    if (joined) blocks.push(joined)
+    current = []
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (/^-{3,}$/.test(trimmed)) {
+      flush()
+      continue
+    }
+    // 已有正文时遇到标题就另起一块，避免把「## 标题」当成正文混进骨架
+    if (/^#{1,3}\s+/.test(trimmed) && current.some((item) => item.trim())) flush()
+    current.push(line)
+  }
+  flush()
+  return blocks
+}
+
+/** 单块 → 一条策略：`可变项：` 之前是骨架，之后是变量与价值说明 */
+function parseStrategyBlock(block: string): VariableStrategy | null {
+  let name = ''
+  let evidence = ''
+  let sawDimensions = false
+  const head: string[] = []
+  const tail: string[] = []
+  const dimensions: VariableDimension[] = []
+
+  for (const raw of block.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line) {
+      if (!sawDimensions) head.push('')
+      continue
+    }
+    const title = line.match(/^#{1,3}\s+(?:\d+\s*[.、)）]\s*)?(.+)$/)
+    if (title && !name) {
+      name = title[1].trim()
+      continue
+    }
+    if (/^可变项\s*[：:]?$/.test(line)) {
+      sawDimensions = true
+      continue
+    }
+    if (sawDimensions) {
+      const dimension = parseDimensionLine(line)
+      if (dimension) dimensions.push(dimension)
+      else tail.push(line)
+      continue
+    }
+    const evidenceLine = line.match(/^对应\s*(.+?)[。.]?$/)
+    if (evidenceLine && !evidence) {
+      evidence = evidenceLine[1].replace(/[。.]$/, '').trim()
+      continue
+    }
+    head.push(line)
+  }
+
+  const skeleton = head.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  if (!skeleton) return null
+
+  // 骨架里没出现的变量名是用户写错了，直接丢掉这个维度，
+  // 否则采样时它会被当成「不参与距离」的固定值混进去
+  const placeholders = placeholdersIn(skeleton)
+  const used = dimensions.filter((dim) => placeholders.includes(dim.name))
+
+  return {
+    name: name || skeleton.slice(0, 20),
+    evidence,
+    skeleton,
+    dimensions: used,
+    value: tail.join('\n').trim(),
+  }
+}
+
+export interface ParsedStrategyText {
+  strategies: VariableStrategy[]
+  /** 骨架里出现但没有给选项的变量名：直出模式必须报错，不能静默原样发出去 */
+  missing: string[]
+}
+
+/**
+ * 直出模式：不调模型，直接把用户写的变量提示词解析成策略。
+ *
+ * 这是 `strategiesToText` 的逆操作 —— 详情页里变量任务卡展示的那份文本，
+ * 复制出来改一改就是一份可直出的变量提示词，两边格式天然对齐。
+ *
+ * 没有写「可变项」时也允许：整段当一条固定提示词，靠变量图轮换产生差异。
+ */
+export function parseStrategyText(text: string): ParsedStrategyText {
+  const source = (text ?? '').trim()
+  if (!source) return { strategies: [], missing: [] }
+
+  const strategies: VariableStrategy[] = []
+  const missing: string[] = []
+  for (const block of splitStrategyBlocks(source)) {
+    const parsed = parseStrategyBlock(block)
+    if (!parsed) continue
+    strategies.push(parsed)
+    for (const name of placeholdersIn(parsed.skeleton)) {
+      if (!parsed.dimensions.some((dim) => dim.name === name)) missing.push(name)
+    }
+  }
+  return { strategies, missing: Array.from(new Set(missing)) }
+}
+
 // ===== 后台队列：与 SOP 并行，互不占位 =====
 
 export interface VariableJobRequest {
@@ -414,6 +561,13 @@ export interface VariableJobRequest {
   imageIds?: string[]
   /** 变量提示词正文（提取策略）；空则用内置策略 */
   variablePromptText: string
+  /**
+   * 直出模式：不调模型提取策略，直接把 variablePromptText 当「提示词 + 可变项」解析。
+   *
+   * 用户已经写好骨架和变量选项时用它，省掉一次模型往返，也不会被模型改写措辞。
+   * 解析出来的策略照样走最远点采样填词，变量图照样逐条轮换。
+   */
+  skipExtract?: boolean
   /** 变量提示词名称，详情页展示用 */
   variablePromptName: string
   /** 卖点原文：图上文字的唯一来源，同时写进提示词阶段 */
@@ -476,17 +630,52 @@ async function runJob(job: VariableJobRequest) {
   const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId)
 
   try {
-    const { strategies } = await extractStrategies(profile, {
-      variablePromptText: job.variablePromptText,
-      imageDataUrls: job.imageDataUrls,
-      copyText: job.copyText,
-      styleText: job.styleText,
-      ignoreCompliance: job.ignoreCompliance !== false,
-      avoidCta: job.avoidCta !== false,
-      avoidHint,
-    })
+    // 直出模式不调模型：用户已经把「提示词 + 可变项」写好了，
+    // 解析出来直接进采样；点错模式留空正文时宁可报错，也不要偷偷去反推
+    let strategies: VariableStrategy[]
+    if (job.skipExtract) {
+      const parsed = parseStrategyText(job.variablePromptText)
+      if (!parsed.strategies.length) {
+        throw new Error(`${job.label}：变量提示词里没有提示词正文。直出模式要写成「一条提示词 + 可变项」`)
+      }
+      if (parsed.missing.length) {
+        throw new Error(
+          `${job.label}：这些变量没有给选项：${parsed.missing.join('、')}。`
+          + '补一行「- {{变量名}}：选项A / 选项B」，或者把提示词里的占位符去掉',
+        )
+      }
+      strategies = parsed.strategies
+    } else {
+      const extracted = await extractStrategies(profile, {
+        variablePromptText: job.variablePromptText,
+        imageDataUrls: job.imageDataUrls,
+        copyText: job.copyText,
+        styleText: job.styleText,
+        ignoreCompliance: job.ignoreCompliance !== false,
+        avoidCta: job.avoidCta !== false,
+        avoidHint,
+      })
+      strategies = extracted.strategies
+    }
 
-    const { fills, notes } = planStrategyFills(strategies, job.fillsPerCard)
+    // 完全没有变量维度时（纯提示词 + 变量图），按设置条数复制：
+    // planStrategyFills 只会给 1 条（组合池只有 1 种），差异全在变量图上。
+    // 注意判的是 dimensions 是否为空、不是「有没有可变化的维度」：
+    // 只给了一个选项的变量仍然要填词，否则占位符会被原样发给模型
+    const noVariables = job.skipExtract === true
+      && strategies.every((item) => item.dimensions.length === 0)
+    const planned = noVariables
+      ? {
+        fills: Array.from({ length: Math.max(1, job.fillsPerCard) }, () => ({
+          strategyName: strategies[0].name,
+          assignments: {},
+          prompt: strategies[0].skeleton,
+        })),
+        notes: [] as string[],
+      }
+      : planStrategyFills(strategies, job.fillsPerCard)
+    const { fills } = planned
+    const { notes } = planned
     if (!fills.length) throw new Error(`${job.label} 没有得到可用的变量组合`)
 
     // 卖点校验只做提示：模型拆行、加连接词都是正常行为，严格比对会误判，
@@ -504,7 +693,10 @@ async function runJob(job: VariableJobRequest) {
     const picked: Array<{ prompt: string; fill: typeof fills[number] }> = []
     for (const fill of fills) {
       const cleaned = dedupePrompts([fill.prompt]).prompts[0]
-      if (!cleaned || seen.has(cleaned)) continue
+      if (!cleaned) continue
+      // 直出模式允许同一条提示词配不同变量图：差异本来就来自图，
+      // 按文本去重会把「一张图一条」全砍成一条
+      if (!job.skipExtract && seen.has(cleaned)) continue
       seen.add(cleaned)
       picked.push({ prompt: cleaned, fill })
     }
