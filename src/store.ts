@@ -26,7 +26,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS, type TaskInputSnapshot }
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, resolveApiProfileModel, splitModelList, validateApiProfile } from './lib/apiProfiles'
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
-import { collectSopLibrary, mergeSopLibrary, useSopStore } from './lib/sopStore'
+import { collectSopLibrary, directionPath, mergeSopLibrary, useSopStore } from './lib/sopStore'
 import { ALL_SCOPE, filterTasksByScope, scopeNodeIds, type DirectionScope } from './lib/directionScope'
 import { channelForNewTask, channelLabel, taskMatchesChannel } from './lib/channel'
 import { planPlainRequests, type PlainImageMode } from './lib/plainImagePlan'
@@ -66,7 +66,7 @@ import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { runWithConcurrency, splitBatchPrompts } from './lib/batchPrompts'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
+import { blobToDataUrl, dataUrlToBytes, fileToDataUrl } from './lib/dataUrl'
 import { cacheImage, cacheThumbnail, clearImageCaches, deleteCachedImage, deleteImageCacheEntry, ensureImageCached, scheduleMissingThumbnailBackfill } from './lib/imageCache'
 import { migrateImagesToBlob } from './lib/imageBlob'
 import { hasActiveDataOperations, isCustomRecoverableTask, isFalRecoverableTask } from './lib/dataOperations'
@@ -89,12 +89,13 @@ import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage, type PostTemplate } from './lib/postTemplate'
 import { dataUrlByteSize, dataUrlFormat, limitDataUrlSize, resolveSizeLimitPlan } from './lib/outputFileSize'
 import { finishedFileName, finishedFolderName, writeFinishedImage } from './lib/postFinished'
-import { deliverCardGroup, deliverTaskCard, resolveCardDeliveryLocation, type DeliverResult } from './lib/deliver'
+import { deliverCardGroup, deliverImageFileName, deliverTaskCard, cardFolderName, resolveCardDeliveryLocation, tasksOfCard, type DeliverResult } from './lib/deliver'
+import { dispatchSkipNote, pickDispatchTemplate } from './lib/dispatch'
 import { openDirectoryPath } from './lib/deliveryDirPicker'
 import { resolveDeliveryDir } from './lib/deliveryDir'
 import { useClipStore } from './lib/clipSimilarity'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
-import { pickSaveDir, saveFile, saveFileToDir, getDefaultSaveDir, type SaveOptions } from './lib/saveFile'
+import { pickSaveDir, saveFile, saveFileToDir, getDefaultSaveDir, createSaveFolder, useSaveDir, type SaveOptions } from './lib/saveFile'
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
 import { throwIfAborted } from './lib/serverSentEvents'
 import { tauriStorage } from './lib/tauriStorage'
@@ -2857,26 +2858,27 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
   let overflowCount = 0
   let largestBytes = 0
   let tightestLimitBytes = 0
-  // 一个任务卡一个文件夹，文件名按序号 + 分辨率
+  // 一个任务卡一个文件夹，文件名按序号 + 分辨率。
+  // 同卡的多条任务共用一个文件夹，所以序号要接着提示词序号排，
+  // 否则每条任务都从 01 开始，后写的那条会把前一条的成品覆盖掉
+  const finishedIndexBase = task.sopPromptIndex && task.sopPromptIndex > 0 ? task.sopPromptIndex - 1 : 0
   const finishedFolder = appliedIndexes.length ? finishedFolderFor(task) : ''
 
   try {
     for (let index = 0; index < finalImages.length; index += 1) {
       const dataUrl = finalImages[index]
-      // 只有真被模板改过才另存原图；没套模板时原图就等于成品，不必多存一份
-      if (dataUrl !== generatedImages[index]) {
-        const source = await storeImageWithSize(generatedImages[index], 'generated')
-        storedImageIds.push(source.id)
-        cacheImage(source.id, generatedImages[index])
-        sourceImageIds.push(source.id)
-      } else {
-        sourceImageIds.push('')
-      }
+      // AI 直出、还没经过任何本地处理的那一份。派发、再次后处理都拿它当源，
+      // 所以用接口原样返回的 images[index]，而不是下面为了对齐目标尺寸缩过的那份；
+      // 只要后面有任何一步改了画面（套模板 / 扣透明底 / 压体积），就必须另存一份
+      const aiOriginal = images[index] ?? generatedImages[index]
       let outputDataUrl = dataUrl
+      /** 透明背景分支已经存过的那份「扣底前」图，和 AI 原图相同时直接复用，别存两遍 */
+      let transparentStoredId = ''
       if (task.transparentOutput) {
         const original = await storeImageWithSize(dataUrl, 'generated')
         storedImageIds.push(original.id)
         cacheImage(original.id, dataUrl)
+        transparentStoredId = original.id
 
         try {
           outputDataUrl = task.params.output_format === 'webp'
@@ -2889,6 +2891,16 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
           outputDataUrls.push(dataUrl)
           outputImageSizes.push(original)
           transparentOriginalImageIds.push('')
+          // 扣底失败时成品就是套完模板的那张；它和 AI 原图不一样时仍要留原图，
+          // 否则这张图永远没法派发 / 再次后处理
+          if (dataUrl === aiOriginal) {
+            sourceImageIds.push(original.id)
+          } else {
+            const source = await storeImageWithSize(aiOriginal, 'generated')
+            storedImageIds.push(source.id)
+            cacheImage(source.id, aiOriginal)
+            sourceImageIds.push(source.id)
+          }
           continue
         }
       }
@@ -2916,20 +2928,28 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
       outputDataUrls.push(outputDataUrl)
       outputImageSizes.push(stored)
 
+      // AI 原图：成品和直出图逐字节相同就直接复用同一个 id，不必多占一份空间；
+      // 否则（套了模板 / 扣了透明底 / 压过体积）另存一份，供派发与再次后处理当源
+      if (outputDataUrl === aiOriginal) {
+        sourceImageIds.push(stored.id)
+      } else if (dataUrl === aiOriginal && transparentStoredId) {
+        sourceImageIds.push(transparentStoredId)
+      } else {
+        const source = await storeImageWithSize(aiOriginal, 'generated')
+        storedImageIds.push(source.id)
+        cacheImage(source.id, aiOriginal)
+        sourceImageIds.push(source.id)
+      }
+
       // 落一份到 data/finished/<任务文件夹>/，直接去文件夹就能取成品（带后处理、已压到目标体积的那份）
       if (appliedIndexes.includes(index)) {
         void writeFinishedImage(
           finishedFolder,
           // 模板设了体积上限时成品会被转成 WebP，后缀要跟实际编码一致
-          finishedFileName(index, task.params.size, dataUrlFormat(outputDataUrl) ?? task.params.output_format),
+          finishedFileName(finishedIndexBase + index, task.params.size, dataUrlFormat(outputDataUrl) ?? task.params.output_format),
           outputDataUrl,
         )
       }
-    }
-
-    // 没套模板的图，原图就是成品本身
-    for (let index = 0; index < sourceImageIds.length; index += 1) {
-      if (!sourceImageIds[index]) sourceImageIds[index] = outputIds[index] ?? ''
     }
 
     // 上限是硬要求，达不到要让用户知道，不能静默放过
@@ -2982,75 +3002,336 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
 /**
  * 再次后处理：用出图时保留的 AI 原图重新套「当前」模板，覆盖原来那批成品，不重新生图。
  * 只重做「套模板 + 体积上限」；透明背景任务不支持（重抠图会改变画面，已超出「再后处理」的语义）。
+ *
+ * 一张卡（同 sopJobId）里的多个任务一起处理：详情页本来就是按卡展示的，
+ * 只重做第一条提示词那几张，用户会以为「点了没反应」。
  */
 export async function reapplyPostTemplate(taskId: string): Promise<void> {
   const task = useStore.getState().tasks.find((item) => item.id === taskId)
   if (!task) throw new Error('找不到任务卡')
-  const sources = task.sourceImages ?? []
-  if (!sources.length || sources.length !== task.outputImages.length || sources.some((id) => !id)) {
+  if (task.transparentOutput) {
+    throw new Error('透明背景的任务暂不支持再次后处理，请重新生图')
+  }
+  const group = tasksOfCard(useStore.getState().tasks, task)
+  // 有些老任务没留原图（或那一张当时没套模板、原图与成品同一份），单独跳过，不拖累整卡
+  const ready = group.filter((item) => (
+    item.outputImages.length > 0
+    && item.sourceImages?.length === item.outputImages.length
+    && item.sourceImages.every(Boolean)
+  ))
+  if (!ready.length) {
     throw new Error('这个任务没有保留 AI 原图，无法再次后处理（只有新版客户端出的图支持）')
   }
-  if (task.transparentOutput) {
+  if (ready.some((item) => item.transparentOutput)) {
     throw new Error('透明背景的任务暂不支持再次后处理，请重新生图')
   }
 
   const sopState = useSopStore.getState()
-  const templates = task.params.post_process === false
-    ? []
-    : resolvePostTemplates(sopState.postTemplates, sopState.directions, task.sopDirectionId).templates
-  if (!templates.some((item) => item.enabled)) throw new Error('当前产品 / 方向没有启用后处理模板')
+  const oldIds: string[] = []
+  let applied = 0
+  let total = 0
 
-  const sourceUrls: string[] = []
-  for (const id of sources) {
-    const image = await getImage(id)
-    if (!image?.dataUrl) throw new Error('AI 原图已被清理，无法再次后处理')
-    sourceUrls.push(image.dataUrl)
+  for (const item of ready) {
+    const templates = item.params.post_process === false
+      ? []
+      : resolvePostTemplates(sopState.postTemplates, sopState.directions, item.sopDirectionId).templates
+    if (!templates.some((entry) => entry.enabled)) continue
+
+    const sourceUrls: string[] = []
+    for (const id of item.sourceImages ?? []) {
+      const image = await getImage(id)
+      if (!image?.dataUrl) throw new Error('AI 原图已被清理，无法再次后处理')
+      sourceUrls.push(image.dataUrl)
+    }
+
+    const folder = finishedFolderFor(item)
+    const nextIds: string[] = []
+    for (let index = 0; index < sourceUrls.length; index += 1) {
+      let dataUrl = sourceUrls[index]
+      const size = imageSizeFromDataUrl(dataUrl)
+      const template = size ? pickTemplateForImage(templates, size.width, size.height, item.channel) : null
+      let appliedTemplate: PostTemplate | null = null
+      if (template) {
+        try {
+          dataUrl = await applyPostTemplate(dataUrl, template)
+          appliedTemplate = template
+          applied += 1
+        } catch (err) {
+          console.warn('再次后处理：套模板失败，保留原图', err)
+        }
+      }
+      // 体积上限跟模板走：模板配了就用模板的，没配才用输入区的全局值
+      const sizeLimit = resolveSizeLimitPlan(item.params, appliedTemplate?.maxFileKb)
+      if (sizeLimit) {
+        try {
+          dataUrl = (await limitDataUrlSize(dataUrl, sizeLimit.format, sizeLimit.bytes)).dataUrl
+        } catch (err) {
+          console.warn('再次后处理：限制体积失败，保留原图', err)
+        }
+      }
+      const stored = await storeImageWithSize(dataUrl, 'generated')
+      cacheImage(stored.id, dataUrl)
+      nextIds.push(stored.id)
+      // 序号沿用提示词序号，同卡的多条任务不会互相覆盖同一批文件
+      void writeFinishedImage(
+        folder,
+        finishedFileName(
+          (item.sopPromptIndex ? item.sopPromptIndex - 1 : 0) + index,
+          item.params.size,
+          dataUrlFormat(dataUrl) ?? item.params.output_format,
+        ),
+        dataUrl,
+      )
+    }
+
+    if (!nextIds.length) continue
+    oldIds.push(...item.outputImages, ...(item.transparentOriginalImages ?? []))
+    updateTaskInStore(item.id, { outputImages: nextIds })
+    total += nextIds.length
   }
 
-  const folder = finishedFolderFor(task)
-  const oldIds = [...task.outputImages, ...(task.transparentOriginalImages ?? [])]
-  const nextIds: string[] = []
-  let applied = 0
+  await deleteUnreferencedImageIds(oldIds)
+  useStore.getState().showToast(
+    applied ? `已用原图重新后处理 ${total} 张` : '没有匹配的模板，画面与之前一致',
+    applied ? 'success' : 'info',
+  )
+}
 
-  for (let index = 0; index < sourceUrls.length; index += 1) {
-    let dataUrl = sourceUrls[index]
-    const size = imageSizeFromDataUrl(dataUrl)
-    const template = size ? pickTemplateForImage(templates, size.width, size.height, task.channel) : null
-    let appliedTemplate: PostTemplate | null = null
-    if (template) {
+/** 一个派发目标的执行结果，供界面汇总提示 */
+export interface DispatchTargetResult {
+  targetId: string
+  /** 「保险 / 百万医疗险 / 月亮」 */
+  name: string
+  /** 生成并挂到新卡里的张数 */
+  created: number
+  /** 真正写进交付文件夹的张数；没配交付地址、或网页版时为 0 */
+  written: number
+  /** 比例对不上、被跳过的原图张数 */
+  skipped: number
+  /** 新生成的卡 id，一张图都没出时为空 */
+  taskId?: string
+  folder?: string
+  path?: string
+  error?: string
+}
+
+export interface DispatchResult {
+  ok: boolean
+  results: DispatchTargetResult[]
+  /** 整卡可派发的 AI 原图张数 */
+  total: number
+  error?: string
+}
+
+/** 整卡（同 sopJobId）可派发的 AI 原图 id，顺序与详情页图片顺序一致 */
+export function collectDispatchOriginals(task: TaskRecord): string[] {
+  // 卡片可能来自界面传进来的快照（详情页聚合过的对象），不一定在 store 里；
+  // 那种情况下至少把它自己当成一张卡，而不是返回空列表让派发静默不可用
+  const state = useStore.getState().tasks
+  const scope = state.some((item) => item.id === task.id) ? state : [task]
+  const group = tasksOfCard(scope, task)
+    .slice()
+    .sort((a, b) => (a.sopPromptIndex ?? 0) - (b.sopPromptIndex ?? 0))
+  const ids: string[] = []
+  for (const item of group) {
+    const trashed = new Set(item.trashedOutputImages ?? [])
+    item.outputImages.forEach((imageId, index) => {
+      if (!imageId || trashed.has(imageId)) return
+      // 有后处理 / 压过体积的卡会把 AI 原图单独存一份，派发要用那一份；
+      // 老任务没有 sourceImages 时退回成品本身（等于原始直出）
+      ids.push(item.sourceImages?.[index] || imageId)
+    })
+  }
+  return ids
+}
+
+/**
+ * 派发：把这张卡的 AI 原图分别套上多个产品 / 方向的后处理模板，
+ * 每个目标出一份成品，落到该目标自己的交付地址，并在应用内生成一张卡。
+ *
+ * 为什么在这里而不是复用「再次后处理」：那个是原地覆盖这张卡的成品，
+ * 派发是「一张原图复制成多份、各套各的水印」，原卡必须保持原样。
+ */
+export async function dispatchTaskCard(taskId: string, targetIds: string[]): Promise<DispatchResult> {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task) return { ok: false, results: [], total: 0, error: '任务不存在' }
+  if (!targetIds.length) return { ok: false, results: [], total: 0, error: '没有选择派发目标' }
+
+  const originals = collectDispatchOriginals(task)
+  if (!originals.length) return { ok: false, results: [], total: 0, error: '这张卡还没有可派发的成品' }
+
+  // 先把原图全部读出来：多个目标共用同一批源图，读一次就够
+  const sources: Array<{ id: string; dataUrl: string; width: number; height: number }> = []
+  for (const id of originals) {
+    const image = await getImage(id)
+    if (!image?.dataUrl) continue
+    const size = imageSizeFromDataUrl(image.dataUrl)
+    if (!size) continue
+    sources.push({ id, dataUrl: image.dataUrl, width: size.width, height: size.height })
+  }
+  if (!sources.length) return { ok: false, results: [], total: 0, error: 'AI 原图已被清理，无法派发' }
+
+  const sop = useSopStore.getState()
+  const context = await buildDeliverContext()
+  const sourceName = task.sopName?.trim()
+    || getTaskPromptText(task.prompt, task.inputImageIds?.length ?? 0).slice(0, 20)
+    || '原图'
+  const results: DispatchTargetResult[] = []
+
+  for (const targetId of targetIds) {
+    const node = sop.directions.find((item) => item.id === targetId && !item.deletedAt)
+    if (!node) {
+      results.push({ targetId, name: targetId, created: 0, written: 0, skipped: 0, error: '找不到这个产品 / 方向' })
+      continue
+    }
+    const label = directionPath(sop.directions, targetId) || node.name
+    const templates = resolvePostTemplates(sop.postTemplates, sop.directions, targetId).templates
+      .filter((item) => item.enabled)
+    if (!templates.length) {
+      results.push({ targetId, name: label, created: 0, written: 0, skipped: 0, error: '这个目标没有启用的后处理模板' })
+      continue
+    }
+
+    const outputs: Array<{ id: string; dataUrl: string; size: string; ext: string }> = []
+    const usedSources: string[] = []
+    let skipped = 0
+    for (const source of sources) {
+      const template = pickDispatchTemplate(templates, source.width, source.height, task.channel)
+      if (!template) {
+        skipped += 1
+        continue
+      }
       try {
-        dataUrl = await applyPostTemplate(dataUrl, template)
-        appliedTemplate = template
-        applied += 1
+        let dataUrl = await applyPostTemplate(source.dataUrl, template)
+        // 体积上限跟目标模板走，和出图时的规则保持一致
+        const sizeLimit = resolveSizeLimitPlan(task.params, template.maxFileKb)
+        if (sizeLimit) {
+          try {
+            dataUrl = (await limitDataUrlSize(dataUrl, sizeLimit.format, sizeLimit.bytes)).dataUrl
+          } catch (err) {
+            console.warn('派发：限制体积失败，保留原图', err)
+          }
+        }
+        const stored = await storeImageWithSize(dataUrl, 'generated')
+        cacheImage(stored.id, dataUrl)
+        const bytes = dataUrlToBytes(dataUrl)
+        const size = imageSizeFromDataUrl(dataUrl)
+        outputs.push({
+          id: stored.id,
+          dataUrl,
+          size: size ? `${size.width}x${size.height}` : (task.params.size ?? ''),
+          ext: bytes.ext,
+        })
+        usedSources.push(source.id)
       } catch (err) {
-        console.warn('再次后处理：套模板失败，保留原图', err)
+        console.warn('派发：套模板失败，跳过这张', err)
+        skipped += 1
       }
     }
-    // 体积上限跟模板走：模板配了就用模板的，没配才用输入区的全局值
-    const sizeLimit = resolveSizeLimitPlan(task.params, appliedTemplate?.maxFileKb)
-    if (sizeLimit) {
+
+    if (!outputs.length) {
+      results.push({ targetId, name: label, created: 0, written: 0, skipped, error: dispatchSkipNote(skipped, sources.length) })
+      continue
+    }
+
+    const now = Date.now()
+    const newTask: TaskRecord = {
+      id: genId(),
+      prompt: `派发 · ${sourceName}`,
+      params: { ...task.params, n: outputs.length },
+      inputImageIds: [],
+      outputImages: outputs.map((item) => item.id),
+      sourceImages: usedSources,
+      status: 'done',
+      error: null,
+      createdAt: now,
+      startedAt: now,
+      finishedAt: now,
+      elapsed: 0,
+      // 派发是用户点出来的，不是后台跑完的，不用再标未读红点
+      detailViewedAt: now,
+      // 文件夹名与卡片标题都用 sopName，这里用「派发-源卡名」：
+      // 名字里的 - 会被文件夹命名拆成两段，所以无论源卡名多长，「派发」这个标识都会保留下来
+      sopName: `派发-${sourceName}`,
+      sopDirectionId: targetId,
+      channel: task.channel,
+      sourceMode: task.sourceMode ?? 'gallery',
+      dispatchFromTaskId: task.id,
+    }
+
+    const dir = resolveDeliveryDir(sop.deliveryDirs, sop.directions, targetId)?.path
+      ?? context.fallbackDir?.trim()
+      ?? ''
+    let written = 0
+    let folder: string | undefined
+    let path: string | undefined
+    let writeError: string | undefined
+
+    if (!dir) {
+      writeError = '没配交付地址，这次只生成了卡'
+    } else if (!isTauri) {
+      writeError = '网页版无法写本地文件夹，这次只生成了卡'
+    } else {
       try {
-        dataUrl = (await limitDataUrlSize(dataUrl, sizeLimit.format, sizeLimit.bytes)).dataUrl
+        const saveDir = await useSaveDir(dir)
+        // 一张卡一个文件夹，命名与「立即交付」完全一致，重复派发落在同一个文件夹里
+        const folderName = cardFolderName(newTask, context, outputs[0]?.size)
+        const folderInfo = await createSaveFolder(saveDir, folderName, true)
+        folder = folderInfo.name
+        path = folderInfo.path
+        for (let index = 0; index < outputs.length; index += 1) {
+          const item = outputs[index]
+          try {
+            await saveFileToDir(
+              saveDir,
+              dataUrlToBytes(item.dataUrl).bytes,
+              deliverImageFileName(index + 1, newTask, context, item.size, item.ext),
+              undefined,
+              folderInfo.name,
+              true,
+            )
+            written += 1
+          } catch (err) {
+            console.error('派发写入失败：', err)
+          }
+        }
+        if (!written) writeError = '图片写入失败'
       } catch (err) {
-        console.warn('再次后处理：限制体积失败，保留原图', err)
+        writeError = typeof err === 'string' ? err : '交付地址不可用'
       }
     }
-    const stored = await storeImageWithSize(dataUrl, 'generated')
-    cacheImage(stored.id, dataUrl)
-    nextIds.push(stored.id)
-    void writeFinishedImage(
+
+    // 卡先落库：写盘失败也留着，用户可以在应用内看到并手动再交付
+    const state = useStore.getState()
+    state.setTasks([newTask, ...state.tasks])
+    await putTask(newTask)
+
+    results.push({
+      targetId,
+      name: label,
+      created: outputs.length,
+      written,
+      skipped,
+      taskId: newTask.id,
       folder,
-      finishedFileName(index, task.params.size, dataUrlFormat(dataUrl) ?? task.params.output_format),
-      dataUrl,
+      path,
+      error: writeError,
+    })
+  }
+
+  const created = results.reduce((sum, item) => sum + item.created, 0)
+  const failed = results.filter((item) => item.error && !item.created)
+  if (created > 0) {
+    const targets = results.filter((item) => item.created > 0).length
+    useStore.getState().showToast(`已派发到 ${targets} 个目标，共 ${created} 张`, 'success')
+  } else {
+    useStore.getState().showToast(
+      failed[0]?.error ? `派发失败：${failed[0].error}` : '派发失败，没有生成任何图片',
+      'error',
     )
   }
 
-  updateTaskInStore(taskId, { outputImages: nextIds })
-  await deleteUnreferencedImageIds(oldIds)
-  useStore.getState().showToast(
-    applied ? `已用原图重新后处理 ${nextIds.length} 张` : '没有匹配的模板，画面与之前一致',
-    applied ? 'success' : 'info',
-  )
+  return { ok: created > 0, results, total: sources.length }
 }
 
 async function persistTaskStreamPartialImage(taskId: string, dataUrl: string, execution?: symbol) {

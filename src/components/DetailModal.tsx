@@ -29,6 +29,7 @@ import ViewportTooltip from './ViewportTooltip'
 import { CommentBadge } from './CommentMarks'
 import InspectConfigModal from './InspectConfigModal'
 import SopSupplementModal from './SopSupplementModal'
+import DispatchModal from './DispatchModal'
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -55,6 +56,8 @@ export default function DetailModal() {
   const [pairOpen, setPairOpen] = useState(false)
   /** 用 SOP 再补一批图的弹窗 */
   const [supplementOpen, setSupplementOpen] = useState(false)
+  /** 派发弹窗：AI 原图套多个产品的水印 / Logo */
+  const [dispatchOpen, setDispatchOpen] = useState(false)
   /** 缩略图缩放倍率：1 = 按目标列宽自适应，拖滑块可无级放大缩小 */
   const [galleryZoom, setGalleryZoom] = useState(1)
   const sopDirections = useSopStore((s) => s.directions)
@@ -114,6 +117,12 @@ export default function DetailModal() {
         ? `${leader.sopName || 'SOP'} · ${group.length} 条提示词`
         : `${leader.sopName || '批量'} · ${group.length} 张图`,
       outputImages: group.flatMap((item) => item.outputImages),
+      // 原图也按同顺序摊平：否则「下载原图」永远只指向第一条提示词那张，
+      // 后面的图会拿错源。老任务没有这个字段时补空串占位，保持下标对齐。
+      sourceImages: group.flatMap((item) => item.outputImages.map((_, index) => item.sourceImages?.[index] || '')),
+      transparentOriginalImages: group.flatMap((item) => (
+        item.outputImages.map((_, index) => item.transparentOriginalImages?.[index] || '')
+      )),
       status: anyRunning ? 'running' : allError ? 'error' : 'done',
       elapsed: group.reduce((sum, item) => sum + (item.elapsed ?? 0), 0),
     } as TaskRecord
@@ -257,7 +266,16 @@ export default function DetailModal() {
   const currentOutputImageId = currentOutputSlot?.imageId || ''
   const currentOutputImageIndex = currentOutputSlot?.outputImageIndex ?? -1
   const currentOutputError = currentOutputSlot?.error || ''
-  const currentOriginalOutputImageId = currentOutputImageIndex >= 0 ? task?.transparentOriginalImages?.[currentOutputImageIndex] || '' : ''
+  // 「原图」按钮的取图顺序：透明背景任务取扣底前那张（用户眼里的原图），
+  // 否则取 AI 直出、套模板之前的那张（套过模板 / 压过体积的卡都会单独留一份）
+  const originalSourceImageId = currentOutputImageIndex >= 0
+    ? task?.sourceImages?.[currentOutputImageIndex] || ''
+    : ''
+  const currentOriginalOutputImageId = currentOutputImageIndex >= 0
+    ? task?.transparentOriginalImages?.[currentOutputImageIndex]
+      || (originalSourceImageId && originalSourceImageId !== currentOutputImageId ? originalSourceImageId : '')
+      || ''
+    : ''
 
   useEffect(() => {
     const outputImageIds = task?.outputImages ?? []
@@ -1775,6 +1793,22 @@ export default function DetailModal() {
               </svg>
               {reapplying ? '后处理中…' : '再次后处理'}
             </button>
+            {/*
+             * 派发：同一批 AI 原图复制多份，各套一个目标的水印 / Logo。
+             * 和「再次后处理」的区别是它不改这张卡 —— 原卡保持原样，目标各新增一张卡。
+             */}
+            <button
+              onClick={() => setDispatchOpen(true)}
+              disabled={!outputLen || task.status !== 'done'}
+              title="用这批 AI 原图套其他产品 / 方向的水印、Logo，每个目标新增一张卡并写进它的交付地址"
+              className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-violet-50 dark:bg-violet-500/10 text-violet-600 dark:text-violet-400 hover:bg-violet-100 dark:hover:bg-violet-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
+            >
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 11.5l15-7-4 15.5-4-5.5-7-3z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11.5 14.5l8-10" />
+              </svg>
+              派发
+            </button>
             <button
               onClick={handleDelete}
               className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
@@ -1808,6 +1842,10 @@ export default function DetailModal() {
           existingCount={groupTasks.reduce((max, item) => Math.max(max, item.sopPromptIndex ?? 0), 0)}
           onClose={() => setSupplementOpen(false)}
         />
+      )}
+
+      {dispatchOpen && task && (
+        <DispatchModal task={task} onClose={() => setDispatchOpen(false)} />
       )}
 
       {showRawUrlsModal && rawImageUrls.length > 0 && (

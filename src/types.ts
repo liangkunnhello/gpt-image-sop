@@ -428,6 +428,12 @@ export interface TaskRecord {
   sopReferenceImageIds?: string[]
   /** 变量模式：本条提示词由「骨架 + 变量」填词产出，分组仍复用 sopJobId */
   variableMode?: boolean
+  /**
+   * 派发来源：这批成品是从哪张卡的 AI 原图派出来的。
+   * 有值说明这张卡不是生成的，而是「同一张原图套了这个产品的水印 / Logo」，
+   * 详情页据此提示来源，避免被当成一次独立生成。
+   */
+  dispatchFromTaskId?: string
   /** 变量模式：填词用的骨架，保留 {{变量}} 原文便于回看差异 */
   variableSkeleton?: string
   /** 变量模式：本次填入的「变量名 → 选项」 */
