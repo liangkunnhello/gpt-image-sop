@@ -88,7 +88,8 @@ import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage } from './lib/postTemplate'
 import { dataUrlByteSize, limitDataUrlSize, shouldLimitOutputSize } from './lib/outputFileSize'
 import { finishedFileName, finishedFolderName, writeFinishedImage } from './lib/postFinished'
-import { deliverCardGroup, deliverTaskCard, type DeliverResult } from './lib/deliver'
+import { deliverCardGroup, deliverTaskCard, resolveCardDeliveryLocation, type DeliverResult } from './lib/deliver'
+import { openDirectoryPath } from './lib/deliveryDirPicker'
 import { resolveDeliveryDir } from './lib/deliveryDir'
 import { useClipStore } from './lib/clipSimilarity'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
@@ -2598,6 +2599,48 @@ export async function deliverTaskNow(taskId: string): Promise<DeliverResult> {
   const result = await deliverCardGroup(task, context)
   reportDeliverResult(result)
   return result
+}
+
+/** 「打开交付文件夹」的结果，供界面决定提示什么 */
+export interface OpenDeliveryFolderResult {
+  ok: boolean
+  /** card = 打开的是卡文件夹；root = 这张卡还没交付过，打开的是交付地址 */
+  opened?: 'card' | 'root'
+  /** 实际打开的绝对路径 */
+  path?: string
+  /** 三级都没配交付地址，也没有兜底的默认保存地址 */
+  noTarget?: boolean
+  /** true 表示网页版没有本地目录可开 */
+  webOnly?: boolean
+  error?: string
+}
+
+/**
+ * 「打开交付文件夹」：在资源管理器里打开这张卡的交付位置。
+ *
+ * 优先开卡文件夹（交付地址 + 卡文件夹名）；这张卡还没交付过时目录不存在，
+ * 退回打开交付地址本身，并告诉调用方 open 的是哪一层，
+ * 免得用户以为「交付过了」。
+ */
+export async function openDeliveryFolderForTask(taskId: string): Promise<OpenDeliveryFolderResult> {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task) return { ok: false, error: '任务不存在' }
+  if (!isTauri) return { ok: false, webOnly: true }
+  const context = await buildDeliverContext()
+  const location = await resolveCardDeliveryLocation(task, context)
+  if (!location) return { ok: false, noTarget: true }
+  try {
+    await openDirectoryPath(location.path)
+    return { ok: true, opened: 'card', path: location.path }
+  } catch {
+    // 多半是还没交付过（目录不存在），也可能是目录被移走；都退回交付地址
+  }
+  try {
+    await openDirectoryPath(location.dir)
+    return { ok: true, opened: 'root', path: location.dir }
+  } catch (err) {
+    return { ok: false, path: location.dir, error: typeof err === 'string' ? err : '打开交付地址失败' }
+  }
 }
 
 /** 供界面显示：这张卡最终会交付到哪（含继承来源与兜底） */

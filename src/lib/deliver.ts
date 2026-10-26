@@ -98,6 +98,67 @@ export function cardFolderName(task: TaskRecord, context: DeliverContext, sizeOv
 }
 
 /**
+ * 拼「交付地址 + 卡文件夹名」。
+ *
+ * 交付地址是用户手选的绝对路径，末尾可能带分隔符；跟着它的写法用同一套分隔符，
+ * 免得 Windows 上出现 `D:\交付/卡名` 这种看着别扭的混合路径（虽然系统能认）。
+ */
+export function joinDeliveryPath(dir: string, folder: string): string {
+  const base = dir.trim().replace(/[\\/]+$/, '')
+  if (!base) return folder
+  const sep = base.includes('\\') ? '\\' : '/'
+  return `${base}${sep}${folder}`
+}
+
+/** 一张卡的交付位置：交付地址 + 卡文件夹名，供「打开交付文件夹」使用 */
+export interface CardDeliveryLocation {
+  /** 交付地址（三级继承解析，或兜底的默认保存地址） */
+  dir: string
+  /** 卡文件夹名，与交付时用的是同一个函数 */
+  folder: string
+  /** 卡文件夹完整路径 */
+  path: string
+  /** 地址来自哪一层；兜底地址为空串 */
+  ownerId: string
+  /** true 表示用的是兜底的默认保存地址，不是显式配的交付地址 */
+  isFallback: boolean
+}
+
+/**
+ * 解析这张卡交付到哪：交付地址 + 卡文件夹。
+ *
+ * 文件夹名里的尺寸取这张卡第一张可交付成品的**真实像素**，与交付写文件时一致；
+ * 直接拿 `task.params.size` 会算出另一个文件夹名（后处理会改成品尺寸），打开就找不到。
+ */
+export async function resolveCardDeliveryLocation(
+  task: TaskRecord,
+  context: DeliverContext,
+): Promise<CardDeliveryLocation | null> {
+  const resolved = resolveDeliveryDir(context.deliveryDirs, context.directions, task.sopDirectionId)
+  const dir = resolved?.path ?? context.fallbackDir?.trim() ?? ''
+  if (!dir) return null
+
+  let sizeOverride: string | undefined
+  const first = deliverableOutputImages(task)[0]
+  if (first) {
+    try {
+      const entry = await readImageBytes(first)
+      if (entry) sizeOverride = realSizeOf(entry.bytes, task)
+    } catch {
+      // 读不出来就退回请求尺寸，只影响名字里的尺寸段
+    }
+  }
+  const folder = cardFolderName(task, context, sizeOverride)
+  return {
+    dir,
+    folder,
+    path: joinDeliveryPath(dir, folder),
+    ownerId: resolved?.ownerId ?? '',
+    isFallback: !resolved,
+  }
+}
+
+/**
  * 成品文件名：序号 + 与文件夹同一套命名模板。
  *
  * 为什么要带完整模板而不是只写「序号-尺寸」：交付出去的图会脱离应用单独流转，

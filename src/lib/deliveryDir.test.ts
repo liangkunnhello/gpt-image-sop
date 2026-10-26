@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { SopDirectionNode, TaskRecord } from '../types'
 import { resolveDeliveryDir, hasOwnDeliveryDir } from './deliveryDir'
-import { deliverableOutputImages, cardFolderName, tasksOfCard, deliverImageFileName } from './deliver'
+import { deliverableOutputImages, cardFolderName, tasksOfCard, deliverImageFileName, joinDeliveryPath, resolveCardDeliveryLocation } from './deliver'
 
 const DIRECTIONS: SopDirectionNode[] = [
   { id: 'cat-1', parentId: null, name: '保险', kind: 'category' },
@@ -153,5 +153,54 @@ describe('交付的图片文件名', () => {
   it('非法字符不会带进文件名', () => {
     const name = deliverImageFileName(1, cardTask({ sopName: 'a/b:c*d' }), context, '1024x1024', 'png')
     expect(name).not.toMatch(/[\\/:*?"<>|]/)
+  })
+})
+
+describe('「打开交付文件夹」的路径解析', () => {
+  const context = {
+    tasks: [],
+    directions: DIRECTIONS,
+    deliveryDirs: {} as Record<string, string>,
+    template: '{product}-{direction}-{size}-{sop}',
+  }
+
+  it('按目录本来的分隔符拼接，不产出混合路径', () => {
+    // 反斜杠在这套工具链里传输容易被吃掉，用字符码构造，保证测的真是 Windows 分隔符
+    const bs = String.fromCharCode(92)
+    expect(joinDeliveryPath(`D:${bs}交付`, '卡A')).toBe(`D:${bs}交付${bs}卡A`)
+    expect(joinDeliveryPath('D:/交付/', '卡A')).toBe('D:/交付/卡A')
+  })
+
+  it('交付地址末尾的分隔符先剥掉，不出现双斜杠', () => {
+    const bs = String.fromCharCode(92)
+    expect(joinDeliveryPath('D:/交付///', '卡A')).toBe('D:/交付/卡A')
+    expect(joinDeliveryPath(`D:${bs}交付${bs}`, '卡A')).toBe(`D:${bs}交付${bs}卡A`)
+  })
+
+  it('用三级继承到的交付地址拼出卡文件夹', async () => {
+    const location = await resolveCardDeliveryLocation(
+      makeTask({ sopDirectionId: 'dir-1', sopName: '月亮图' }),
+      { ...context, deliveryDirs: { 'prod-1': 'D:/prod' } },
+    )
+    expect(location?.dir).toBe('D:/prod')
+    expect(location?.ownerId).toBe('prod-1')
+    expect(location?.isFallback).toBe(false)
+    // 测试环境读不到图片字节，尺寸退回请求尺寸，仍是交付时那个文件夹名
+    expect(location?.folder).toBe('百万医疗险-月亮-1024x1024-月亮图')
+    expect(location?.path).toBe('D:/prod/百万医疗险-月亮-1024x1024-月亮图')
+  })
+
+  it('三级都没配时用兜底地址，并标出这是兜底', async () => {
+    const location = await resolveCardDeliveryLocation(
+      makeTask({ sopDirectionId: 'dir-1', sopName: '月亮图' }),
+      { ...context, fallbackDir: 'D:/默认保存' },
+    )
+    expect(location?.dir).toBe('D:/默认保存')
+    expect(location?.ownerId).toBe('')
+    expect(location?.isFallback).toBe(true)
+  })
+
+  it('既没配交付地址也没有兜底地址时返回 null，由界面提示去配置', async () => {
+    expect(await resolveCardDeliveryLocation(makeTask({ sopDirectionId: 'dir-1' }), context)).toBeNull()
   })
 })

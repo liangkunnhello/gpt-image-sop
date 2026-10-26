@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, retryTask, updateSopText, trashTask, trashOutputImage, deliverTaskNow, resolveTaskDeliveryTarget } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, retryTask, updateSopText, trashTask, trashOutputImage, deliverTaskNow, openDeliveryFolderForTask, resolveTaskDeliveryTarget } from '../store'
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
@@ -513,6 +513,32 @@ export default function DetailModal() {
   }
 
   /**
+   * 「打开交付文件夹」：打开这张卡的交付位置（交付地址 + 卡文件夹）。
+   *
+   * 卡文件夹只有交付过才存在，没交付过时退回打开交付地址本身，
+   * 并明确告诉用户「还没交付」，免得误以为已经交付过。
+   */
+  const handleOpenDeliveryFolder = async () => {
+    if (!task) return
+    const result = await openDeliveryFolderForTask(task.id)
+    if (result.ok) {
+      if (result.opened === 'root') {
+        showToast(`这张卡还没交付过，已打开交付地址：${result.path ?? ''}`, 'info')
+      }
+      return
+    }
+    if (result.webOnly) {
+      showToast('网页版没有本地交付目录；要用这个按钮请用桌面客户端', 'info')
+      return
+    }
+    if (result.noTarget) {
+      showToast('这张卡还没配置交付地址，先在左侧「产品-方向」右键配置', 'info')
+      return
+    }
+    showToast(`打开交付文件夹失败：${result.error || '未知原因'}${result.path ? `（路径 ${result.path}）` : ''}`, 'error')
+  }
+
+  /**
    * 把这张卡的 SOP 存进库。
    *
    * 按「这张卡所属产品」存（跟系统提示词同粒度），这样这个产品下所有方向都能选到；
@@ -954,11 +980,16 @@ export default function DetailModal() {
                  * 放一起看更顺手，底部那排就只留任务级的操作。
                  * 底图可能是深色成品图，浅色底会糊掉，这里统一用黑底半透明。
                  */}
+                {/*
+                 * 打开交付文件夹：交付目录 + 卡文件夹。原来是「打开成品图内部存储位置」，
+                 * 但图片按 hash 分桶存在 data/images 下，那个位置对用户没意义，
+                 * 看成品图的入口统一交给右边的「下载」以及任务卡本身。
+                 */}
                 <button
                   type="button"
-                  onClick={() => void handleRevealCurrentImage('output')}
+                  onClick={() => void handleOpenDeliveryFolder()}
                   className="flex h-7 w-7 items-center justify-center rounded bg-black/50 text-white backdrop-blur-sm transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50"
-                  title="打开文件所在位置（当前这张成品图）"
+                  title={deliveryTarget ? `打开交付文件夹（${deliveryTarget.path}）` : '打开交付文件夹（还没配置交付地址）'}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
