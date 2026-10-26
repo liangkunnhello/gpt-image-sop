@@ -159,10 +159,11 @@ export async function resolveCardDeliveryLocation(
 }
 
 /**
- * 成品文件名：序号 + 与文件夹同一套命名模板。
+ * 成品文件名：与文件夹同一套命名模板 + 末尾序号。
  *
  * 为什么要带完整模板而不是只写「序号-尺寸」：交付出去的图会脱离应用单独流转，
  * 光看文件名要能认出是哪天、哪个产品/方向、多大、哪份 SOP 出的。
+ * 序号放末尾：同一批图按名称排序时先按日期/产品/方向聚在一起，序号只做卡内区分。
  * 序号取提示词序号（`sopPromptIndex`），保证同一张卡里每个任务的文件名天然不撞，
  * 不会被 overwrite 覆盖成一张。
  */
@@ -174,8 +175,8 @@ export function deliverImageFileName(
   ext: string,
 ): string {
   const stem = cardFolderName(task, context, realSize) || `task-${task.id.slice(0, 8)}`
-  // Windows 单段文件名上限 255，留出扩展名与应对极端长模板的余量
-  const name = `${String(sequence).padStart(2, '0')}-${stem}`.slice(0, 180)
+  // Windows 单段文件名上限 255，留出扩展名与序号余量；先截模板再拼序号，序号不会被截掉
+  const name = `${stem.slice(0, 170)}-${String(sequence).padStart(2, '0')}`
   return `${name}.${ext}`.replace(/[\\/:*?"<>|]/g, '_')
 }
 

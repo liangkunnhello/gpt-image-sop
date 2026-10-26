@@ -118,10 +118,10 @@ describe('交付的图片文件名', () => {
     return makeTask({ sopDirectionId: 'dir-1', sopName: '月亮图', ...patch })
   }
 
-  it('序号 + 完整命名模板，尺寸段用成品的真实尺寸', () => {
+  it('完整命名模板 + 末尾序号，尺寸段用成品的真实尺寸', () => {
     // 请求的是 1024x1024，成品被后处理画成 1080x1920，名字必须反映成品
     const name = deliverImageFileName(3, cardTask(), context, '1080x1920', 'png')
-    expect(name).toBe('03-百万医疗险-月亮-闪屏-月亮图.png')
+    expect(name).toBe('百万医疗险-月亮-闪屏-月亮图-03.png')
     expect(name).not.toContain('1024x1024')
   })
 
@@ -135,19 +135,20 @@ describe('交付的图片文件名', () => {
       'png',
     ))
     expect(new Set(names).size).toBe(30)
-    expect(names[0].startsWith('01-')).toBe(true)
-    expect(names[29].startsWith('30-')).toBe(true)
+    expect(names[0].endsWith('-01.png')).toBe(true)
+    expect(names[29].endsWith('-30.png')).toBe(true)
   })
 
   it('序号补两位，超过 99 不截断', () => {
-    expect(deliverImageFileName(7, cardTask(), context, '1024x1024', 'jpg').startsWith('07-')).toBe(true)
-    expect(deliverImageFileName(120, cardTask(), context, '1024x1024', 'jpg').startsWith('120-')).toBe(true)
+    expect(deliverImageFileName(7, cardTask(), context, '1024x1024', 'jpg').endsWith('-07.jpg')).toBe(true)
+    expect(deliverImageFileName(120, cardTask(), context, '1024x1024', 'jpg').endsWith('-120.jpg')).toBe(true)
   })
 
-  it('模板很长时截断文件名，不超出 Windows 单段上限', () => {
+  it('模板很长时截断模板段，序号仍然留在末尾', () => {
     const name = deliverImageFileName(1, cardTask(), { ...context, template: 'x'.repeat(400) }, '1024x1024', 'png')
     expect(name.length).toBeLessThanOrEqual(185)
-    expect(name.endsWith('.png')).toBe(true)
+    // 先截模板再拼序号：序号不能被截掉
+    expect(name.endsWith('-01.png')).toBe(true)
   })
 
   it('非法字符不会带进文件名', () => {

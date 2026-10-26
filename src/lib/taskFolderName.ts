@@ -3,9 +3,24 @@
  *
  * 默认规则：日期-产品-方向-尺寸-SOP名-自定义-序号
  * 日期取创建时间，尺寸见 sizeLabel，自定义来自设置，序号由客户端在重名时补（`-02`、`-03`）。
+ * SOP 名最多保留 6 个字（SOP 全名往往是一整句话，直接拼进去会撑爆名字）。
  */
 
 import { sanitizeFileNamePart } from './exportFileName'
+
+/** SOP 名在文件夹 / 文件名里最多保留几个字 */
+export const MAX_SOP_NAME_CHARS = 6
+
+/**
+ * 截断 SOP 名。
+ *
+ * 按「字」算而不是按 UTF-16 长度：SOP 名里有 emoji 等代理对时，
+ * 用 slice 会把一个字符劈成半个，写进文件名就是乱码。
+ */
+export function truncateSopName(name?: string): string {
+  const chars = Array.from((name ?? '').trim())
+  return chars.length > MAX_SOP_NAME_CHARS ? chars.slice(0, MAX_SOP_NAME_CHARS).join('') : chars.join('')
+}
 
 export const DEFAULT_TASK_FOLDER_TEMPLATE = '{date}-{product}-{direction}-{size}-{sop}-{custom}'
 
@@ -52,7 +67,7 @@ export function buildTaskFolderName(template: string, context: TaskFolderContext
     product: context.product ?? '',
     direction: context.direction ?? '',
     size: sizeLabel(context.size),
-    sop: context.sopName ?? '',
+    sop: truncateSopName(context.sopName),
     custom: context.custom ?? '',
   }
   const source = template.trim() || DEFAULT_TASK_FOLDER_TEMPLATE
