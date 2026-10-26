@@ -50,7 +50,7 @@ export default function ImportLinkDiff({ desc }: { desc: ReturnType<typeof descr
             {group.rows.map((row) => (
               <div key={row.label}>
                 <div className="mb-1 text-xs text-gray-400 dark:text-gray-500">{row.label}</div>
-                <div className="overflow-hidden rounded-lg font-mono text-xs leading-relaxed">
+                <div className="overflow-hidden rounded-lg [font-family:var(--font-mono-zh)] text-xs leading-relaxed">
                   {row.before && (
                     <div className="flex gap-1.5 bg-red-50 px-2 py-1 text-red-600 dark:bg-red-500/10 dark:text-red-400">
                       <span className="shrink-0 select-none">-</span>

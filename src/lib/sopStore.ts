@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { SopDirectionNode, SopSystemPrompt, VariablePrompt } from '../types'
+import type { SavedSop, SopDirectionNode, SopSystemPrompt, VariablePrompt } from '../types'
 import type { PostTemplate } from './postTemplate'
 
 /** 初始树按现有策略分类搭骨架，内容后续在界面里增删 */
@@ -65,15 +65,18 @@ export interface SopPick {
   promptId?: string
   /** 变量模式：变量提示词（按方向存），与系统提示词并行互不影响 */
   variablePromptId?: string
+  /** SOP 模式：直接用来出图的 SOP（按方向存），配了就不再按参考图反推 */
+  sopId?: string
 }
 
 /** 提示词库弹窗的分组，也用作 tab 的 key */
-export type SopLibraryTab = 'prompt' | 'variable' | 'point' | 'style'
+export type SopLibraryTab = 'prompt' | 'variable' | 'sop' | 'point' | 'style'
 
 /** 各分组的展示名，输入框按钮、tab、空状态文案共用 */
 export const SOP_LIBRARY_LABEL: Record<SopLibraryTab, string> = {
   prompt: '系统提示词',
   variable: '变量提示词',
+  sop: '生图 SOP',
   point: '卖点',
   style: '风格',
 }
@@ -87,6 +90,8 @@ interface SopState {
   systemPrompts: SopSystemPrompt[]
   /** 变量提示词库：与系统提示词并行的一套，只描述提取策略 */
   variablePrompts: VariablePrompt[]
+  /** 生图 SOP 库：整份 SOP 存下来，选中后直接写提示词出图，跳过反推 */
+  savedSops: SavedSop[]
   /** 后台队列进度，null 表示空闲 */
   progress: { queued: number; running: number; done: number; total: number; label: string } | null
   /** 侧栏当前选中的方向 */
@@ -183,6 +188,9 @@ interface SopState {
   addSystemPrompt: (productId: string, name: string, content: string) => string
   updateSystemPrompt: (id: string, patch: Partial<Pick<SopSystemPrompt, 'name' | 'content'>>) => void
   removeSystemPrompt: (id: string) => void
+  addSavedSop: (productId: string, name: string, content: string) => string
+  updateSavedSop: (id: string, patch: Partial<Pick<SavedSop, 'name' | 'content'>>) => void
+  removeSavedSop: (id: string) => void
   addVariablePrompt: (productId: string, name: string, content: string) => string
   updateVariablePrompt: (id: string, patch: Partial<Pick<VariablePrompt, 'name' | 'content'>>) => void
   removeVariablePrompt: (id: string) => void
@@ -196,6 +204,7 @@ export const useSopStore = create<SopState>()(
       directions: SEED_DIRECTIONS,
       systemPrompts: [],
       variablePrompts: [],
+      savedSops: [],
       progress: null,
       activeDirectionId: 'dir-million-moon',
       activeFilterId: null,
@@ -404,6 +413,7 @@ export const useSopStore = create<SopState>()(
             // 提示词与模板挂在节点上（产品通用 / 方向专属都是），真正删除时才跟着清
             systemPrompts: state.systemPrompts.filter((item) => !doomed.has(item.productId)),
             variablePrompts: state.variablePrompts.filter((item) => !doomed.has(item.productId)),
+            savedSops: state.savedSops.filter((item) => !doomed.has(item.productId)),
             postTemplates: dropNodeConfig(state.postTemplates, doomed),
             postPreviewImages: dropNodeConfig(state.postPreviewImages, doomed),
             deliveryDirs: dropNodeConfig(state.deliveryDirs, doomed),
@@ -417,6 +427,7 @@ export const useSopStore = create<SopState>()(
             directions: state.directions.filter((node) => !node.deletedAt),
             systemPrompts: state.systemPrompts.filter((item) => !doomed.has(item.productId)),
             variablePrompts: state.variablePrompts.filter((item) => !doomed.has(item.productId)),
+            savedSops: state.savedSops.filter((item) => !doomed.has(item.productId)),
             postTemplates: dropNodeConfig(state.postTemplates, doomed),
             postPreviewImages: dropNodeConfig(state.postPreviewImages, doomed),
             deliveryDirs: dropNodeConfig(state.deliveryDirs, doomed),
@@ -446,6 +457,35 @@ export const useSopStore = create<SopState>()(
       removeSystemPrompt: (id) => {
         set((state) => ({ systemPrompts: state.systemPrompts.filter((item) => item.id !== id) }))
       },
+      addSavedSop: (productId, name, content) => {
+        const id = newId('sop')
+        set((state) => ({
+          savedSops: [...state.savedSops, { id, productId, name, content, updatedAt: Date.now() }],
+        }))
+        return id
+      },
+      updateSavedSop: (id, patch) => {
+        set((state) => ({
+          savedSops: state.savedSops.map((item) =>
+            item.id === id ? { ...item, ...patch, updatedAt: Date.now() } : item,
+          ),
+        }))
+      },
+      removeSavedSop: (id) => {
+        set((state) => ({
+          savedSops: state.savedSops.filter((item) => item.id !== id),
+          // 选中的 SOP 被删掉时，把指向它的记录一起清掉，
+          // 否则下次出图会静默退回「反推」，用户以为还在用那份 SOP
+          lastPick: Object.fromEntries(Object.entries(state.lastPick).map(([key, pick]) => [
+            key,
+            { ...pick, sopId: pick.sopId === id ? undefined : pick.sopId },
+          ])),
+          defaultPick: Object.fromEntries(Object.entries(state.defaultPick).map(([key, pick]) => [
+            key,
+            { ...pick, sopId: pick.sopId === id ? undefined : pick.sopId },
+          ])),
+        }))
+      },
       addVariablePrompt: (productId, name, content) => {
         const id = newId('var')
         set((state) => ({
@@ -467,13 +507,16 @@ export const useSopStore = create<SopState>()(
     {
       name: 'gpt-image-sop-store',
       // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边；v5：变量提示词库；v6：节点伪删除；
-      // v7：productId 为空的配置认领到顶层节点；v8：新增按节点存的交付地址
-      version: 8,
+      // v7：productId 为空的配置认领到顶层节点；v8：新增按节点存的交付地址；
+      // v9：新增生图 SOP 库（整份 SOP 存下来直接出图）
+      version: 9,
       migrate: (persisted, version) => {
         const state = (persisted ?? {}) as Partial<SopState>
 
         // v8：老存档没有交付地址，补个空对象，避免读到的 undefined 到处判空
         if (version < 8) state.deliveryDirs = state.deliveryDirs ?? {}
+        // v9：老存档没有 SOP 库
+        if (version < 9) state.savedSops = state.savedSops ?? []
 
         // v2：系统提示词补齐 productId
         if (version < 2 && state.systemPrompts?.length) {
@@ -544,7 +587,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
+      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, savedSops: state.savedSops, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
     },
   ),
 )
@@ -554,6 +597,7 @@ export interface SopLibraryExport {
   directions: SopDirectionNode[]
   systemPrompts: SopSystemPrompt[]
   variablePrompts?: VariablePrompt[]
+  savedSops?: SavedSop[]
   presets: SopPreset[]
   postTemplates: Record<string, PostTemplate[]>
   lastPick: Record<string, SopPick>
@@ -573,6 +617,7 @@ export function collectSopLibrary(): SopLibraryExport {
     directions: state.directions,
     systemPrompts: state.systemPrompts,
     variablePrompts: state.variablePrompts,
+    savedSops: state.savedSops,
     presets: state.presets,
     postTemplates: state.postTemplates,
     lastPick: state.lastPick,
@@ -614,6 +659,7 @@ export function mergeSopLibrary(library?: SopLibraryExport | null) {
       directions: mergeById(state.directions, library.directions),
       systemPrompts: mergeById(state.systemPrompts, library.systemPrompts),
       variablePrompts: mergeById(state.variablePrompts, library.variablePrompts),
+      savedSops: mergeById(state.savedSops, library.savedSops),
       presets: mergeById(state.presets, library.presets),
       postTemplates,
       lastPick: { ...state.lastPick, ...(library.lastPick ?? {}) },

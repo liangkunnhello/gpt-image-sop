@@ -4,6 +4,7 @@ import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
 import { directionPath, useSopStore } from '../lib/sopStore'
+import { productIdForDirection } from '../lib/applyPostTemplate'
 import { channelLabel } from '../lib/channel'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
@@ -27,6 +28,7 @@ import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashI
 import ViewportTooltip from './ViewportTooltip'
 import { CommentBadge } from './CommentMarks'
 import InspectConfigModal from './InspectConfigModal'
+import SopSupplementModal from './SopSupplementModal'
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -51,9 +53,12 @@ export default function DetailModal() {
   const [sopEditing, setSopEditing] = useState(false)
   /** 图片 ↔ 提示词对照视图 */
   const [pairOpen, setPairOpen] = useState(false)
+  /** 用 SOP 再补一批图的弹窗 */
+  const [supplementOpen, setSupplementOpen] = useState(false)
   /** 缩略图缩放倍率：1 = 按目标列宽自适应，拖滑块可无级放大缩小 */
   const [galleryZoom, setGalleryZoom] = useState(1)
   const sopDirections = useSopStore((s) => s.directions)
+  const addSavedSop = useSopStore((s) => s.addSavedSop)
   const [now, setNow] = useState(Date.now())
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
@@ -507,6 +512,28 @@ export default function DetailModal() {
     await handleOpenFolder(variant === 'original' ? 'images' : 'finished')
   }
 
+  /**
+   * 把这张卡的 SOP 存进库。
+   *
+   * 按「这张卡所属产品」存（跟系统提示词同粒度），这样这个产品下所有方向都能选到；
+   * 反过来，任务没归属方向就没有产品可挂，这时提示用户先归属而不是存成孤儿数据。
+   */
+  const handleSaveSopToLibrary = () => {
+    const content = (task?.sopText ?? '').trim()
+    if (!task || !content) return
+    const productId = productIdForDirection(sopDirections, task.sopDirectionId)
+    if (!productId) {
+      showToast('这张卡还没归属方向，先指定「产品-方向」再存 SOP', 'error')
+      return
+    }
+    const fallbackName = (task.sopName || '生图 SOP').slice(0, 40)
+    const name = window.prompt('存进 SOP 库的名字', fallbackName)?.trim()
+    if (!name) return
+    addSavedSop(productId, name.slice(0, 60), content)
+    const productName = sopDirections.find((node) => node.id === productId)?.name ?? '该产品'
+    showToast(`已存进「${productName}」的 SOP 库：${name}`, 'success')
+  }
+
   const handleDelete = () => {
     setDetailTaskId(null)
     setConfirmDialog({
@@ -683,7 +710,7 @@ export default function DetailModal() {
       <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
       <div
         ref={modalRef}
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
+        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] w-full max-w-[92rem] max-h-[92vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
@@ -697,7 +724,7 @@ export default function DetailModal() {
         </div>
 
         {/* 左侧：图片 */}
-        <div className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
+        <div className="md:w-[56%] md:min-w-0 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
           {task.status === 'done' && outputLen > 0 && (currentOutputImageId || task.outputImages.length > 0) && (
             <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
               {currentOutputImageId && (
@@ -1237,7 +1264,7 @@ export default function DetailModal() {
         </div>
 
         {/* 右侧：信息 */}
-        <div className="md:w-1/2 w-full p-5 overflow-y-auto overscroll-contain flex flex-col">
+        <div className="md:w-[44%] md:min-w-0 w-full p-5 overflow-y-auto overflow-x-hidden overscroll-contain flex flex-col">
           <button
             onClick={() => setDetailTaskId(null)}
             className="absolute top-3 right-3 hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.06] transition text-gray-400 z-10 md:block"
@@ -1297,8 +1324,17 @@ export default function DetailModal() {
                   {channelLabel(task.channel)}
                 </span>
               </span>
+              {/* 直接用库里 SOP 出图时，来源记在 sopLibraryName 上，不走系统提示词 */}
+              {task.sopLibraryName && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-600">·</span>
+                  <span>
+                    生图 SOP：<span className="font-medium text-teal-600 dark:text-teal-400">{task.sopLibraryName}</span>
+                  </span>
+                </>
+              )}
               {/* 用了哪份系统提示词：只在记录的是名字时才显示，老任务存的是提示词正文首行，跳过 */}
-              {task.sopSystemPrompt && !/^[>#]/.test(task.sopSystemPrompt) && (
+              {!task.sopLibraryName && task.sopSystemPrompt && !/^[>#]/.test(task.sopSystemPrompt) && (
                 <>
                   <span className="text-gray-300 dark:text-gray-600">·</span>
                   <span>
@@ -1332,7 +1368,7 @@ export default function DetailModal() {
                   <button
                     type="button"
                     onClick={() => setSopEditing(true)}
-                    className={`text-xs hover:underline ${
+                    className={`shrink-0 text-xs hover:underline ${
                       task.variableMode
                         ? 'text-violet-600 dark:text-violet-400'
                         : 'text-blue-600 dark:text-blue-400'
@@ -1340,6 +1376,17 @@ export default function DetailModal() {
                   >
                     编辑
                   </button>
+                  {/* 反推出来的好 SOP 直接存进库，下次在输入框选它就能免反推出图 */}
+                  {!task.variableMode && (
+                    <button
+                      type="button"
+                      onClick={handleSaveSopToLibrary}
+                      className="shrink-0 text-xs text-teal-600 hover:underline dark:text-teal-400"
+                      title="把这份 SOP 存进 SOP 库（按这张卡所属产品共享）"
+                    >
+                      存入库
+                    </button>
+                  )}
                 </div>
                 {/* 变量模式：先亮出这一条填进去的具体取值，再看整份策略 */}
                 {task.variableMode && task.variableAssignments && (
@@ -1378,7 +1425,10 @@ export default function DetailModal() {
                   {task.sopText}
                 </div>
                 <div className="border-t border-gray-100 px-3 py-1.5 text-[11px] text-gray-400 dark:border-white/[0.06]">
-                  {task.variableMode ? '变量提示词' : '系统提示词'}：{task.sopSystemPrompt || '(未记录)'} · 第 {task.sopPromptIndex ?? 1} 条提示词
+                  {task.sopLibraryName
+                    ? `SOP 库：${task.sopLibraryName}`
+                    : `${task.variableMode ? '变量提示词' : '系统提示词'}：${task.sopSystemPrompt || '(未记录)'}`}
+                  {' · '}第 {task.sopPromptIndex ?? 1} 条提示词
                   {task.sopDirectionId && ` · 归属：${directionPath(sopDirections, task.sopDirectionId) || '未归属'}`}
                 </div>
               </div>
@@ -1649,20 +1699,33 @@ export default function DetailModal() {
           </div>
 
           {/* 操作按钮 */}
-          <div className="grid grid-cols-4 sm:flex gap-2 pt-4 border-t border-gray-100 dark:border-white/[0.08]">
+          <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-100 dark:border-white/[0.08]">
             <button
               onClick={handleReuse}
-              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"
+              className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"
             >
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
               </svg>
               复用配置
             </button>
+            {/* 只有 SOP 卡才有「再补一批图」的语义：普通卡没有 SOP 可依据 */}
+            {task.sopJobId && task.sopText && (
+              <button
+                onClick={() => setSupplementOpen(true)}
+                title="用这张卡的 SOP（或库里另一份）再写几条提示词，新图补到这张卡下面"
+                className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-teal-50 dark:bg-teal-500/10 text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-500/20 transition text-sm font-medium whitespace-nowrap"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M5 12h14" />
+                </svg>
+                再次生成图片
+              </button>
+            )}
             <button
               onClick={handleEdit}
               disabled={!outputLen}
-              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
+              className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
             >
               <EditIcon className="w-4 h-4 flex-shrink-0" />
               编辑输出
@@ -1673,7 +1736,7 @@ export default function DetailModal() {
               title={canReapplyPost
                 ? '用 AI 原图按当前模板重新后处理，覆盖这次的结果（不重新生图）'
                 : '这个任务没有保留 AI 原图，或开了透明背景，无法再次后处理'}
-              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
+              className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
             >
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6" />
@@ -1683,7 +1746,7 @@ export default function DetailModal() {
             </button>
             <button
               onClick={handleDelete}
-              className="col-span-1 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
+              className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
             >
               <TrashIcon className="w-4 h-4 flex-shrink-0" />
               删除任务
@@ -1695,7 +1758,7 @@ export default function DetailModal() {
                 title={deliveryTarget
                   ? `交付到 ${deliveryTarget.path}（同卡所有提示词的图会写到同一个文件夹）`
                   : '还没配置交付地址，先在左侧「产品-方向」右键配置'}
-                className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
+                className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
               >
                 <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
@@ -1707,6 +1770,14 @@ export default function DetailModal() {
           </div>
         </div>
       </div>
+
+      {supplementOpen && task && (
+        <SopSupplementModal
+          task={task}
+          existingCount={groupTasks.reduce((max, item) => Math.max(max, item.sopPromptIndex ?? 0), 0)}
+          onClose={() => setSupplementOpen(false)}
+        />
+      )}
 
       {showRawUrlsModal && rawImageUrls.length > 0 && (
         <div

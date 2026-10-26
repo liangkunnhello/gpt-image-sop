@@ -27,10 +27,12 @@ import SopSplitModal, { type SopRunOptions } from './SopSplitModal'
 import VariableRunModal, { type VariableRunOptions } from './VariableRunModal'
 import SopPresetPicker, { resolvePickedPreset } from './SopPresetPicker'
 import SopSystemPromptPicker from './SopSystemPromptPicker'
+import SopLibraryPicker from './SopLibraryPicker'
 import VariablePromptPicker from './VariablePromptPicker'
 import PlainImageModeSwitch from './PlainImageModeSwitch'
 import { useInputImageLimit } from '../hooks/useInputImageLimit'
 import { useSopStore } from '../lib/sopStore'
+import { resolveSavedSop } from '../lib/savedSop'
 import { scopeChain } from '../lib/sopScope'
 import { resolvePostTemplates } from '../lib/applyPostTemplate'
 import { parseSizeLimitKb } from '../lib/outputFileSize'
@@ -569,6 +571,7 @@ export default function InputBar() {
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
   const sopPostTemplates = useSopStore((s) => s.postTemplates)
   const sopPresets = useSopStore((s) => s.presets)
+  const savedSops = useSopStore((s) => s.savedSops)
   const sopLastPick = useSopStore((s) => s.lastPick)
   const sopDefaultPick = useSopStore((s) => s.defaultPick)
   const [sopSplitOpen, setSopSplitOpen] = useState(false)
@@ -602,6 +605,10 @@ export default function InputBar() {
   const pickedStyle = currentDirection
     ? resolvePickedPreset(sopPresets, currentDirection.id, sopScopeIds, 'style', sopLastPick, sopDefaultPick)
     : undefined
+  /** 当前方向选中的生图 SOP：有值就不反推，直接照它写提示词 */
+  const pickedSop = currentDirection
+    ? resolveSavedSop(savedSops, sopScopeIds, currentDirection.id, sopLastPick, sopDefaultPick)
+    : undefined
 
   /** 只负责把任务卡推进后台队列，立即返回，不阻塞输入和其他操作 */
   const runSop = useCallback((options: SopRunOptions) => {
@@ -621,6 +628,9 @@ export default function InputBar() {
       imageIds: group.map((img) => img.id),
       systemPromptText: bundle.merged,
       systemPromptName: options.systemPromptName,
+      // 有存档 SOP 就直接用，任务里也就不再记系统提示词，避免详情页显示得对不上
+      sopText: options.sopText,
+      savedSopName: options.savedSopName,
       copyText: bundle.copyText,
       promptsPerGroup: options.promptsPerGroup,
       directionId: options.directionId,
@@ -2078,7 +2088,11 @@ export default function InputBar() {
               picker 自己会显示「未设置」。 */}
           {sopMode && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <SopSystemPromptPicker scopeIds={sopScopeIds} directionId={pickerDirectionId} />
+              {/* 选了库里的 SOP 就直接拿它出图，系统提示词不参与，也就不再显示 */}
+              <SopLibraryPicker scopeIds={sopScopeIds} directionId={pickerDirectionId} />
+              {!pickedSop && (
+                <SopSystemPromptPicker scopeIds={sopScopeIds} directionId={pickerDirectionId} />
+              )}
               <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
               <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
             </div>

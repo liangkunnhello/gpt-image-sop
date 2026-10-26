@@ -42,8 +42,9 @@ const TrashIcon = () => (
 )
 
 /**
- * 提示词库：系统提示词 / 变量提示词 / 卖点 / 风格 四合一弹窗。
+ * 提示词库：系统提示词 / 变量提示词 / 生图 SOP / 卖点 / 风格 五合一弹窗。
  * 系统提示词与变量提示词是两套并行的库，都按产品共享，只是生成提示词的方法不同；
+ * 生图 SOP 是「具体怎么做」的成品流程，选中后直接写提示词出图、跳过反推；
  * 卖点与风格两个模式通用。
  */
 export default function SopLibraryModal() {
@@ -53,6 +54,7 @@ export default function SopLibraryModal() {
   const activeDirectionId = useSopStore((s) => s.activeDirectionId)
   const systemPrompts = useSopStore((s) => s.systemPrompts)
   const variablePrompts = useSopStore((s) => s.variablePrompts)
+  const savedSops = useSopStore((s) => s.savedSops)
   const presets = useSopStore((s) => s.presets)
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
@@ -64,6 +66,9 @@ export default function SopLibraryModal() {
   const addVariablePrompt = useSopStore((s) => s.addVariablePrompt)
   const updateVariablePrompt = useSopStore((s) => s.updateVariablePrompt)
   const removeVariablePrompt = useSopStore((s) => s.removeVariablePrompt)
+  const addSavedSop = useSopStore((s) => s.addSavedSop)
+  const updateSavedSop = useSopStore((s) => s.updateSavedSop)
+  const removeSavedSop = useSopStore((s) => s.removeSavedSop)
   const addPreset = useSopStore((s) => s.addPreset)
   const updatePreset = useSopStore((s) => s.updatePreset)
   const removePreset = useSopStore((s) => s.removePreset)
@@ -81,6 +86,7 @@ export default function SopLibraryModal() {
   const scopeHasItems = (scopeId: string) => {
     if (tab === 'prompt') return systemPrompts.some((item) => item.productId === scopeId)
     if (tab === 'variable') return variablePrompts.some((item) => item.productId === scopeId)
+    if (tab === 'sop') return savedSops.some((item) => item.productId === scopeId)
     return presets.some((item) => item.productId === scopeId && item.kind === tab)
   }
   const productId = activeDirectionId ? scopeWithItems(directions, activeDirectionId, scopeHasItems) : ''
@@ -94,7 +100,9 @@ export default function SopLibraryModal() {
     ? 'promptId'
     : tab === 'variable'
       ? 'variablePromptId'
-      : tab === 'point' ? 'pointId' : 'styleId'
+      : tab === 'sop'
+        ? 'sopId'
+        : tab === 'point' ? 'pointId' : 'styleId'
   const pick = defaultPick[activeDirectionId] ?? lastPick[activeDirectionId] ?? {}
 
   const items: LibraryItem[] = useMemo(() => {
@@ -108,17 +116,23 @@ export default function SopLibraryModal() {
         .filter((item) => item.productId === productId)
         .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
     }
+    if (tab === 'sop') {
+      return savedSops
+        .filter((item) => item.productId === productId)
+        .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
+    }
     return presets
       .filter((item) => item.productId === productId && item.kind === tab)
       .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
-  }, [tab, systemPrompts, variablePrompts, presets, productId])
+  }, [tab, systemPrompts, variablePrompts, savedSops, presets, productId])
 
   const counts = useMemo(() => ({
     prompt: systemPrompts.filter((item) => item.productId === productId).length,
     variable: variablePrompts.filter((item) => item.productId === productId).length,
+    sop: savedSops.filter((item) => item.productId === productId).length,
     point: presets.filter((item) => item.productId === productId && item.kind === 'point').length,
     style: presets.filter((item) => item.productId === productId && item.kind === 'style').length,
-  }), [systemPrompts, variablePrompts, presets, productId])
+  }), [systemPrompts, variablePrompts, savedSops, presets, productId])
 
   // 当前生效的那条：显式「不使用」优先，其次是指定项，最后退回第一条
   const rawPickId = pick[pickKey]
@@ -185,12 +199,14 @@ export default function SopLibraryModal() {
     }
     if (tab === 'prompt') return addSystemPrompt(productId, name, content)
     if (tab === 'variable') return addVariablePrompt(productId, name, content)
+    if (tab === 'sop') return addSavedSop(productId, name, content)
     return addPreset(productId, tab, name, content)
   }
 
   const updateItem = (id: string, patch: { name?: string; content?: string }) => {
     if (tab === 'prompt') updateSystemPrompt(id, patch)
     else if (tab === 'variable') updateVariablePrompt(id, patch)
+    else if (tab === 'sop') updateSavedSop(id, patch)
     else updatePreset(id, patch)
   }
 
@@ -221,6 +237,7 @@ export default function SopLibraryModal() {
   const removeItem = (item: LibraryItem) => {
     if (tab === 'prompt') removeSystemPrompt(item.id)
     else if (tab === 'variable') removeVariablePrompt(item.id)
+    else if (tab === 'sop') removeSavedSop(item.id)
     else removePreset(item.id)
     if (editingId === item.id) setEditingId('')
   }
@@ -339,7 +356,7 @@ export default function SopLibraryModal() {
 
         {/* 分组 tab */}
         <div className="flex shrink-0 items-center gap-1 border-b border-gray-100 px-4 dark:border-white/[0.06]">
-          {(['prompt', 'variable', 'point', 'style'] as const).map((key) => (
+          {(['prompt', 'variable', 'sop', 'point', 'style'] as const).map((key) => (
             <button
               key={key}
               type="button"
@@ -349,21 +366,24 @@ export default function SopLibraryModal() {
                   ? key === 'variable'
                     // 变量提示词是并行的一套库，用紫色和系统提示词区分开
                     ? 'text-violet-600 dark:text-violet-400'
-                    : 'text-blue-600 dark:text-blue-400'
+                    // 生图 SOP 是成品流程，用青色和「说明要什么」的系统提示词区分开
+                    : key === 'sop'
+                      ? 'text-teal-600 dark:text-teal-400'
+                      : 'text-blue-600 dark:text-blue-400'
                   : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
               }`}
             >
               {SOP_LIBRARY_LABEL[key]}
               <span className={`ml-1 text-[10px] tabular-nums ${
                 tab === key
-                  ? key === 'variable' ? 'text-violet-400' : 'text-blue-400'
+                  ? key === 'variable' ? 'text-violet-400' : key === 'sop' ? 'text-teal-400' : 'text-blue-400'
                   : 'text-gray-400'
               }`}>
                 {counts[key]}
               </span>
               {tab === key && (
                 <span className={`absolute inset-x-2 -bottom-px h-0.5 rounded-full ${
-                  key === 'variable' ? 'bg-violet-500' : 'bg-blue-500'
+                  key === 'variable' ? 'bg-violet-500' : key === 'sop' ? 'bg-teal-500' : 'bg-blue-500'
                 }`} />
               )}
             </button>

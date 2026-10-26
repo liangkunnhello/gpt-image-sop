@@ -305,7 +305,7 @@ export default function MarkdownEditor({
             placeholder={placeholder}
             spellCheck={false}
             autoFocus={autoFocus}
-            className={`min-h-0 flex-1 resize-none bg-transparent px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-gray-700 outline-none placeholder:font-sans placeholder:text-gray-300 dark:text-gray-200 dark:placeholder:text-gray-600 ${
+            className={`min-h-0 flex-1 resize-none bg-transparent px-3 py-2.5 [font-family:var(--font-mono-zh)] text-[12.5px] leading-relaxed text-gray-700 outline-none placeholder:font-sans placeholder:text-gray-300 dark:text-gray-200 dark:placeholder:text-gray-600 ${
               mode === 'split' ? 'border-r border-gray-100 dark:border-white/[0.06]' : ''
             }`}
           />

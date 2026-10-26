@@ -3,6 +3,7 @@ import { useSopStore } from '../lib/sopStore'
 import { splitReferenceGroups } from '../lib/sopPipeline'
 import { collectAvoidZones, pickAvoidTemplate } from '../lib/postReserve'
 import { resolveSystemPrompt } from './SopSystemPromptPicker'
+import { resolveSavedSop } from '../lib/savedSop'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { effectiveNodeKind } from '../lib/directionTree'
 import { resolvePostTemplates } from '../lib/applyPostTemplate'
@@ -12,6 +13,10 @@ export interface SopRunOptions {
   systemPromptText: string
   /** 选中的系统提示词名称；选「不使用」时为空，任务上用来追溯用了哪份 */
   systemPromptName?: string
+  /** 已选好的生图 SOP 全文：有值就跳过反推，直接照它写提示词 */
+  sopText?: string
+  /** 这份 SOP 在库里的名字，写进任务卡供详情页追溯 */
+  savedSopName?: string
   groupCount: number
   promptsPerGroup: number
   ignoreCompliance: boolean
@@ -73,6 +78,16 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   )
   const systemPromptText = selectedPrompt?.content || ''
 
+  const savedSops = useSopStore((s) => s.savedSops)
+  /** SOP 模式下选了库里的 SOP：不反推，直接拿它写提示词 */
+  const pickedSop = resolveSavedSop(
+    savedSops,
+    scopeChain(directions, currentDirectionId || productId),
+    currentDirectionId || productId,
+    lastPick,
+    defaultPick,
+  )
+
   const [mode, setMode] = useState<SplitMode>('one')
   const [customCount, setCustomCount] = useState(String(Math.max(1, Math.min(4, imageCount))))
   // SOP 模式下「出几张图」只由这个值决定，跟输入框的数量不再是两个数
@@ -80,7 +95,9 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const setPromptsPerGroup = useSopStore((s) => s.setPromptsPerGroup)
 
   const hasImages = imageCount > 0
-  const groupCount = !hasImages
+  const groupCount = pickedSop
+    ? 1
+    : !hasImages
     ? 1
     : mode === 'one'
       ? 1
@@ -111,7 +128,10 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   // 系统提示词在外面选，这里不再拦截；参考图可以没有（纯卖点生图）。
   // 未归属（productId 为空）也能跑：不挂方向、不继承提示词，靠内置规则反推 SOP；
   // 选了产品就必须落到具体方向，避免「看着选了产品其实没归到任何方向」。
-  const canRun = !productId || Boolean(currentDirectionId)
+  // 选中的 SOP 是空的（新建后还没填正文）时不能开始：否则会静默退回「按参考图反推」，
+  // 用户以为在用这份 SOP，实际出来的是另一套东西
+  const sopReady = !pickedSop || Boolean(pickedSop.content.trim())
+  const canRun = sopReady && (!productId || Boolean(currentDirectionId))
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-6" onClick={onClose}>
@@ -166,17 +186,37 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             </div>
           </div>
 
-          <div className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:bg-white/[0.04] dark:text-gray-400">
-            <span className="shrink-0">系统提示词</span>
-            <span className="min-w-0 flex-1 truncate font-medium text-gray-700 dark:text-gray-200">
-              {selectedPrompt?.name ?? '未使用'}
-            </span>
-            <span className="shrink-0 text-[11px] text-gray-400">
-              {productId ? '在输入框上方切换' : '未归属不继承方向提示词'}
-            </span>
-          </div>
+          {pickedSop ? (
+            <div className="flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-700 dark:border-teal-500/30 dark:bg-teal-500/10 dark:text-teal-300">
+              <span className="shrink-0">生图 SOP</span>
+              <span className="min-w-0 flex-1 truncate font-medium">{pickedSop.name}</span>
+              <span className="shrink-0 text-[11px] opacity-80">
+                {sopReady ? '直接用这份 SOP，跳过反推' : '这份 SOP 还是空的'}
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:bg-white/[0.04] dark:text-gray-400">
+              <span className="shrink-0">系统提示词</span>
+              <span className="min-w-0 flex-1 truncate font-medium text-gray-700 dark:text-gray-200">
+                {selectedPrompt?.name ?? '未使用'}
+              </span>
+              <span className="shrink-0 text-[11px] text-gray-400">
+                {productId ? '在输入框上方切换' : '未归属不继承方向提示词'}
+              </span>
+            </div>
+          )}
 
-          {hasImages ? (
+          {pickedSop ? (
+            <div className={`rounded-lg px-3 py-2 text-[11px] leading-relaxed ${
+              sopReady
+                ? 'bg-gray-50 text-gray-500 dark:bg-white/[0.04] dark:text-gray-400'
+                : 'border border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
+            }`}>
+              {sopReady
+                ? '已有 SOP，参考图不参与本次出图（也不会送去反推），本次出 1 张卡。'
+                : '这份 SOP 还没有正文：打开提示词库把内容填进去，或改用「反推」再出图。'}
+            </div>
+          ) : hasImages ? (
             <div>
               <div className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">分成几个任务卡</div>
               <div className="flex flex-wrap gap-2">
@@ -262,6 +302,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             </span>
           </label>
 
+          {!pickedSop && (
           <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
             <input
               type="checkbox"
@@ -276,6 +317,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               </span>
             </span>
           </label>
+          )}
 
           <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
             <input
@@ -299,15 +341,20 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
 
         <div className="flex items-center justify-between gap-3 border-t border-gray-200 px-5 py-3 dark:border-white/[0.08]">
           <span className="text-[11px] text-gray-400">
-            {hasImages ? '参考图只用于反推 SOP，不参与最终生图。' : '无参考图：只靠系统提示词与卖点反推 SOP。'}
+            {pickedSop
+              ? '按选中的 SOP 直接写提示词，参考图不参与。'
+              : hasImages ? '参考图只用于反推 SOP，不参与最终生图。' : '无参考图：只靠系统提示词与卖点反推 SOP。'}
           </span>
           <button
             type="button"
             disabled={!canRun}
             onClick={() => onConfirm({
               directionId: currentDirectionId,
-              systemPromptText: systemPromptText.trim(),
-              systemPromptName: selectedPrompt?.name ?? '不使用',
+              // 有存档 SOP 时系统提示词不参与出图，留空避免被当成实际依据
+              systemPromptText: pickedSop ? '' : systemPromptText.trim(),
+              systemPromptName: pickedSop ? '不使用' : selectedPrompt?.name ?? '不使用',
+              sopText: pickedSop?.content,
+              savedSopName: pickedSop?.name,
               groupCount,
               promptsPerGroup,
               ignoreCompliance,

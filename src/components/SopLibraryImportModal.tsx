@@ -4,7 +4,7 @@ import { uniqueImportName } from '../lib/libraryImport'
 import { SOP_LIBRARY_LABEL, useSopStore } from '../lib/sopStore'
 import { useStore } from '../store'
 
-export type LibraryImportKind = 'prompt' | 'variable' | 'point' | 'style'
+export type LibraryImportKind = 'prompt' | 'variable' | 'sop' | 'point' | 'style'
 
 interface Props {
   /** 导入到哪个产品 */
@@ -23,7 +23,7 @@ interface Candidate {
   content: string
 }
 
-const KINDS: LibraryImportKind[] = ['prompt', 'variable', 'point', 'style']
+const KINDS: LibraryImportKind[] = ['prompt', 'variable', 'sop', 'point', 'style']
 
 const CloseIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
@@ -39,9 +39,11 @@ export default function SopLibraryImportModal({ targetProductId, targetProductNa
   const directions = useSopStore((s) => s.directions)
   const systemPrompts = useSopStore((s) => s.systemPrompts)
   const variablePrompts = useSopStore((s) => s.variablePrompts)
+  const savedSops = useSopStore((s) => s.savedSops)
   const presets = useSopStore((s) => s.presets)
   const addSystemPrompt = useSopStore((s) => s.addSystemPrompt)
   const addVariablePrompt = useSopStore((s) => s.addVariablePrompt)
+  const addSavedSop = useSopStore((s) => s.addSavedSop)
   const addPreset = useSopStore((s) => s.addPreset)
   const showToast = useStore((s) => s.showToast)
 
@@ -58,6 +60,9 @@ export default function SopLibraryImportModal({ targetProductId, targetProductNa
     ...variablePrompts
       .filter((item) => item.productId === productId)
       .map((item) => ({ key: `variable:${item.id}`, kind: 'variable' as const, id: item.id, name: item.name, content: item.content })),
+    ...savedSops
+      .filter((item) => item.productId === productId)
+      .map((item) => ({ key: `sop:${item.id}`, kind: 'sop' as const, id: item.id, name: item.name, content: item.content })),
     ...presets
       .filter((item) => item.productId === productId && (item.kind === 'point' || item.kind === 'style'))
       .map((item) => ({ key: `${item.kind}:${item.id}`, kind: item.kind as LibraryImportKind, id: item.id, name: item.name, content: item.content })),
@@ -67,9 +72,9 @@ export default function SopLibraryImportModal({ targetProductId, targetProductNa
     const map = new Map<string, Candidate[]>()
     for (const product of products) map.set(product.id, itemsOf(product.id))
     return map
-    // itemsOf 依赖三个 store 数组
+    // itemsOf 依赖几个 store 数组
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, systemPrompts, variablePrompts, presets])
+  }, [products, systemPrompts, variablePrompts, savedSops, presets])
 
   const firstWithItems = products.find((product) => (byProduct.get(product.id)?.length ?? 0) > 0)
   const [sourceId, setSourceId] = useState(firstWithItems?.id ?? products[0]?.id ?? '')
@@ -122,6 +127,7 @@ export default function SopLibraryImportModal({ targetProductId, targetProductNa
     if (!selectedCount) return
     const targetPrompts = new Set(systemPrompts.filter((item) => item.productId === targetProductId).map((item) => item.name))
     const targetVariablePrompts = new Set(variablePrompts.filter((item) => item.productId === targetProductId).map((item) => item.name))
+    const targetSops = new Set(savedSops.filter((item) => item.productId === targetProductId).map((item) => item.name))
     const targetPreset = (kind: LibraryImportKind) => new Set(
       presets.filter((item) => item.productId === targetProductId && item.kind === kind).map((item) => item.name),
     )
@@ -142,6 +148,10 @@ export default function SopLibraryImportModal({ targetProductId, targetProductNa
           const name = uniqueImportName(targetVariablePrompts, item.name, product.name)
           addVariablePrompt(targetProductId, name, item.content)
           targetVariablePrompts.add(name)
+        } else if (item.kind === 'sop') {
+          const name = uniqueImportName(targetSops, item.name, product.name)
+          addSavedSop(targetProductId, name, item.content)
+          targetSops.add(name)
         } else {
           const names = item.kind === 'point' ? pointNames : styleNames
           const name = uniqueImportName(names, item.name, product.name)

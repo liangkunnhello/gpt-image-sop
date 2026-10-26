@@ -5964,6 +5964,8 @@ export async function submitSopTasks(input: {
   sopJobId: string
   sopName: string
   systemPromptName: string
+  /** 直接用存档 SOP 时的名字：写进任务卡，详情页据此显示来源 */
+  savedSopName?: string
   sopText?: string
   directionId?: string
   referenceImageIds?: string[]
@@ -5975,6 +5977,11 @@ export async function submitSopTasks(input: {
   inputImagesPerPrompt?: InputImage[][]
   /** 变量模式图生图：每条提示词各自用到的变量图 id，详情页回看用 */
   variableImageIds?: Array<string | undefined>
+  /**
+   * 提示词序号从几开始。补充生图时这张卡已有若干条，
+   * 不往后顺延会出现两个「第 1 条」，详情页排序和对照就乱了。
+   */
+  promptIndexOffset?: number
   /** 变量模式：附带骨架与逐维取值，SOP 模式不传 */
   variable?: {
     promptName: string
@@ -6020,8 +6027,9 @@ export async function submitSopTasks(input: {
       elapsed: null,
       sopJobId: input.sopJobId,
       sopName: input.sopName,
-      sopPromptIndex: index + 1,
+      sopPromptIndex: (input.promptIndexOffset ?? 0) + index + 1,
       sopSystemPrompt: input.systemPromptName,
+      sopLibraryName: input.savedSopName,
       sopText: input.sopText,
       sopDirectionId: input.directionId || undefined,
       sopReferenceImageIds: input.referenceImageIds,
@@ -6067,12 +6075,20 @@ export async function submitSopTasks(input: {
   return tasks.map((task) => task.id)
 }
 
-/** SOP 模式：先插一张占位卡，让用户点完发送就能看到进度 */
-export function createSopPlaceholder(sopJobId: string, label: string, directionId?: string) {
+/**
+ * SOP 模式：先插一张占位卡，让用户点完发送就能看到进度。
+ * stage 决定卡上的说法 —— 用存档 SOP 出图时并没有在反推，写「正在反推」会误导。
+ */
+export function createSopPlaceholder(
+  sopJobId: string,
+  label: string,
+  directionId?: string,
+  stage: 'reverse' | 'write' = 'reverse',
+) {
   const state = useStore.getState()
   const task: TaskRecord = {
     id: genId(),
-    prompt: `${label} · 正在反推 SOP…`,
+    prompt: `${label} · ${stage === 'write' ? '正在按 SOP 写提示词…' : '正在反推 SOP…'}`,
     params: { ...state.params, n: 1 },
     inputImageIds: [],
     outputImages: [],

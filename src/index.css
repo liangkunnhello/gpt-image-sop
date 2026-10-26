@@ -16,6 +16,14 @@
   /* 字体由 src/lib/fonts.ts 按设置覆盖并按需加载字体文件，这里是脚本运行前的初始值 */
   --font-ui-sans: 'HarmonyOS Sans SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'Maple Mono NF CN', 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+  /*
+   * 中文散文正文用的等宽栈（提示词编辑器、导入对比等）。
+   * 前四个等宽字体都没有中文字形，汉字会落到思源黑体，字距按正常比例排；
+   * 直接用 --font-mono 的话，内置的 Maple Mono NF CN 自带中文字形，会把每个汉字
+   * 塞进「2 倍英文字宽」的全角格子里，字与字之间被撑开一大截。
+   * 思源黑体与 Noto Sans SC 是同一款字体的两个族名，两个都列上，装哪个都能命中。
+   */
+  --font-mono-zh: 'Cascadia Code', 'SF Mono', Menlo, Consolas, 'Source Han Sans SC', 'Source Han Sans CN', 'Noto Sans SC', var(--font-ui-sans), monospace;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);

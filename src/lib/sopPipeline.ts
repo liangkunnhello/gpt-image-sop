@@ -555,6 +555,13 @@ export interface SopJobRequest {
   systemPromptText: string
   /** 选中的系统提示词名称，写入任务卡供详情页追溯 */
   systemPromptName?: string
+  /**
+   * 已存档的 SOP 全文。有值就不反推，直接拿它写提示词：
+   * 这是「选 SOP 直接出图」和「详情页补充生图」两条路径的入口。
+   */
+  sopText?: string
+  /** 这份 SOP 在库里的名字，写进任务卡供详情页追溯 */
+  savedSopName?: string
   /** 卖点原文：写提示词阶段要再单独喂一次，保证图上文字逐字来自这里 */
   copyText?: string
   promptsPerGroup: number
@@ -602,18 +609,21 @@ async function runJob(job: SopJobRequest) {
 
   const sopJobId = `sop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
   // 先占位，用户点完发送立刻能看到这张卡
-  const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId)
+  const presetSop = Boolean(job.sopText?.trim())
+  const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId, presetSop ? 'write' : 'reverse')
 
   try {
-    const sop = await generateSop(
-      profile,
-      job.systemPromptText,
-      job.imageDataUrls,
-      job.ignoreCompliance !== false,
-      job.useImageSellingPoints === true,
-      job.copyText ?? '',
-      job.avoidCta !== false,
-    )
+    // 已存档的 SOP 直接拿来写提示词；没有才按参考图反推
+    const sop = job.sopText?.trim()
+      || await generateSop(
+        profile,
+        job.systemPromptText,
+        job.imageDataUrls,
+        job.ignoreCompliance !== false,
+        job.useImageSellingPoints === true,
+        job.copyText ?? '',
+        job.avoidCta !== false,
+      )
     let prompts = await generatePrompts(
       profile,
       sop,
@@ -648,10 +658,14 @@ async function runJob(job: SopJobRequest) {
     void submitSopTasks({
       sopJobId,
       sopName: sopTitleOf(sop, job.label),
-      systemPromptName: job.systemPromptName?.trim()
-        // 老数据没有名字时退回第一行，至少能看出是哪种提示词
-        || job.systemPromptText.split('\n')[0].slice(0, 24)
-        || '系统提示词',
+      // 用的是存档 SOP 时不记系统提示词，详情页改显示 SOP 名字
+      systemPromptName: job.savedSopName
+        ? ''
+        : job.systemPromptName?.trim()
+          // 老数据没有名字时退回第一行，至少能看出是哪种提示词
+          || job.systemPromptText.split('\n')[0].slice(0, 24)
+          || '系统提示词',
+      savedSopName: job.savedSopName,
       sopText: sop,
       directionId: job.directionId,
       referenceImageIds: job.imageIds,
@@ -714,4 +728,71 @@ export function enqueueSopJobs(jobs: SopJobRequest[]) {
   queue.push(...jobs)
   refreshProgress(jobs[0].label)
   pump()
+}
+
+/** 用一份现成的 SOP 给已有任务卡补充生图的入参 */
+export interface SopSupplementInput {
+  /** 补充到哪张卡：沿用原来的 sopJobId，新图直接挂在这张卡下面 */
+  sopJobId: string
+  sopName: string
+  sopText: string
+  /** 用的是库里某份 SOP 时记它的名字；用本卡原有 SOP 补充时留空 */
+  savedSopName?: string
+  /** 这次补几条提示词（=几张图） */
+  count: number
+  directionId?: string
+  ignoreCompliance?: boolean
+  avoidCta?: boolean
+  /** 这张卡现有多少条提示词：新条目编号从这里往后顺延 */
+  existingCount: number
+}
+
+/**
+ * 用 SOP 给已完成的任务卡补充生图。
+ *
+ * 与 enqueueSopJobs 的区别：这里不反推、也不新建卡，直接按这份 SOP 写 N 条提示词，
+ * 挂到同一个 sopJobId 下，等于给这张卡再补 N 张图。
+ * 返回新任务 id；提示词写失败时抛错，由调用方提示。
+ */
+export async function supplementCardWithSop(input: SopSupplementInput): Promise<string[]> {
+  const sopText = input.sopText.trim()
+  if (!sopText) throw new Error('这份 SOP 是空的，无法补充生图')
+  const state = useStore.getState()
+  const settings = state.settings
+  const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
+  if (!profile) throw new Error('没有可用的接口配置')
+
+  // 与正常出图一致：后处理要叠 Logo / 警示语时，提示词得避开预留区
+  const sopState = useSopStore.getState()
+  const avoidHint = sopState.avoidOverlay === false || state.params.post_process === false
+    ? ''
+    : buildAvoidHint(pickAvoidTemplate(
+      resolvePostTemplates(sopState.postTemplates, sopState.directions, input.directionId).templates,
+      state.params.size,
+    ))
+
+  const count = Math.max(1, Math.min(30, Math.round(input.count) || 1))
+  const prompts = await generatePrompts(
+    profile,
+    sopText,
+    count,
+    input.ignoreCompliance !== false,
+    avoidHint,
+    '',
+    input.avoidCta !== false,
+  )
+  if (!prompts.length) throw new Error('没有得到提示词')
+
+  return await submitSopTasks({
+    sopJobId: input.sopJobId,
+    sopName: input.sopName,
+    // 补充生图不改 SOP 来源，避免把这张卡的「用的是什么」覆盖掉
+    systemPromptName: '',
+    savedSopName: input.savedSopName,
+    sopText,
+    directionId: input.directionId,
+    prompts,
+    promptIndexOffset: input.existingCount,
+    inputSnapshot: { mode: 'sop', fixedImageIds: [], variableImageIds: [] },
+  })
 }

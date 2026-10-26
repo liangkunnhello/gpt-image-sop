@@ -411,6 +411,8 @@ export interface TaskRecord {
   sopPromptIndex?: number
   /** SOP 模式：使用的系统提示词名称，详情页展示用 */
   sopSystemPrompt?: string
+  /** SOP 模式：直接用 SOP 库里的某份 SOP 出图时，记录它的名称（跳过反推） */
+  sopLibraryName?: string
   /** SOP 模式：这次生成依据的 SOP 全文（Markdown），同一 sopJobId 的各任务内容相同 */
   sopText?: string
   /** 归属的「产品-方向」节点 id，用于左侧栏筛选；空表示未归属 */
@@ -493,6 +495,22 @@ export interface SopSystemPrompt {
   /** 旧数据遗留字段，仅用于迁移时定位产品 */
   directionId?: string
   name: string
+  content: string
+  updatedAt: number
+}
+
+/**
+ * 存下来的生图 SOP（与系统提示词同构、同粒度）。
+ *
+ * 系统提示词只说明「要什么」，SOP 是「具体怎么做」：版式、变量池、互斥规则、
+ * 文字规范全在里面。选中一份直接用，跳过每次拖参考图反推那一步。
+ */
+export interface SavedSop {
+  id: string
+  /** 所属产品：同一产品下的所有方向共用这份列表 */
+  productId: string
+  name: string
+  /** SOP 全文（Markdown） */
   content: string
   updatedAt: number
 }
