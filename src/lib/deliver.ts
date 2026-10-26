@@ -18,6 +18,7 @@ import { getStoredImageRecord } from './imageBlob'
 import { resolveDeliveryDir } from './deliveryDir'
 import { createSaveFolder, saveFileToDir, useSaveDir, type SaveDir } from './saveFile'
 import { buildTaskFolderName } from './taskFolderName'
+import { imageSizeFromBytes } from './imageSizeBytes'
 import { isTauri } from './platform'
 import { pickWebFolderRoot, supportsWebFolder, writeFilesToWebFolder } from './webFolder'
 
@@ -34,6 +35,8 @@ export interface DeliverResult {
   ok: boolean
   /** 实际写入的文件数 */
   written: number
+  /** 这次应该写多少张（整卡交付时是全部可交付图的数量），用来识别「只写了部分」 */
+  expected?: number
   /** 交付到的绝对路径（网页版为「根目录名/文件夹名」） */
   location?: string
   /** 文件夹名 */
@@ -74,19 +77,62 @@ export interface DeliverContext {
   fallbackDir?: string
 }
 
-/** 一张卡交付用的文件夹名，规则与下载完全一致 */
-export function cardFolderName(task: TaskRecord, context: DeliverContext): string {
+/**
+ * 一张卡交付用的文件夹名，规则与下载完全一致。
+ *
+ * `sizeOverride` 传「成品文件的真实尺寸」：后处理会把成品重画成模板尺寸，
+ * 用 task.params.size（请求尺寸）命名会和文件实际尺寸对不上。
+ */
+export function cardFolderName(task: TaskRecord, context: DeliverContext, sizeOverride?: string): string {
   const { directions, template, custom } = context
   const nameOf = (id: string) => (id ? directions.find((node) => node.id === id)?.name ?? '' : '')
   const name = buildTaskFolderName(template, {
     date: new Date(task.createdAt),
     product: nameOf(productIdForDirection(directions, task.sopDirectionId)),
     direction: nameOf(task.sopDirectionId ?? ''),
-    size: task.params?.size,
+    size: sizeOverride?.trim() || task.params?.size,
     sopName: task.sopName,
     custom,
   })
   return name || `task-${task.id.slice(0, 8)}`
+}
+
+/**
+ * 成品文件名：序号 + 与文件夹同一套命名模板。
+ *
+ * 为什么要带完整模板而不是只写「序号-尺寸」：交付出去的图会脱离应用单独流转，
+ * 光看文件名要能认出是哪天、哪个产品/方向、多大、哪份 SOP 出的。
+ * 序号取提示词序号（`sopPromptIndex`），保证同一张卡里每个任务的文件名天然不撞，
+ * 不会被 overwrite 覆盖成一张。
+ */
+export function deliverImageFileName(
+  sequence: number,
+  task: TaskRecord,
+  context: DeliverContext,
+  realSize: string,
+  ext: string,
+): string {
+  const stem = cardFolderName(task, context, realSize) || `task-${task.id.slice(0, 8)}`
+  // Windows 单段文件名上限 255，留出扩展名与应对极端长模板的余量
+  const name = `${String(sequence).padStart(2, '0')}-${stem}`.slice(0, 180)
+  return `${name}.${ext}`.replace(/[\\/:*?"<>|]/g, '_')
+}
+
+/**
+ * 这条任务在卡内该占第几号。
+ *
+ * 优先用 `sopPromptIndex`：它与详情页「第 N 条」一致，且同一张卡的多个任务各不相同，
+ * 所以「立即交付」逐个任务写文件时不会互相覆盖。普通任务没有这个字段，
+ * 才退回调用方累加的 offset。
+ */
+function sequenceBase(task: TaskRecord, indexOffset?: number): number {
+  return task.sopPromptIndex && task.sopPromptIndex > 0 ? task.sopPromptIndex - 1 : (indexOffset ?? 0)
+}
+
+/** 从图片字节读真实尺寸，读不出来才退回请求尺寸 */
+function realSizeOf(bytes: Uint8Array, task: TaskRecord): string {
+  const size = imageSizeFromBytes(bytes)
+  return size ? `${size.width}x${size.height}` : (task.params?.size ?? '')
 }
 
 /** 取一张图的可写字节；客户端优先走文件，网页版走 Blob 记录 */
@@ -110,19 +156,20 @@ async function readImageBytes(imageId: string): Promise<{ ext: string; bytes: Ui
   return null
 }
 
-/** 成品文件名：序号-分辨率，与「再次后处理」落盘一致，重跑同名覆盖 */
-function outputFileName(index: number, task: TaskRecord, ext: string): string {
-  const label = (task.params?.size ?? '').trim().replace(/[×*]/g, 'x') || 'auto'
-  return `${String(index + 1).padStart(2, '0')}-${label}.${ext}`.replace(/[\\/:*?"<>|]/g, '_')
-}
-
 /**
  * 把一张任务卡交付到它的交付地址。
  *
  * 同一张卡的多个任务共用文件夹名（cardFolderName 只取卡级信息），
- * 所以每条提示词完成时各交付一次，结果都落在同一个文件夹里，同名覆盖。
+ * 所以每条提示词完成时各交付一次，结果都落在同一个文件夹里。
+ * 文件名带提示词序号，不同任务不会互相覆盖；重跑同一张时同名覆盖。
+ *
+ * `indexOffset`：没有 `sopPromptIndex` 的普通任务，由调用方累加序号用。
  */
-export async function deliverTaskCard(task: TaskRecord, context: DeliverContext): Promise<DeliverResult> {
+export async function deliverTaskCard(
+  task: TaskRecord,
+  context: DeliverContext,
+  options?: { indexOffset?: number },
+): Promise<DeliverResult> {
   const images = deliverableOutputImages(task)
   if (!images.length) return { ok: false, written: 0, nothingToDeliver: true }
 
@@ -130,7 +177,7 @@ export async function deliverTaskCard(task: TaskRecord, context: DeliverContext)
   const targetDir = resolved?.path ?? context.fallbackDir?.trim()
   if (!targetDir) return { ok: false, written: 0, noTarget: true }
 
-  const folder = cardFolderName(task, context)
+  const seqBase = sequenceBase(task, options?.indexOffset)
 
   // 网页版：File System Access，需要用户手势，自动交付时由调用方决定是否跳过
   if (!isTauri) {
@@ -139,14 +186,19 @@ export async function deliverTaskCard(task: TaskRecord, context: DeliverContext)
     if (!root) return { ok: false, written: 0, error: '已取消选择文件夹' }
     const files: Array<{ name: string; blob: Blob }> = []
     let read = 0
-    for (const [index, imageId] of images.entries()) {
+    let firstSize = ''
+    for (const imageId of images) {
       const entry = await readImageBytes(imageId)
       if (!entry) continue
+      const size = realSizeOf(entry.bytes, task)
+      if (!firstSize) firstSize = size
       const blob = new Blob([new Uint8Array(entry.bytes)] as BlobPart[], { type: MIME_BY_EXT[entry.ext] ?? 'image/png' })
-      files.push({ name: outputFileName(read, task, entry.ext), blob })
+      files.push({ name: deliverImageFileName(seqBase + read + 1, task, context, size, entry.ext), blob })
       read += 1
     }
     if (!files.length) return { ok: false, written: 0, error: '没有可交付的图片文件' }
+    // 文件夹名用第一张成品的真实尺寸，不用请求尺寸：后处理会改成品尺寸
+    const folder = cardFolderName(task, context, firstSize)
     try {
       const actual = await writeFilesToWebFolder(root, folder, files)
       return { ok: true, written: files.length, folder: actual, location: `${root.name}/${actual}` }
@@ -154,6 +206,16 @@ export async function deliverTaskCard(task: TaskRecord, context: DeliverContext)
       return { ok: false, written: 0, error: err instanceof Error ? err.message : '写入文件夹失败' }
     }
   }
+
+  // 文件夹名要在建目录之前定下来，先读第一张拿真实尺寸
+  let firstSize = ''
+  for (const imageId of images) {
+    const entry = await readImageBytes(imageId)
+    if (!entry) continue
+    firstSize = realSizeOf(entry.bytes, task)
+    break
+  }
+  const folder = cardFolderName(task, context, firstSize)
 
   let dir: SaveDir
   try {
@@ -176,7 +238,14 @@ export async function deliverTaskCard(task: TaskRecord, context: DeliverContext)
     if (!entry) continue
     try {
       // overwrite=true：重跑时覆盖同名成品，不留「名称 (2)」
-      await saveFileToDir(dir, entry.bytes, outputFileName(written, task, entry.ext), undefined, folderInfo.name, true)
+      await saveFileToDir(
+        dir,
+        entry.bytes,
+        deliverImageFileName(seqBase + written + 1, task, context, realSizeOf(entry.bytes, task), entry.ext),
+        undefined,
+        folderInfo.name,
+        true,
+      )
       written += 1
     } catch (err) {
       console.error('交付写入失败：', err)
@@ -196,13 +265,18 @@ export async function deliverCardGroup(task: TaskRecord, context: DeliverContext
   const group = tasksOfCard(context.tasks, task)
   if (!group.length) return { ok: false, written: 0, error: '找不到这张卡的任务' }
   let written = 0
+  let cursor = 0
+  // 该卡一共该写多少张：写少了要如实报出来，不能只说「已交付 N 张」让人以为全好了
+  const expected = group.reduce((sum, item) => sum + deliverableOutputImages(item).length, 0)
   let last: DeliverResult = { ok: false, written: 0 }
   for (const item of group) {
-    const result = await deliverTaskCard(item, context)
+    // 提示词序号自带唯一编号的走自己的，普通任务用累计游标接着排
+    const result = await deliverTaskCard(item, context, { indexOffset: cursor })
     written += result.written
+    cursor += result.written
     last = result
   }
-  return { ...last, written, ok: written > 0 }
+  return { ...last, written, expected, ok: written > 0 }
 }
 
 /** 供 UI 显示：这张卡的交付地址解析结果（含继承来源） */

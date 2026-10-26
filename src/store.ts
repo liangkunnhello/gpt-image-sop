@@ -2572,7 +2572,13 @@ function scheduleAutoDeliver(task: TaskRecord) {
 function reportDeliverResult(result: DeliverResult) {
   const { showToast } = useStore.getState()
   if (result.ok) {
-    showToast(`已交付 ${result.written} 张到 ${result.location ?? result.folder ?? '交付地址'}`, 'success')
+    const where = result.location ?? result.folder ?? '交付地址'
+    // 张数对不上要直接说，否则用户看到「已交付 1 张」会以为是命令中断
+    if (result.expected && result.written < result.expected) {
+      showToast(`已交付 ${result.written} 张到 ${where}，另有 ${result.expected - result.written} 张读取失败`, 'error')
+      return
+    }
+    showToast(`已交付 ${result.written} 张到 ${where}`, 'success')
     return
   }
   if (result.noTarget) {

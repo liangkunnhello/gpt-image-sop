@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { SopDirectionNode, TaskRecord } from '../types'
 import { resolveDeliveryDir, hasOwnDeliveryDir } from './deliveryDir'
-import { deliverableOutputImages, cardFolderName, tasksOfCard } from './deliver'
+import { deliverableOutputImages, cardFolderName, tasksOfCard, deliverImageFileName } from './deliver'
 
 const DIRECTIONS: SopDirectionNode[] = [
   { id: 'cat-1', parentId: null, name: '保险', kind: 'category' },
@@ -103,5 +103,55 @@ describe('交付的文件范围与命名', () => {
     })
     expect(name).not.toBe('')
     expect(name.length).toBeGreaterThan(0)
+  })
+})
+
+describe('交付的图片文件名', () => {
+  const context = {
+    tasks: [],
+    directions: DIRECTIONS,
+    deliveryDirs: {},
+    template: '{product}-{direction}-{size}-{sop}',
+  }
+
+  function cardTask(patch: Partial<TaskRecord> = {}) {
+    return makeTask({ sopDirectionId: 'dir-1', sopName: '月亮图', ...patch })
+  }
+
+  it('序号 + 完整命名模板，尺寸段用成品的真实尺寸', () => {
+    // 请求的是 1024x1024，成品被后处理画成 1080x1920，名字必须反映成品
+    const name = deliverImageFileName(3, cardTask(), context, '1080x1920', 'png')
+    expect(name).toBe('03-百万医疗险-月亮-闪屏-月亮图.png')
+    expect(name).not.toContain('1024x1024')
+  })
+
+  it('同一张卡里不同提示词的图不会撞名', () => {
+    // 30 个任务各交付一张，序号取提示词序号才不会被 overwrite 覆盖成一张
+    const names = Array.from({ length: 30 }, (_, index) => deliverImageFileName(
+      index + 1,
+      cardTask({ id: `t${index}`, sopJobId: 'job-1', sopPromptIndex: index + 1 }),
+      context,
+      '1080x1920',
+      'png',
+    ))
+    expect(new Set(names).size).toBe(30)
+    expect(names[0].startsWith('01-')).toBe(true)
+    expect(names[29].startsWith('30-')).toBe(true)
+  })
+
+  it('序号补两位，超过 99 不截断', () => {
+    expect(deliverImageFileName(7, cardTask(), context, '1024x1024', 'jpg').startsWith('07-')).toBe(true)
+    expect(deliverImageFileName(120, cardTask(), context, '1024x1024', 'jpg').startsWith('120-')).toBe(true)
+  })
+
+  it('模板很长时截断文件名，不超出 Windows 单段上限', () => {
+    const name = deliverImageFileName(1, cardTask(), { ...context, template: 'x'.repeat(400) }, '1024x1024', 'png')
+    expect(name.length).toBeLessThanOrEqual(185)
+    expect(name.endsWith('.png')).toBe(true)
+  })
+
+  it('非法字符不会带进文件名', () => {
+    const name = deliverImageFileName(1, cardTask({ sopName: 'a/b:c*d' }), context, '1024x1024', 'png')
+    expect(name).not.toMatch(/[\\/:*?"<>|]/)
   })
 })
