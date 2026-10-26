@@ -39,7 +39,7 @@ function parseConcurrency(input: string, fallback: number) {
 }
 
 /** 并发数输入框：随弹层挂载，打开时从已保存的值初始化，聚焦输入时实时提示过高的并发数 */
-function ConcurrencyInput({ value, disabled, onCommit }: { value: number; disabled: boolean; onCommit: (value: number) => void }) {
+function ConcurrencyInput({ value, disabled = false, onCommit }: { value: number; disabled?: boolean; onCommit: (value: number) => void }) {
   const [input, setInput] = useState(String(value))
   const [focused, setFocused] = useState(false)
   const latestRef = useRef({ input, value, onCommit })
@@ -146,6 +146,7 @@ export default function InputParamsPanel({
   batchConcurrency,
   batchPromptCount,
   batchProgress,
+  queuedSubmitCount,
   onBatchChange,
   onStopBatch,
 }: {
@@ -206,6 +207,8 @@ export default function InputParamsPanel({
   batchConcurrency: number
   batchPromptCount: number
   batchProgress: BatchProgress | null
+  /** 排队等待提交的批次数：批量进行中再提交会先排队 */
+  queuedSubmitCount: number
   onBatchChange: (patch: BatchSettingsPatch) => void
   onStopBatch: () => void
 }) {
@@ -221,9 +224,10 @@ export default function InputParamsPanel({
   ].filter(Boolean).join(' · ')
   const prefix = (text: string) => <span className="mr-1.5 text-gray-400 dark:text-gray-500">{text}</span>
 
+  const queueSuffix = queuedSubmitCount > 0 ? ` · 排队 ${queuedSubmitCount}` : ''
   const batchSummary = batchProgress
-    ? `${batchProgress.finished}/${batchProgress.total}`
-    : batchEnabled ? `${batchPromptCount} 条` : undefined
+    ? `${batchProgress.finished}/${batchProgress.total}${queueSuffix}`
+    : batchEnabled ? `${batchPromptCount} 条${queueSuffix}` : queuedSubmitCount > 0 ? `排队 ${queuedSubmitCount}` : undefined
 
   return (
     <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2 min-w-0 text-xs">
@@ -489,7 +493,6 @@ export default function InputParamsPanel({
             <span className={ROW_LABEL_CLASS}>多提示词批量提交</span>
             <Switch
               checked={batchEnabled}
-              disabled={Boolean(batchProgress)}
               label="多提示词批量提交"
               onToggle={() => onBatchChange({ batchPromptEnabled: !batchEnabled })}
             />
@@ -506,8 +509,7 @@ export default function InputParamsPanel({
                       { label: '排队', value: 'queue' },
                       { label: '并发', value: 'concurrent' },
                     ]}
-                    disabled={Boolean(batchProgress)}
-                    className={batchProgress ? CONTROL_DISABLED_CLASS : selectClass}
+                    className={selectClass}
                   />
                 </div>
               </div>
@@ -516,7 +518,6 @@ export default function InputParamsPanel({
                   <span className={ROW_LABEL_CLASS}>限制并发数</span>
                   <Switch
                     checked={batchConcurrencyLimited}
-                    disabled={Boolean(batchProgress)}
                     label="限制并发数"
                     onToggle={() => onBatchChange({ batchPromptConcurrencyLimited: !batchConcurrencyLimited })}
                   />
@@ -527,7 +528,6 @@ export default function InputParamsPanel({
                   <span className={ROW_LABEL_CLASS}>并发数</span>
                   <ConcurrencyInput
                     value={batchConcurrency}
-                    disabled={Boolean(batchProgress)}
                     onCommit={(value) => onBatchChange({ batchPromptConcurrency: value })}
                   />
                 </label>

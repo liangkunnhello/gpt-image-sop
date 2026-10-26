@@ -106,6 +106,7 @@ function renderPanel({
         batchConcurrency={1}
         batchPromptCount={0}
         batchProgress={null}
+        queuedSubmitCount={0}
         onBatchChange={() => {}}
         onStopBatch={() => {}}
       />,

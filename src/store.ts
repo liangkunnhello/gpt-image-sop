@@ -30,6 +30,7 @@ import { collectSopLibrary, mergeSopLibrary, useSopStore } from './lib/sopStore'
 import { ALL_SCOPE, filterTasksByScope, scopeNodeIds, type DirectionScope } from './lib/directionScope'
 import { channelForNewTask, channelLabel, taskMatchesChannel } from './lib/channel'
 import { planPlainRequests, type PlainImageMode } from './lib/plainImagePlan'
+import { MAX_PENDING_SUBMISSIONS, queuePositionLabel, submissionDisposition } from './lib/submitQueue'
 import { isTaskUnread } from './lib/unread'
 import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
 import {
@@ -394,6 +395,9 @@ interface AppState {
   /** 正在进行的批量提交进度，仅保存在内存中 */
   batchProgress: BatchProgress | null
   setBatchProgress: (progress: BatchProgress | null) => void
+  /** 排队等待提交的批次数：批量进行中再提交会先排队，当前批结束后自动开始 */
+  queuedSubmitCount: number
+  setQueuedSubmitCount: (count: number) => void
 
   // Agent
   agentConversations: AgentConversation[]
@@ -952,6 +956,8 @@ export const useStore = create<AppState>()(
       setReusedTaskApiModel: (reusedTaskApiModel) => set({ reusedTaskApiModel }),
       batchProgress: null,
       setBatchProgress: (batchProgress) => set({ batchProgress }),
+      queuedSubmitCount: 0,
+      setQueuedSubmitCount: (queuedSubmitCount) => set({ queuedSubmitCount }),
 
       // Agent
       agentConversations: [],
@@ -1879,10 +1885,142 @@ export async function initStore() {
   }
 }
 
-/** 提交新任务 */
-export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean; promptPrefix?: string } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, reusedTaskApiModel, showToast, setConfirmDialog } =
-    useStore.getState()
+/** 提交新任务的选项 */
+interface SubmitOptions {
+  allowFullMask?: boolean
+  useCurrentApiProfileWhenReusedMissing?: boolean
+  promptPrefix?: string
+}
+
+/**
+ * 一次提交用到的全部输入快照。
+ *
+ * 排队重放靠它还原「当初提交的内容」，不受输入框后续改动影响：
+ * 排队期间用户可能已经在写下一批提示词、换图、切归属方向。
+ */
+interface SubmitInput {
+  settings: AppSettings
+  prompt: string
+  inputImages: InputImage[]
+  maskDraft: MaskDraft | null
+  params: TaskParams
+  reusedTaskApiProfileId: string | null
+  reusedTaskApiProfileName: string | null
+  reusedTaskApiProfileMissing: boolean
+  reusedTaskApiModel: string | null
+  /** 归属方向：取提交瞬间的「当前归属」，排队执行时不能按那时的界面状态改判 */
+  directionId: string
+  /** 渠道来源，同样取提交瞬间 */
+  channel: string | null
+  sopMode: boolean
+  variableMode: boolean
+  plainImageMode: PlainImageMode
+  fixedImages: InputImage[]
+}
+
+function captureSubmitInput(): SubmitInput {
+  const state = useStore.getState()
+  const sop = useSopStore.getState()
+  return {
+    settings: state.settings,
+    prompt: state.prompt,
+    inputImages: state.inputImages,
+    maskDraft: state.maskDraft,
+    params: state.params,
+    reusedTaskApiProfileId: state.reusedTaskApiProfileId,
+    reusedTaskApiProfileName: state.reusedTaskApiProfileName,
+    reusedTaskApiProfileMissing: state.reusedTaskApiProfileMissing,
+    reusedTaskApiModel: state.reusedTaskApiModel,
+    directionId: sop.activeDirectionId,
+    channel: state.channelFilter,
+    sopMode: sop.sopMode,
+    variableMode: sop.variableMode,
+    plainImageMode: state.plainImageMode,
+    fixedImages: state.fixedImages,
+  }
+}
+
+/** 待提交队列：批量进行中再提交先排在这里，当前批结束自动依次开始 */
+interface PendingSubmission {
+  options: SubmitOptions
+  input: SubmitInput
+}
+const pendingSubmissions: PendingSubmission[] = []
+/** 正在执行的提交数（存图、遮罩校验那段 await 也算），防连点重复提交 */
+let inFlightSubmissions = 0
+
+function syncQueuedSubmitCount() {
+  useStore.getState().setQueuedSubmitCount(pendingSubmissions.length)
+}
+
+/** 排到队尾后清空输入框，与「提交成功」一致：否则会以为没发出去而反复点 */
+function clearInputAfterQueued(settings: AppSettings) {
+  const state = useStore.getState()
+  if (settings.clearInputAfterSubmit) {
+    state.setPrompt('')
+    state.clearInputImages()
+    state.clearFixedImages()
+  }
+  state.setReusedTaskApiProfile(null)
+}
+
+/**
+ * 提交新任务。
+ *
+ * 批量进行中不直接执行，先排队：打断正在跑的批会让它少出几张，
+ * 多批同时跑又会把渠道并发打满、触发限流。
+ */
+export async function submitTask(options: SubmitOptions = {}, replayInput?: SubmitInput) {
+  const input = replayInput ?? captureSubmitInput()
+  const state = useStore.getState()
+  const busy = Boolean(state.batchProgress) || inFlightSubmissions > 0
+  const disposition = submissionDisposition({ busy, queued: pendingSubmissions.length })
+  if (disposition === 'reject') {
+    state.showToast(`排队已满（${MAX_PENDING_SUBMISSIONS} 个提交），等前面的跑完再提交`, 'error')
+    return
+  }
+  if (disposition === 'queue') {
+    pendingSubmissions.push({ options, input })
+    syncQueuedSubmitCount()
+    state.showToast(`已排到队尾：${queuePositionLabel(pendingSubmissions.length)}`, 'success')
+    clearInputAfterQueued(input.settings)
+    return
+  }
+  await executeSubmit(options, input)
+}
+
+/** 取下一个排队提交执行；正在跑或队列空时什么也不做 */
+function drainPendingSubmissions() {
+  if (inFlightSubmissions > 0) return
+  if (useStore.getState().batchProgress) return
+  const next = pendingSubmissions.shift()
+  if (!next) return
+  syncQueuedSubmitCount()
+  void executeSubmit(next.options, next.input)
+}
+
+/** 清空待提交队列（清空数据时用，避免排队的任务在清空后又冒出来） */
+export function clearPendingSubmissions() {
+  if (!pendingSubmissions.length) return
+  pendingSubmissions.length = 0
+  syncQueuedSubmitCount()
+}
+
+/** 执行体：走到这里说明轮到自己了，不再判断排队 */
+async function executeSubmit(options: SubmitOptions, input: SubmitInput) {
+  inFlightSubmissions += 1
+  try {
+    await runSubmitTask(options, input)
+  } finally {
+    inFlightSubmissions -= 1
+    // 确认弹窗会递归进第二次 executeSubmit，计数归零才轮到队列
+    if (inFlightSubmissions === 0) drainPendingSubmissions()
+  }
+}
+
+async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
+  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, reusedTaskApiModel } = input
+  const { showToast, setConfirmDialog } = useStore.getState()
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
@@ -1899,7 +2037,8 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       confirmText: '使用当前配置提交',
       cancelText: '放弃提交',
       action: () => {
-        void submitTask({ ...options, useCurrentApiProfileWhenReusedMissing: true })
+        // 确认后接着跑同一次提交，输入快照不变
+        void executeSubmit({ ...options, useCurrentApiProfileWhenReusedMissing: true }, input)
       },
         })
         return
@@ -1922,11 +2061,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
 
   const batchPrompts = normalizedSettings.showBatchPrompt && normalizedSettings.batchPromptEnabled ? splitBatchPrompts(prompt) : []
-  if (useStore.getState().batchProgress) {
-    showToast('批量任务进行中，请等待完成或停止后再提交', 'error')
-    return
-  }
-  // 检查通过后立即占位，避免后续 await 期间重复提交启动第二批
+  // 排队在 submitTask 入口就处理了：能走到这里说明当前没有批在跑，直接占位开跑
   const batchId = batchPrompts.length ? beginBatch(batchPrompts.length) : 0
 
   let orderedInputImages = inputImages
@@ -1944,7 +2079,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
           confirmText: '继续提交',
           tone: 'warning',
           action: () => {
-            void submitTask({ allowFullMask: true })
+            void executeSubmit({ allowFullMask: true }, input)
           },
         })
         endBatch(batchId)
@@ -2032,10 +2167,9 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       // 归属取「当前归属」而不是「正在筛选的节点」：
       // 点「未归属」筛选时 activeFilterId 是 __unassigned__ 这种视图标记，
       // 写进任务会变成一个查不到节点的脏方向；点类目筛选也不该把图挂到分组容器上。
-      sopDirectionId: useSopStore.getState().activeDirectionId || undefined,
-      // 渠道跟着当前筛选走：选着「广点通」发送，新卡就该归到广点通，
-      // 否则卡一生成就被当前筛选筛掉，看起来像没归属
-      channel: channelForNewTask(useStore.getState().channelFilter),
+      // 归属与渠道都取提交瞬间的快照：排队执行时界面可能已经切到别的方向/渠道
+      sopDirectionId: input.directionId || undefined,
+      channel: channelForNewTask(input.channel),
       // 恢复输入框用；同一批拆出的请求共用同一份快照
       inputSnapshot: snapshot,
       ...(meta ? {
@@ -2058,13 +2192,12 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const finalPrompt = options.promptPrefix?.trim()
     ? `${options.promptPrefix.trim()}\n\n${prompt.trim()}`
     : prompt.trim()
-  const sopState = useSopStore.getState()
-  const plainPlan = !sopState.sopMode && !sopState.variableMode && !batchPrompts.length
+  const plainPlan = !input.sopMode && !input.variableMode && !batchPrompts.length
     ? planPlainRequests({
-        mode: useStore.getState().plainImageMode,
+        mode: input.plainImageMode,
         count: taskParams.n,
         variableImages: orderedInputImages,
-        fixedImages: useStore.getState().fixedImages,
+        fixedImages: input.fixedImages,
       })
     : null
 
@@ -2073,7 +2206,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     requestBatchId = planBatchId
     // 同一批拆分请求共用一个 jobId，画廊与详情页按它聚合成一张任务卡
     const planJobId = `plain-${genId()}`
-    const planImageMode = useStore.getState().plainImageMode
+    const planImageMode = input.plainImageMode
     const planModeLabel = planImageMode === 'merge' ? '融图' : '批量'
     /**
      * 发送前快照：按分池记录，复用配置时才分得清哪几张进固定图区。
@@ -2084,7 +2217,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       mode: 'plain',
       prompt: prompt.trim(),
       plainImageMode: planImageMode,
-      fixedImageIds: useStore.getState().fixedImages.map((img) => img.id),
+      fixedImageIds: input.fixedImages.map((img) => img.id),
       variableImageIds: orderedInputImages.map((img) => img.id),
     }
     // 批量模式每个请求只带一张参考图。尺寸填 auto 又横竖混排时，渠道会把画幅统一成一个，
@@ -2123,7 +2256,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       const modeLabel = planModeLabel
       const usedCount = plainPlan.reduce((sum, item) => sum + item.images.length, 0)
       // 批量模式下数量就是请求次数，图多出来时要说清楚，否则像是把图吞了
-      const unused = useStore.getState().plainImageMode === 'batch'
+      const unused = input.plainImageMode === 'batch'
         ? Math.max(0, new Set(orderedInputImages.map((item) => item.id)).size - plainPlan.length)
         : 0
       // 尺寸被逐个改写时要说一句，否则用户会疑惑「明明选了自动」
@@ -2153,8 +2286,8 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     const fallbackSnapshot: TaskInputSnapshot = {
       mode: 'plain',
       prompt: prompt.trim(),
-      plainImageMode: useStore.getState().plainImageMode,
-      fixedImageIds: useStore.getState().fixedImages.map((img) => img.id),
+      plainImageMode: input.plainImageMode,
+      fixedImageIds: input.fixedImages.map((img) => img.id),
       variableImageIds: orderedInputImages.map((img) => img.id),
     }
     await startTask(finalPrompt, undefined, undefined, undefined, undefined, fallbackSnapshot)
@@ -2191,6 +2324,8 @@ function endBatch(batchId: number) {
   // 停止后仍在运行的任务恢复单独的完成提示和失败详情
   batchTaskIds.clear()
   useStore.getState().setBatchProgress(null)
+  // 当前批跑完或被停止后，排队中的提交依次开始
+  queueMicrotask(drainPendingSubmissions)
 }
 
 /** 等待任务结束（完成、失败或被删除）或批量被停止；断线待恢复的任务也视为结束，避免卡住队列 */
@@ -2264,8 +2399,14 @@ async function runBatchPrompts(
 export function stopBatchPrompts() {
   const progress = useStore.getState().batchProgress
   if (!progress) return
+  // 点「停止」就是要全停：排队中的提交也一并取消，否则会接着烧额度
+  const queued = pendingSubmissions.length
+  clearPendingSubmissions()
   endBatch(activeBatchId)
-  useStore.getState().showToast(`已停止批量提交，共提交 ${progress.started} / ${progress.total} 条，已开始的任务会继续完成`, 'info')
+  useStore.getState().showToast(
+    `已停止批量提交，共提交 ${progress.started} / ${progress.total} 条，已开始的任务会继续完成${queued > 0 ? `；已取消 ${queued} 个排队提交` : ''}`,
+    'info',
+  )
 }
 
 function getActiveAgentConversation(): AgentConversation {
@@ -5487,6 +5628,8 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   const { setTasks, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
   // 清空后剩余的批量提示词已没有对应的任务、配置或图片，直接结束批量
   if (useStore.getState().batchProgress) endBatch(activeBatchId)
+  // 排队的提交也一并丢掉，否则清空后又自己跑出来
+  clearPendingSubmissions()
 
   if (options.clearTasks) {
     await dbClearTasks()

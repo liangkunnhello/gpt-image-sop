@@ -569,6 +569,42 @@ describe('plain mode batch grouping', () => {
     useSopStore.setState({ sopMode: false, variableMode: false })
   })
 
+  it('批量进行中再提交会排队，等这批结束自动开始', async () => {
+    const first = deferred<Awaited<ReturnType<typeof callImageApi>>>()
+    vi.mocked(callImageApi)
+      .mockReset()
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValue({ images: [], actualParams: {}, actualParamsList: [], revisedPrompts: [] })
+    useStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'test-key',
+        showBatchPrompt: true,
+        batchPromptEnabled: true,
+        batchPromptMode: 'queue',
+      },
+      prompt: 'one\n\n\ntwo',
+      inputImages: [],
+      batchProgress: null,
+    })
+
+    void submitTask()
+    await vi.waitFor(() => expect(useStore.getState().batchProgress).not.toBeNull())
+    const before = useStore.getState().tasks.length
+
+    // 批量还在跑：这次提交不该立刻建任务，而是排队等这批结束
+    useStore.setState({ prompt: '插一条' })
+    await submitTask()
+    expect(useStore.getState().queuedSubmitCount).toBe(1)
+    expect(useStore.getState().tasks).toHaveLength(before)
+
+    // 让这批跑完：结束后队列自动开始
+    first.resolve({ images: [], actualParams: {}, actualParamsList: [], revisedPrompts: [] })
+    await vi.waitFor(() => expect(useStore.getState().queuedSubmitCount).toBe(0))
+    await vi.waitFor(() => expect(useStore.getState().tasks.some((item) => item.prompt?.includes('插一条'))).toBe(true))
+  })
+
   it('把同一批批量请求聚合成一张任务卡，而不是每张图一张卡', async () => {
     useStore.setState({
       inputImages: Array.from({ length: 10 }, (_, index) => pngRef(`plain-${index}`)),

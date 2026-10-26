@@ -119,6 +119,7 @@ export default function InputBar() {
   const setParams = useStore((s) => s.setParams)
   const setSettings = useStore((s) => s.setSettings)
   const batchProgress = useStore((s) => s.batchProgress)
+  const queuedSubmitCount = useStore((s) => s.queuedSubmitCount)
   const settings = useStore((s) => s.settings)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const reusedTaskApiModel = useStore((s) => s.reusedTaskApiModel)
@@ -535,11 +536,11 @@ export default function InputBar() {
   const clearFixedImages = useStore((s) => s.clearFixedImages)
   // 固定图在普通模式融图下有意义；变量模式图生图也用它（这时由三分区面板展示）
   const showFixedImages = plainMode && plainImageMode === 'merge'
-  // 批量进行中暂停画廊和 Agent 的提交，需等待完成或停止后再提交
+  // 批量进行中不再锁提交：新提交会排到队尾，当前批结束后自动开始
   const batchRunning = Boolean(batchProgress)
   // SOP / 变量模式靠参考图与提示词驱动，输入框可以为空，发送按钮常亮（缺图时点一下会提示）
   const canSubmit = Boolean(
-    (sopMode || variableMode || prompt.trim()) && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning,
+    (sopMode || variableMode || prompt.trim()) && hasSubmitApiConfig && !activeAgentIsRunning,
   )
   const batchEnabled = appMode === 'gallery' && settings.showBatchPrompt && settings.batchPromptEnabled
   // 批量进行中始终在画廊显示入口，以便查看进度和停止
@@ -554,9 +555,9 @@ export default function InputBar() {
     ? '停止生成'
     : !hasSubmitApiConfig
     ? '尚未完成 API 配置，请在右上角设置中进行'
-    : appMode === 'agent'
-    ? '画廊批量任务进行中，请等待完成或回到画廊停止后再提交'
-    : '批量任务进行中，请等待完成或停止后再提交'
+    : batchRunning || queuedSubmitCount > 0
+    ? `批量进行中：提交会排队，当前批结束后自动开始${queuedSubmitCount > 0 ? `（已有 ${queuedSubmitCount} 个在排队）` : ''}`
+    : '提交任务'
   const promptPlaceholder = variableMode
     ? '变量模式：可留空，拖入参考图后直接发送...'
     : sopMode
@@ -1994,6 +1995,7 @@ export default function InputBar() {
       batchConcurrency={settings.batchPromptConcurrency}
       batchPromptCount={batchPromptCount}
       batchProgress={batchProgress}
+      queuedSubmitCount={queuedSubmitCount}
       onBatchChange={setSettings}
       onStopBatch={stopBatchPrompts}
     />
@@ -2315,7 +2317,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
@@ -2380,7 +2382,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
