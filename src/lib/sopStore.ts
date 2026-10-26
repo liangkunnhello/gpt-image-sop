@@ -244,7 +244,9 @@ export const useSopStore = create<SopState>()(
       setSopMode: (value) => set({ sopMode: value, variableMode: false }),
       setVariableMode: (value) => set({ variableMode: value, sopMode: false }),
       setPromptsPerGroup: (value) => set({ promptsPerGroup: clampPromptCount(value) }),
-      setVariablesPerCard: (value) => set({ variablesPerCard: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
+      // 与 SOP 模式的条数用同一个上限：变量模式的条数由「骨架 + 变量选项」的数量决定，
+      // 不调模型写文案，本来没有单次输出 token 的约束，30 条是当初随手写的兜底，卡死了真正的产能
+      setVariablesPerCard: (value) => set({ variablesPerCard: clampPromptCount(value) }),
       setVariableSkipExtract: (value) => set({ variableSkipExtract: value }),
       setPostTemplates: (ownerId, templates) => set((state) => ({
         postTemplates: { ...state.postTemplates, [ownerId]: templates },

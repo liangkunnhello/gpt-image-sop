@@ -150,6 +150,24 @@ describe('planFills', () => {
     ]), 3)
     for (const fill of plan.fills) expect(fill.prompt).not.toContain('{{')
   })
+
+  it('允许重复时按设置条数补足，不再被组合池封顶', () => {
+    const plan = planFills(
+      strategy('{{A}}', [{ name: 'A', options: ['a1', 'a2'] }]),
+      10,
+      { allowRepeat: true },
+    )
+    expect(plan.fills).toHaveLength(10)
+    // 只有两种组合，循环复用
+    expect(new Set(plan.fills.map((fill) => fill.prompt)).size).toBe(2)
+    expect(plan.note).toContain('按变量图轮换复出')
+  })
+
+  it('不允许重复时仍然如实截断', () => {
+    const plan = planFills(strategy('{{A}}', [{ name: 'A', options: ['a1', 'a2'] }]), 10)
+    expect(plan.fills).toHaveLength(2)
+    expect(plan.note).toContain('只有 2 种不同结果')
+  })
 })
 
 describe('planStrategyFills', () => {
@@ -180,5 +198,12 @@ describe('planStrategyFills', () => {
   it('没有策略或张数为 0 时返回空', () => {
     expect(planStrategyFills([], 5).fills).toEqual([])
     expect(planStrategyFills(two, 0).fills).toEqual([])
+  })
+
+  it('允许重复时按设置条数出满，多策略平摊后各自循环复用', () => {
+    const { fills } = planStrategyFills(two, 20, { allowRepeat: true })
+    expect(fills).toHaveLength(20)
+    expect(fills.filter((f) => f.strategyName === '策略甲')).toHaveLength(10)
+    expect(fills.filter((f) => f.strategyName === '策略乙')).toHaveLength(10)
   })
 })

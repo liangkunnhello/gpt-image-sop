@@ -21,6 +21,7 @@ import { dedupePrompts, normalizeCopy } from './copyDedupe'
 import { planStrategyFills } from './variableSample'
 import { buildVariableImageHint, planVariableImageAssignments, withVariableImageHint } from './variableImages'
 import { shrinkToDataUrl, SOP_TEXT_MODEL } from './sopPipeline'
+import { clampPromptCount } from './promptLimits'
 
 /** 与 SOP 反推用同一个文本模型 */
 const MODEL_MAX_SIDE = 1024
@@ -662,18 +663,22 @@ async function runJob(job: VariableJobRequest) {
     // planStrategyFills 只会给 1 条（组合池只有 1 种），差异全在变量图上。
     // 注意判的是 dimensions 是否为空、不是「有没有可变化的维度」：
     // 只给了一个选项的变量仍然要填词，否则占位符会被原样发给模型
+    const fillsPerCard = clampPromptCount(job.fillsPerCard)
+    // 有变量图时，组合池铺满后允许循环复出：差异由变量图承担，
+    // 否则用户设 100 张会被组合数量封顶成十几张
+    const allowRepeat = (job.variableImages?.length ?? 0) > 0
     const noVariables = job.skipExtract === true
       && strategies.every((item) => item.dimensions.length === 0)
     const planned = noVariables
       ? {
-        fills: Array.from({ length: Math.max(1, job.fillsPerCard) }, () => ({
+        fills: Array.from({ length: Math.max(1, fillsPerCard) }, () => ({
           strategyName: strategies[0].name,
           assignments: {},
           prompt: strategies[0].skeleton,
         })),
         notes: [] as string[],
       }
-      : planStrategyFills(strategies, job.fillsPerCard)
+      : planStrategyFills(strategies, fillsPerCard, { allowRepeat })
     const { fills } = planned
     const { notes } = planned
     if (!fills.length) throw new Error(`${job.label} 没有得到可用的变量组合`)
@@ -694,9 +699,9 @@ async function runJob(job: VariableJobRequest) {
     for (const fill of fills) {
       const cleaned = dedupePrompts([fill.prompt]).prompts[0]
       if (!cleaned) continue
-      // 直出模式允许同一条提示词配不同变量图：差异本来就来自图，
+      // 直出模式、或有变量图时允许同一条提示词配不同变量图：差异本来就来自图，
       // 按文本去重会把「一张图一条」全砍成一条
-      if (!job.skipExtract && seen.has(cleaned)) continue
+      if (!job.skipExtract && !allowRepeat && seen.has(cleaned)) continue
       seen.add(cleaned)
       picked.push({ prompt: cleaned, fill })
     }

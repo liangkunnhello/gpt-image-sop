@@ -153,8 +153,18 @@ export interface FillPlan {
   note: string
 }
 
+export interface FillPlanOptions {
+  /**
+   * 组合池铺满后仍不够时，循环复用已选组合把条数补足。
+   *
+   * 只有「有变量图」时才该开：差异由变量图承担，同一条提示词配不同变量图是有效出图；
+   * 纯文字变量模式下重复填同一句就是重复图，宁可少出。
+   */
+  allowRepeat?: boolean
+}
+
 /** 单条策略按最远点采样摊出 count 组填词，结果按提示词去重 */
-export function planFills(strategy: VariableStrategy, count: number): FillPlan {
+export function planFills(strategy: VariableStrategy, count: number, options: FillPlanOptions = {}): FillPlan {
   const dims = strategy.dimensions.filter((item) => item.name.trim() && item.options.length > 0)
   const variableDims = effectiveDimensions(dims)
   // 只有 1 个选项的变量不参与采样，但填词时仍然要用它唯一的值
@@ -165,29 +175,43 @@ export function planFills(strategy: VariableStrategy, count: number): FillPlan {
 
   const pool = buildComboPool(variableDims)
   const picks = farthestPointSample(pool, count)
+  // 组合只有这么多种，采样到这里就铺满了。有变量图时可以循环复用，
+  // 否则张数会被组合池封顶 —— 用户设 100 只出 27 张，看起来就是「设置没用」
+  const repeat = options.allowRepeat === true && picks.length > 0 && picks.length < count
+  const targets = repeat
+    ? Array.from({ length: count }, (_, index) => picks[index % picks.length])
+    : picks
 
   const fills: VariableFill[] = []
   const seen = new Set<string>()
-  for (const index of picks) {
+  for (const index of targets) {
     const combo = pool[index]
     const assignments: Record<string, string> = { ...fixed }
     variableDims.forEach((item, dim) => {
       assignments[item.name] = item.options[combo[dim]] ?? item.options[0]
     })
     const prompt = fillSkeleton(strategy.skeleton, assignments).trim()
-    if (!prompt || seen.has(prompt)) continue
+    if (!prompt) continue
+    // 允许重复时不去重：重复的那种组合还要配上不同的变量图才能出图
+    if (!repeat && seen.has(prompt)) continue
     seen.add(prompt)
     fills.push({ strategyName: strategy.name, assignments, prompt })
   }
 
-  const note = count > fills.length
+  const note = !repeat && count > fills.length
     ? `「${strategy.name}」的组合只有 ${fills.length} 种不同结果，按 ${fills.length} 张出`
-    : ''
+    : repeat
+      ? `「${strategy.name}」的组合只有 ${picks.length} 种，其余按变量图轮换复出`
+      : ''
   return { fills, note }
 }
 
 /** 多条策略按张数平摊，余数给前面的策略；跨策略再去一次重 */
-export function planStrategyFills(strategies: VariableStrategy[], total: number): { fills: VariableFill[]; notes: string[] } {
+export function planStrategyFills(
+  strategies: VariableStrategy[],
+  total: number,
+  options: FillPlanOptions = {},
+): { fills: VariableFill[]; notes: string[] } {
   if (!strategies.length || total <= 0) return { fills: [], notes: [] }
 
   const size = Math.min(total, strategies.length)
@@ -199,11 +223,11 @@ export function planStrategyFills(strategies: VariableStrategy[], total: number)
 
   strategies.slice(0, size).forEach((strategy, index) => {
     const want = base + (index < extra ? 1 : 0)
-    const plan = planFills(strategy, want)
+    const plan = planFills(strategy, want, options)
     if (plan.note) notes.push(plan.note)
     for (const fill of plan.fills) {
       // 不同策略偶尔会填出同一句话，这里按最终提示词去重，保证一张卡里不重复
-      if (seen.has(fill.prompt)) continue
+      if (!options.allowRepeat && seen.has(fill.prompt)) continue
       seen.add(fill.prompt)
       fills.push(fill)
     }

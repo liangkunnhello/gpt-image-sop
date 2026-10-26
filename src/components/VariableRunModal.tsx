@@ -8,6 +8,7 @@ import { resolveVariablePrompt } from './VariablePromptPicker'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { effectiveNodeKind } from '../lib/directionTree'
 import { resolvePostTemplates } from '../lib/applyPostTemplate'
+import { MAX_PROMPTS_PER_RUN } from '../lib/promptLimits'
 
 export interface VariableRunOptions {
   directionId: string
@@ -286,12 +287,16 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
             <input
               type="number"
               min={1}
-              max={30}
+              max={MAX_PROMPTS_PER_RUN}
               value={String(variablesPerCard)}
               onChange={(e) => setVariablesPerCard(Number(e.target.value) || 1)}
               className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
             />
-            <span className="text-[11px] text-gray-400">按最远点采样挑组合，共约 {actualCardCount * variablesPerCard} 张</span>
+            <span className="text-[11px] text-gray-400">
+              按最远点采样挑组合，共约 {actualCardCount * variablesPerCard} 张
+              {variableCount > 0 && '；组合不够时循环复出，靠变量图区分'}
+              ，上限 {MAX_PROMPTS_PER_RUN}（防误填）
+            </span>
           </div>
 
           <div className="rounded-lg border border-violet-100 bg-violet-50/50 px-3 py-2 text-[11px] leading-relaxed text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/[0.08] dark:text-violet-300">
