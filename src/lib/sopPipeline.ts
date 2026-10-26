@@ -9,6 +9,7 @@ import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
 import { dedupePrompts } from './copyDedupe'
 import { checkPromptCopy, describeCopyIssues } from './copyCheck'
 import { variationCandidates } from './promptVariation'
+import { clampPromptCount, PROMPTS_PER_BATCH } from './promptLimits'
 
 /** 生成 SOP 与提示词所用的文本模型 */
 export const SOP_TEXT_MODEL = 'deepseek-v4.1-flash'
@@ -431,6 +432,11 @@ export interface PromptMessagesInput {
   copyText?: string
   /** 避免按钮等引导点击的仿系统界面设计 */
   avoidCta?: boolean
+  /**
+   * 已经写好的提示词（分批写的时候传已写的那些）。
+   * 只用于让模型避重 —— 条数多到一次写不完时才用得上。
+   */
+  existing?: string[]
 }
 
 /** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
@@ -441,6 +447,7 @@ export function buildPromptMessages({
   avoidHint = '',
   copyText = '',
   avoidCta = false,
+  existing = [],
 }: PromptMessagesInput): { system: string; user: string } {
   const copy = copyText.trim()
   const tail = ignoreCompliance
@@ -451,13 +458,23 @@ export function buildPromptMessages({
   const copyTail = copy
     ? '\n注意：每条提示词用的都是同一份卖点，各张图的卖点完全一致。同一张图里，一份卖点从头到尾只用一遍：一句进了主标题，就不许再出现在副标题、角标、贴片等其他文字位上，也不许换个说法或拆成两行重写。文字位数量按卖点条数来定，多出来的槽位删掉，用图形、色块或留白补位。'
     : ''
+  // 分批写时把已写好的贴给模型：不说清楚它会从第一批的场景重头再来一遍
+  const previous = existing.length
+    ? `\n\n【已经写好的提示词（这一批不得与之重复：场景、机位、主体、色调至少两项要不一样，也不许换个说法重写）】\n${existing.map((item) => `- ${item.slice(0, 80)}`).join('\n')}`
+    : ''
   return {
     system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta),
-    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${reserve}`,
+    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}${previous}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${reserve}`,
   }
 }
 
-/** 第二步：SOP → 多条具体提示词 */
+/**
+ * 第二步：SOP → 多条具体提示词。
+ *
+ * 条数超过单次输出能力时**自动分批**：每批 `PROMPTS_PER_BATCH` 条，
+ * 把已写好的贴给模型避重，跨批去重后凑满 target 为止。
+ * `onProgress(written, total)` 每批回调一次，供界面显示「正在写 24/100」。
+ */
 export async function generatePrompts(
   profile: ApiProfile,
   sopText: string,
@@ -466,24 +483,55 @@ export async function generatePrompts(
   avoidHint = '',
   copyText = '',
   avoidCta = false,
+  onProgress?: (written: number, total: number) => void,
 ): Promise<string[]> {
-  const messages = buildPromptMessages({ sopText, count, ignoreCompliance, avoidHint, copyText, avoidCta })
-  const raw = await chat(
-    profile,
-    [
-      { role: 'system', content: messages.system },
-      { role: 'user', content: messages.user },
-    ],
-    // 条数多时写得更久，超时要跟着放宽，否则正常的长输出会被中断
-    240,
-    tokensForPrompts(count),
-    // 发散交给 SOP 的变量池与互斥规则，这里保持稳定采样，避免 SOP 之外的随机漂移
-    0.4,
-  )
-  const prompts = parseNumberedList(raw)
-  // 规则层要求「同一张图里每种卖点只出现一次」，但模型可能写重；
-  // 这里做确定性兜底：同一句卖点在一张图里重复出现时，只保留第一次。
-  return copyText.trim() ? dedupePrompts(prompts).prompts : prompts
+  const total = clampPromptCount(count)
+  const prompts: string[] = []
+  const seen = new Set<string>()
+  // 模型偶尔少写几条，多给两轮机会；轮数封顶避免一直写不出来时死循环
+  const maxTries = Math.ceil(total / PROMPTS_PER_BATCH) * 2 + 2
+  let tries = 0
+
+  while (prompts.length < total && tries < maxTries) {
+    tries += 1
+    const need = Math.min(PROMPTS_PER_BATCH, total - prompts.length)
+    const messages = buildPromptMessages({
+      sopText,
+      count: need,
+      ignoreCompliance,
+      avoidHint,
+      copyText,
+      avoidCta,
+      // 只带最近几批：全量贴进去会把上下文顶爆，而最近写的最容易撞车
+      existing: prompts.slice(-PROMPTS_PER_BATCH * 3),
+    })
+    const raw = await chat(
+      profile,
+      [
+        { role: 'system', content: messages.system },
+        { role: 'user', content: messages.user },
+      ],
+      // 条数多时写得更久，超时要跟着放宽，否则正常的长输出会被中断
+      240,
+      tokensForPrompts(need),
+      // 发散交给 SOP 的变量池与互斥规则，这里保持稳定采样，避免 SOP 之外的随机漂移
+      0.4,
+    )
+    const parsed = parseNumberedList(raw)
+    // 规则层要求「同一张图里每种卖点只出现一次」，但模型可能写重；
+    // 这里做确定性兜底：同一句卖点在一张图里重复出现时，只保留第一次。
+    const batch = copyText.trim() ? dedupePrompts(parsed).prompts : parsed
+    // 跨批去重：不同批次偶尔会给出几乎一模一样的一条，逐字相同就丢掉
+    for (const prompt of batch) {
+      const key = prompt.replace(/\s+/g, ' ').trim()
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      prompts.push(prompt)
+      if (prompts.length >= total) break
+    }
+    onProgress?.(Math.min(prompts.length, total), total)
+  }
+  return prompts
 }
 
 /**
@@ -632,6 +680,12 @@ async function runJob(job: SopJobRequest) {
       avoidHint,
       job.copyText ?? '',
       job.avoidCta !== false,
+      // 一大批要写很久，占位卡上直接显示进度，比一直停在「正在写提示词」安心
+      job.promptsPerGroup > PROMPTS_PER_BATCH
+        ? (written, total) => updateTaskInStore(placeholderId, {
+          prompt: `${job.label} · 正在写提示词（${written}/${total}）`,
+        })
+        : undefined,
     )
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
 
@@ -771,7 +825,7 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
       state.params.size,
     ))
 
-  const count = Math.max(1, Math.min(30, Math.round(input.count) || 1))
+  const count = clampPromptCount(input.count)
   const prompts = await generatePrompts(
     profile,
     sopText,
@@ -780,6 +834,12 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
     avoidHint,
     '',
     input.avoidCta !== false,
+    // 条数多时分批写，界面上要能看出还在推进，不然像卡死了
+    count > PROMPTS_PER_BATCH
+      ? (written, total) => {
+        useStore.getState().showToast(`正在按 SOP 写提示词：${written}/${total} 条…`, 'info')
+      }
+      : undefined,
   )
   if (!prompts.length) throw new Error('没有得到提示词')
 

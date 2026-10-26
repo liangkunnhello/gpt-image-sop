@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { SavedSop, SopDirectionNode, SopSystemPrompt, VariablePrompt } from '../types'
 import type { PostTemplate } from './postTemplate'
+import { clampPromptCount } from './promptLimits'
 
 /** 初始树按现有策略分类搭骨架，内容后续在界面里增删 */
 const SEED_DIRECTIONS: SopDirectionNode[] = [
@@ -235,7 +236,7 @@ export const useSopStore = create<SopState>()(
       // 两个模式互斥：开一个就把另一个关掉，避免提交时走错分支
       setSopMode: (value) => set({ sopMode: value, variableMode: false }),
       setVariableMode: (value) => set({ variableMode: value, sopMode: false }),
-      setPromptsPerGroup: (value) => set({ promptsPerGroup: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
+      setPromptsPerGroup: (value) => set({ promptsPerGroup: clampPromptCount(value) }),
       setVariablesPerCard: (value) => set({ variablesPerCard: Math.max(1, Math.min(30, Math.round(value) || 1)) }),
       setPostTemplates: (ownerId, templates) => set((state) => ({
         postTemplates: { ...state.postTemplates, [ownerId]: templates },

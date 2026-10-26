@@ -3,6 +3,7 @@ import type { TaskRecord } from '../types'
 import { useStore } from '../store'
 import { directionPath, useSopStore } from '../lib/sopStore'
 import { supplementCardWithSop } from '../lib/sopPipeline'
+import { clampPromptCount, MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from '../lib/promptLimits'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 
 interface Props {
@@ -64,7 +65,7 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
   const submit = () => {
     if (!canRun || !task.sopJobId) return
     setBusy(true)
-    const total = Math.max(1, Math.min(30, Number(count) || 1))
+    const total = clampPromptCount(Number(count) || 1)
     showToast(`正在按 SOP 写 ${total} 条提示词…`, 'info')
     void supplementCardWithSop({
       sopJobId: task.sopJobId,
@@ -141,13 +142,19 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
             <input
               type="number"
               min={1}
-              max={30}
+              max={MAX_PROMPTS_PER_RUN}
               value={count}
               onChange={(event) => setCount(event.target.value)}
-              className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+              className="w-20 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
             />
             <span className="text-[11px] text-gray-400">每条提示词出一张图</span>
           </div>
+          {clampPromptCount(Number(count) || 1) > PROMPTS_PER_BATCH && (
+            <p className="text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+              超过 {PROMPTS_PER_BATCH} 条会分批写提示词（模型一次写不完），
+              张数越多耗时越长；写的过程中界面上会显示进度。
+            </p>
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-gray-100 px-5 py-3 dark:border-white/[0.08]">

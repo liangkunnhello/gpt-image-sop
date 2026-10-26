@@ -7,6 +7,7 @@ import { resolveSavedSop } from '../lib/savedSop'
 import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { effectiveNodeKind } from '../lib/directionTree'
 import { resolvePostTemplates } from '../lib/applyPostTemplate'
+import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from '../lib/promptLimits'
 
 export interface SopRunOptions {
   directionId: string
@@ -264,13 +265,18 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             <input
               type="number"
               min={1}
-              max={30}
+              max={MAX_PROMPTS_PER_RUN}
               value={String(promptsPerGroup)}
               onChange={(e) => setPromptsPerGroup(Number(e.target.value) || 1)}
-              className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+              className="w-20 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
             />
             <span className="text-[11px] text-gray-400">每条提示词出一张，共约 {actualCardCount * promptsPerGroup} 张</span>
           </div>
+          {promptsPerGroup > PROMPTS_PER_BATCH && (
+            <p className="text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+              单卡超过 {PROMPTS_PER_BATCH} 张会分批写提示词，卡上会显示进度；张数越多耗时越长。
+            </p>
+          )}
 
           <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
             <input
