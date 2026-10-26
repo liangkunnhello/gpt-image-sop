@@ -803,13 +803,23 @@ export default function TaskCard({
                   />
                 </svg>
               </TaskActionButton>
+              {/*
+                归属用标签图标，不再用文件夹：同排还有「编辑输出」等动作，
+                文件夹造型容易被当成「打开目录」，跟详情页的交付文件夹按钮撞形。
+              */}
               <TaskActionButton
                 tooltip={task.sopDirectionId ? '修改业务归属' : '设置业务归属'}
                 onClick={() => openAssignForCard(task)}
                 className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7.5A1.5 1.5 0 014.5 6h4l2 2h9A1.5 1.5 0 0121 9.5v8A1.5 1.5 0 0119.5 19h-15A1.5 1.5 0 013 17.5v-10z" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.83z"
+                  />
+                  <circle cx="7" cy="7" r="1.2" fill="currentColor" stroke="none" />
                 </svg>
               </TaskActionButton>
               <TaskActionButton
