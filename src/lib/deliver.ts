@@ -50,14 +50,21 @@ export interface DeliverResult {
 }
 
 /**
- * 一张卡里真正要交付的成品图 id。
+ * 一张卡可交付的成品图。
  *
- * 回收站里的单张图不交付：交付是「对外的成品」，
- * 而进回收站意味着用户已经判定它不要了。
+ * 排除三种：回收站里的、人工改判为不合格的、调用方明确要求排除的（自动质检判不合格）。
+ * 回收站里的不交付：交付是「对外的成品」，进回收站意味着用户已经判定它不要了。
+ * 自动质检结果只存在内存里，所以由调用方算好集合传进来，这个函数保持纯函数。
  */
-export function deliverableOutputImages(task: Pick<TaskRecord, 'outputImages' | 'trashedOutputImages'>): string[] {
+export function deliverableOutputImages(
+  task: Pick<TaskRecord, 'outputImages' | 'trashedOutputImages' | 'qcVerdicts'>,
+  excludeImageIds?: Set<string>,
+) {
   const trashed = new Set(task.trashedOutputImages ?? [])
-  return (task.outputImages ?? []).filter((id) => id && !trashed.has(id))
+  const overrides = task.qcVerdicts ?? {}
+  return (task.outputImages ?? []).filter((id) => (
+    id && !trashed.has(id) && overrides[id] !== 'fail' && !excludeImageIds?.has(id)
+  ))
 }
 
 /** 一张卡的全部任务（同一 sopJobId 归一张卡），未删除的才算 */
@@ -231,9 +238,9 @@ async function readImageBytes(imageId: string): Promise<{ ext: string; bytes: Ui
 export async function deliverTaskCard(
   task: TaskRecord,
   context: DeliverContext,
-  options?: { indexOffset?: number },
+  options?: { indexOffset?: number; excludeImageIds?: Set<string> },
 ): Promise<DeliverResult> {
-  const images = deliverableOutputImages(task)
+  const images = deliverableOutputImages(task, options?.excludeImageIds)
   if (!images.length) return { ok: false, written: 0, nothingToDeliver: true }
 
   const resolved = resolveDeliveryDir(context.deliveryDirs, context.directions, task.sopDirectionId)
@@ -324,17 +331,21 @@ export async function deliverTaskCard(
  * 每条提示词完成时会各自交付自己的那几张图；这里用于「立即交付」这类手动入口，
  * 把同卡的所有任务一次性写全，避免用户手动补最后一张。
  */
-export async function deliverCardGroup(task: TaskRecord, context: DeliverContext): Promise<DeliverResult> {
+export async function deliverCardGroup(
+  task: TaskRecord,
+  context: DeliverContext,
+  options?: { excludeImageIds?: Set<string> },
+): Promise<DeliverResult> {
   const group = tasksOfCard(context.tasks, task)
   if (!group.length) return { ok: false, written: 0, error: '找不到这张卡的任务' }
   let written = 0
   let cursor = 0
   // 该卡一共该写多少张：写少了要如实报出来，不能只说「已交付 N 张」让人以为全好了
-  const expected = group.reduce((sum, item) => sum + deliverableOutputImages(item).length, 0)
+  const expected = group.reduce((sum, item) => sum + deliverableOutputImages(item, options?.excludeImageIds).length, 0)
   let last: DeliverResult = { ok: false, written: 0 }
   for (const item of group) {
     // 提示词序号自带唯一编号的走自己的，普通任务用累计游标接着排
-    const result = await deliverTaskCard(item, context, { indexOffset: cursor })
+    const result = await deliverTaskCard(item, context, { indexOffset: cursor, excludeImageIds: options?.excludeImageIds })
     written += result.written
     cursor += result.written
     last = result

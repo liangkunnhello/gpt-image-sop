@@ -485,6 +485,13 @@ export interface TaskRecord {
    * 被列在这里的图：不参与交付、不在画廊展示，但原图仍在，可从回收站还原。
    */
   trashedOutputImages?: string[]
+  /**
+   * 人工改判的质检结论（imageId → pass / fail）。
+   *
+   * 自动质检结果只存在内存里（刷新就没了），交付过滤要稳定就不能只靠它，
+   * 所以人工改判跟着任务落库；没有改判的图仍然以自动结论为准。
+   */
+  qcVerdicts?: Record<string, 'pass' | 'fail'>
 }
 
 // ===== SOP 模式 =====

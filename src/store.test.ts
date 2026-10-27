@@ -148,9 +148,10 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { addImagesFromFiles, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { addImagesFromFiles, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
-import { cardFolderName } from './lib/deliver'
+import { cardFolderName, deliverableOutputImages } from './lib/deliver'
+import { visibleOutputImages } from './lib/taskState'
 import { proofreadPrompts } from './lib/promptProofread'
 import { groupSopTasks } from './lib/sopGroup'
 
@@ -775,6 +776,59 @@ describe('删任务卡时图片的处理', () => {
     // 生成出来的成品和 AI 原图可再生，跟着任务一起清
     expect(await getImage('gen-out')).toBeUndefined()
     expect(await getImage('ai-src')).toBeUndefined()
+  })
+})
+
+describe('卡片拼起来展示时的回收与改判', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    useStore.setState({ tasks: [], trashedTasks: [], inputImages: [], fixedImages: [], variableImages: [], showToast: vi.fn() })
+  })
+
+  /** 详情页把同一张卡的多个任务拼成一个展示对象，传进来的往往是代表任务 */
+  const makeCard = () => {
+    const leader = task({ id: 'leader', sopJobId: 'job-1', sopPromptIndex: 1, outputImages: ['img-a'], status: 'done' })
+    const sibling = task({ id: 'sibling', sopJobId: 'job-1', sopPromptIndex: 2, outputImages: ['img-b'], status: 'done' })
+    useStore.setState({ tasks: [leader, sibling] })
+    return { leader, sibling }
+  }
+
+  it('在代表任务上点回收，图属于同卡另一条任务也能真的滤掉', async () => {
+    makeCard()
+
+    // 以前直接按代表任务的 id 写，可 leader 身上没有 img-b，写进去也不会被过滤
+    await trashOutputImage('leader', 'img-b')
+
+    const byId = new Map(useStore.getState().tasks.map((item) => [item.id, item]))
+    expect(byId.get('sibling')?.trashedOutputImages).toEqual(['img-b'])
+    expect(byId.get('leader')?.trashedOutputImages).toBeUndefined()
+    expect(visibleOutputImages(byId.get('sibling')!)).toEqual([])
+    expect(visibleOutputImages(byId.get('leader')!)).toEqual(['img-a'])
+  })
+
+  it('一键清理跨任务时按持有者分别写回', async () => {
+    makeCard()
+
+    const removed = await trashOutputImages('leader', ['img-a', 'img-b'])
+
+    expect(removed).toBe(2)
+    const byId = new Map(useStore.getState().tasks.map((item) => [item.id, item]))
+    expect(byId.get('leader')?.trashedOutputImages).toEqual(['img-a'])
+    expect(byId.get('sibling')?.trashedOutputImages).toEqual(['img-b'])
+  })
+
+  it('改判写到图所属的任务上，交付时按它过滤', async () => {
+    makeCard()
+
+    await setImageQcVerdict('leader', 'img-b', 'fail')
+
+    const byId = new Map(useStore.getState().tasks.map((item) => [item.id, item]))
+    expect(byId.get('sibling')?.qcVerdicts).toEqual({ 'img-b': 'fail' })
+    expect(byId.get('leader')?.qcVerdicts).toBeUndefined()
+    // 立即交付只看「不合格就跳过」，人工改判的也生效
+    expect(deliverableOutputImages(byId.get('sibling')!)).toEqual([])
+    expect(deliverableOutputImages(byId.get('leader')!)).toEqual(['img-a'])
   })
 })
 

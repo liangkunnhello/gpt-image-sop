@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import type { ImageComment } from '../types'
-import { createInputImageFromFile, deleteImageIfUnreferenced, trashOutputImage, useStore } from '../store'
+import { createInputImageFromFile, deleteImageIfUnreferenced, setImageQcVerdict, trashOutputImage, useStore } from '../store'
+import { useClipStore } from '../lib/clipSimilarity'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
@@ -330,6 +331,12 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
    */
   const ownerOutputTask = allTasks.find((task) => !task.deletedAt && task.outputImages.includes(imageId))
   const canTrashOutput = Boolean(ownerOutputTask)
+  /** 质检结论：人工改判优先，其次自动质检（只存在内存里） */
+  const clipQc = useClipStore((s) => s.qc)
+  const manualVerdict = ownerOutputTask?.qcVerdicts?.[imageId]
+  const autoVerdict = clipQc[imageId]?.verdict
+  const effectiveVerdict = manualVerdict ?? autoVerdict ?? null
+  const verdictReason = clipQc[imageId]?.reason ?? ''
 
   // 用 ref 追踪最新变换，避免闭包过期
   const scaleRef = useRef(1)
@@ -864,19 +871,69 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
         </>
       )}
 
-      {/* 成品图操作：单张放入图片回收站 */}
+      {/* 成品图操作：质检改判 + 单张放入回收站 */}
       {canTrashOutput && !isZoomed && !showInputActions && (
-        <div className="absolute bottom-8 left-1/2 z-10 flex w-max -translate-x-1/2 items-center gap-2 rounded-2xl bg-white/90 dark:bg-black/60 p-2 backdrop-blur-xl border border-gray-200/80 dark:border-white/15 shadow-2xl transition-colors" onClick={(e) => e.stopPropagation()}>
+        <div className="absolute bottom-8 left-1/2 z-10 flex w-max -translate-x-1/2 items-center gap-1.5 rounded-2xl bg-white/90 dark:bg-black/60 p-2 backdrop-blur-xl border border-gray-200/80 dark:border-white/15 shadow-2xl transition-colors" onClick={(e) => e.stopPropagation()}>
+          <span
+            title={verdictReason || undefined}
+            className={`flex items-center gap-1.5 whitespace-nowrap rounded-xl px-2.5 py-1.5 text-xs font-medium ${
+              effectiveVerdict === 'fail'
+                ? 'bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-400'
+                : effectiveVerdict === 'pass'
+                ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400'
+                : 'bg-gray-100 text-gray-500 dark:bg-white/10 dark:text-gray-300'
+            }`}
+          >
+            质检：{effectiveVerdict === 'fail' ? '不合格' : effectiveVerdict === 'pass' ? '合格' : effectiveVerdict === 'unsure' ? '待定' : '未检查'}
+            {manualVerdict && <span className="text-[10px] opacity-70">（人工）</span>}
+          </span>
           <button
             type="button"
-            className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/15 transition active:scale-95"
+            className={`flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 py-1.5 text-sm font-medium transition active:scale-95 ${
+              effectiveVerdict === 'fail'
+                ? 'text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-500/15'
+                : 'text-gray-700 hover:bg-gray-100 dark:text-white/90 dark:hover:bg-white/15'
+            }`}
+            onClick={() => {
+              const taskId = ownerOutputTask?.id
+              if (!taskId) return
+              // 改判跟着任务落库：交付过滤、一键清理都按这个结论走
+              void setImageQcVerdict(taskId, imageId, effectiveVerdict === 'fail' ? 'pass' : 'fail')
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>{effectiveVerdict === 'fail' ? '标为合格' : '标为不合格'}</span>
+          </button>
+          {manualVerdict && (
+            <button
+              type="button"
+              className="whitespace-nowrap rounded-xl px-2.5 py-1.5 text-xs text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/10 transition"
+              onClick={() => {
+                const taskId = ownerOutputTask?.id
+                if (!taskId) return
+                void setImageQcVerdict(taskId, imageId, null)
+              }}
+            >
+              恢复自动结论
+            </button>
+          )}
+          <button
+            type="button"
+            className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/15 transition active:scale-95"
             onClick={() => {
               const taskId = ownerOutputTask?.id
               if (!taskId) return
               setConfirmDialog({
                 title: '移入图片回收站',
                 message: '这张图会从画廊和交付里移除，原图仍保留，可在「回收站」里还原。',
-                action: () => trashOutputImage(taskId, imageId),
+                action: () => {
+                  // 移走之后关掉灯箱：大图还挂着这张已回收的图，看着像没生效
+                  void trashOutputImage(taskId, imageId).then(() => {
+                    useStore.getState().setLightboxImageId(null)
+                  })
+                },
               })
             }}
           >

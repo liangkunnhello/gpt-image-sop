@@ -2842,8 +2842,23 @@ export async function deliverTaskNow(taskId: string): Promise<DeliverResult> {
   if (!task) return { ok: false, written: 0, error: '任务不存在' }
   if (!isTauri) return { ok: false, written: 0, error: '网页版请用「下载到文件夹」' }
   const context = await buildDeliverContext()
-  const result = await deliverCardGroup(task, context)
+  /**
+   * 有质检就只交合格的：自动质检判「不合格」的整张卡一起排除。
+   * 人工改判过的由 deliverableOutputImages 自己看任务上的 qcVerdicts，这里只处理自动结论。
+   * 待定 / 没跑过质检的照常交付 —— 静默少交比多交一张更麻烦。
+   */
+  const qc = useClipStore.getState().qc
+  const excludeImageIds = new Set<string>()
+  for (const item of tasksOfCard(context.tasks, task)) {
+    for (const id of item.outputImages ?? []) {
+      if (qc[id]?.verdict === 'fail') excludeImageIds.add(id)
+    }
+  }
+  const result = await deliverCardGroup(task, context, { excludeImageIds })
   reportDeliverResult(result)
+  if (excludeImageIds.size && result.ok) {
+    useStore.getState().showToast(`已跳过 ${excludeImageIds.size} 张质检不合格的图`, 'info')
+  }
   return result
 }
 
@@ -5905,17 +5920,114 @@ export async function trashTask(task: TaskRecord) {
  * 只记 id，不动 outputImages：那条数组的下标被 transparentOriginalImages 等字段依赖，
  * 真删元素会让映射错位。被回收的图不再交付、不在画廊出现，原图仍在，可还原。
  */
+/**
+ * 找出真正持有这张成品图的任务。
+ *
+ * 详情页把同一张卡（同 sopJobId）的多条任务拼成一个展示对象，`id` 是代表任务的，
+ * 所以「代表任务」身上可能没有这张图 —— 直接按代表任务去写状态会永远滤不掉，
+ * 表现就是「点了放入回收站没反应」。
+ */
+export function ownerTaskOfOutputImage(imageId: string): TaskRecord | undefined {
+  return useStore.getState().tasks.find((item) => !item.deletedAt && item.outputImages?.includes(imageId))
+}
+
 export async function trashOutputImage(taskId: string, imageId: string) {
   const task = useStore.getState().tasks.find((item) => item.id === taskId)
   if (!task || !imageId) return
-  const current = task.trashedOutputImages ?? []
+  const owner = task.outputImages.includes(imageId) ? task : ownerTaskOfOutputImage(imageId) ?? task
+  const current = owner.trashedOutputImages ?? []
   if (current.includes(imageId)) return
-  const next = { ...task, trashedOutputImages: [...current, imageId] }
+  const next = { ...owner, trashedOutputImages: [...current, imageId] }
   useStore.setState((state) => ({
-    tasks: state.tasks.map((item) => (item.id === taskId ? next : item)),
+    tasks: state.tasks.map((item) => (item.id === owner.id ? next : item)),
   }))
   await putTask(next)
   useStore.getState().showToast('已移入图片回收站，可在回收站里还原', 'success')
+}
+
+/**
+ * 一次把多张成品图移入回收站（「一键清理不合格」用）。
+ *
+ * 逐张调用 trashOutputImage 会写 N 次库、弹 N 个 toast；
+ * 而且卡片里的图可能分属多条任务，这里按「真正持有这张图的任务」分组写回。
+ */
+export async function trashOutputImages(taskId: string, imageIds: string[]): Promise<number> {
+  const base = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!base || !imageIds.length) return 0
+
+  const byOwner = new Map<string, string[]>()
+  for (const id of imageIds) {
+    if (!id) continue
+    const owner = base.outputImages.includes(id) ? base : ownerTaskOfOutputImage(id)
+    if (!owner) continue
+    const list = byOwner.get(owner.id) ?? []
+    list.push(id)
+    byOwner.set(owner.id, list)
+  }
+
+  let total = 0
+  for (const [ownerId, ids] of byOwner) {
+    const owner = useStore.getState().tasks.find((item) => item.id === ownerId)
+    if (!owner) continue
+    const current = new Set(owner.trashedOutputImages ?? [])
+    const adding = ids.filter((id) => !current.has(id))
+    if (!adding.length) continue
+    const next = { ...owner, trashedOutputImages: [...current, ...adding] }
+    useStore.setState((state) => ({
+      tasks: state.tasks.map((item) => (item.id === ownerId ? next : item)),
+    }))
+    await putTask(next)
+    total += adding.length
+  }
+  if (total) useStore.getState().showToast(`已把 ${total} 张移入图片回收站，可在回收站里还原`, 'success')
+  return total
+}
+
+/**
+ * 人工改判某张图的质检结论。
+ *
+ * verdict 传 null 表示清除改判、回到自动结论。
+ * 落库到任务上：自动质检只在内存里，交付过滤不能靠它。
+ * 图属于同卡的哪条任务就写到哪条上（卡片在详情页是拼起来展示的）。
+ */
+export async function setImageQcVerdict(taskId: string, imageId: string, verdict: 'pass' | 'fail' | null) {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task || !imageId) return
+  const owner = task.outputImages.includes(imageId) ? task : ownerTaskOfOutputImage(imageId) ?? task
+  const current = { ...(owner.qcVerdicts ?? {}) }
+  if (verdict) current[imageId] = verdict
+  else delete current[imageId]
+  const next = { ...owner, qcVerdicts: Object.keys(current).length ? current : undefined }
+  useStore.setState((state) => ({
+    tasks: state.tasks.map((item) => (item.id === owner.id ? next : item)),
+  }))
+  await putTask(next)
+  useStore.getState().showToast(
+    verdict === 'fail' ? '已标为不合格，交付时会跳过这张' : verdict === 'pass' ? '已标为合格' : '已恢复按自动质检结论',
+    'success',
+  )
+}
+
+/**
+ * 这张卡判为「不合格」的图。
+ *
+ * 人工改判优先于自动质检：改判成合格的就照交，改判成不合格的即使模型判合格也不交。
+ */
+export function failedOutputImages(task: TaskRecord): string[] {
+  const qc = useClipStore.getState().qc
+  const overrides = task.qcVerdicts ?? {}
+  return (task.outputImages ?? []).filter((id) => {
+    const manual = overrides[id]
+    if (manual) return manual === 'fail'
+    return qc[id]?.verdict === 'fail'
+  })
+}
+
+/** 这张卡某张图的最终质检结论（人工改判优先），没有结论返回 null */
+export function qcVerdictOf(task: TaskRecord, imageId: string): 'pass' | 'fail' | 'unsure' | null {
+  const manual = task.qcVerdicts?.[imageId]
+  if (manual) return manual
+  return useClipStore.getState().qc[imageId]?.verdict ?? null
 }
 
 /** 从图片回收站还原若干张图 */

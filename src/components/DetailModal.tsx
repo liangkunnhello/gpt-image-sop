@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, retryTask, updateSopText, trashTask, trashOutputImage, deliverTaskNow, openDeliveryFolderForTask, resolveTaskDeliveryTarget } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, retryTask, updateSopText, trashTask, trashOutputImage, trashOutputImages, deliverTaskNow, openDeliveryFolderForTask, resolveTaskDeliveryTarget } from '../store'
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
@@ -72,6 +72,8 @@ export default function DetailModal() {
   const [inspecting, setInspecting] = useState(false)
   const [showInspectConfig, setShowInspectConfig] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
+  /** 触屏双击检测：记录上一次点的是哪张、什么时候 */
+  const lastThumbTapRef = useRef<{ id: string; at: number } | null>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
 
@@ -104,6 +106,18 @@ export default function DetailModal() {
       .filter((item) => item.sopJobId === rawTask.sopJobId && !item.sopPlaceholder)
       .sort((a, b) => (a.sopPromptIndex ?? 0) - (b.sopPromptIndex ?? 0))
   }, [rawTask, tasks])
+  /**
+   * 人工改判的质检结论。改判存在「真正持有这张图」的那条任务上，
+   * 而详情页是把同一张卡的多条任务拼起来展示的，所以先摊平成一张 图id → 结论 的表。
+   */
+  const manualQcVerdicts = useMemo(() => {
+    const map: Record<string, 'pass' | 'fail'> = {}
+    const list = groupTasks.length ? groupTasks : (rawTask ? [rawTask] : [])
+    for (const item of list) {
+      for (const [id, verdict] of Object.entries(item.qcVerdicts ?? {})) map[id] = verdict
+    }
+    return map
+  }, [groupTasks, rawTask])
   const task = useMemo(() => {
     if (!rawTask) return null
     if (!rawTask.sopJobId) return rawTask
@@ -383,8 +397,23 @@ export default function DetailModal() {
 
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
 
+  /**
+   * 某张图的最终质检结论：人工改判优先于自动质检。
+   * 自动结论只存在内存里，改判跟着任务落库，所以两处都要看。
+   */
+  const verdictOf = (imageId: string): { verdict: 'pass' | 'fail' | 'unsure'; reason: string } | null => {
+    const manual = manualQcVerdicts[imageId]
+    if (manual) return { verdict: manual, reason: '人工改判' }
+    const auto = clipQc[imageId]
+    return auto ? { verdict: auto.verdict, reason: auto.reason } : null
+  }
+  /** 不合格的图（只算还在画廊里的，已回收的不用再清） */
+  const failedImageIds = visibleOutputImages(task).filter((id) => verdictOf(id)?.verdict === 'fail')
+
   // 检查面板用的聚合结果：质检取最差的一张，重复度取最高的一个
-  const inspectQcList = visibleOutputImages(task).map((id) => clipQc[id]).filter(Boolean)
+  const inspectQcList = visibleOutputImages(task)
+    .map((id) => verdictOf(id))
+    .filter((item): item is { verdict: 'pass' | 'fail' | 'unsure'; reason: string } => Boolean(item))
   const inspectQc = inspectQcList.find((item) => item.verdict === 'fail')
     ?? inspectQcList.find((item) => item.verdict === 'unsure')
     ?? inspectQcList[0]
@@ -879,9 +908,25 @@ export default function DetailModal() {
                         key={slot.imageId}
                         type="button"
                         onClick={() => {
+                          // 单击只选中：右侧参数、工具条都跟着这张走
                           setImageIndex(index)
+                        }}
+                        onDoubleClick={() => {
+                          // 双击才是看大图
                           setLightboxImageId(slot.imageId, visibleOutputImages(task))
                         }}
+                        onTouchEnd={(e) => {
+                          // 触屏没有 dblclick：两次点击间隔 < 300ms 当双击处理
+                          const now = Date.now()
+                          const last = lastThumbTapRef.current
+                          lastThumbTapRef.current = { id: slot.imageId, at: now }
+                          if (last && last.id === slot.imageId && now - last.at < 300) {
+                            e.preventDefault()
+                            lastThumbTapRef.current = null
+                            setLightboxImageId(slot.imageId, visibleOutputImages(task))
+                          }
+                        }}
+                        title="单击选中 · 双击看大图"
                         style={{ breakInside: 'avoid', marginBottom: '8px' }}
                         className={`group relative block w-full overflow-hidden rounded-lg transition-shadow ${index === imageIndex ? 'ring-2 ring-blue-500' : ''}`}
                       >
@@ -907,20 +952,21 @@ export default function DetailModal() {
                         <span className="absolute bottom-1 right-1 rounded bg-black/55 px-1 py-0.5 font-mono text-[9px] leading-none text-white">
                           {index + 1}
                         </span>
-                        {(clipQc[slot.imageId] || clipScores[slot.imageId]) && (
+                        {(verdictOf(slot.imageId) || clipScores[slot.imageId]) && (
                           <div className="absolute bottom-1 left-1 flex items-center gap-1">
-                            {clipQc[slot.imageId] && (
+                            {verdictOf(slot.imageId) && (
                               <span
                                 className={`rounded px-1 py-0.5 text-[9px] font-medium leading-none text-white ${
-                                  clipQc[slot.imageId].verdict === 'fail'
+                                  verdictOf(slot.imageId)!.verdict === 'fail'
                                     ? 'bg-red-500/85'
-                                    : clipQc[slot.imageId].verdict === 'unsure'
+                                    : verdictOf(slot.imageId)!.verdict === 'unsure'
                                       ? 'bg-amber-500/85'
                                       : 'bg-emerald-600/85'
                                 }`}
-                                title={clipQc[slot.imageId].reason || '质检结论'}
+                                title={verdictOf(slot.imageId)!.reason || '质检结论'}
                               >
-                                {clipQc[slot.imageId].verdict === 'fail' ? '不合格' : clipQc[slot.imageId].verdict === 'unsure' ? '待定' : '合格'}
+                                {verdictOf(slot.imageId)!.verdict === 'fail' ? '不合格' : verdictOf(slot.imageId)!.verdict === 'unsure' ? '待定' : '合格'}
+                                {manualQcVerdicts[slot.imageId] ? '·人工' : ''}
                               </span>
                             )}
                             {clipScores[slot.imageId] && (
@@ -1662,6 +1708,27 @@ export default function DetailModal() {
                   ) : (
                     <div className="mt-1.5 text-gray-400 dark:text-gray-500">
                       {inspecting ? '正在检查…' : '还没检查过，点「重新检查」跑一次'}
+                    </div>
+                  )}
+                  {/* 一键清理不合格：图多的时候一张张点回收站太慢 */}
+                  {failedImageIds.length > 0 && (
+                    <div className="mt-2 flex items-center gap-2 border-t border-gray-200/70 pt-2 dark:border-white/[0.06]">
+                      <span className="min-w-0 flex-1 text-[11px] text-gray-500 dark:text-gray-400">
+                        {failedImageIds.length} 张判为不合格，交付时会跳过
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDialog({
+                          title: '清理不合格图片',
+                          message: `把这 ${failedImageIds.length} 张不合格的图移入图片回收站？交付和画廊里都不再出现，需要时可以还原。`,
+                          tone: 'danger',
+                          confirmText: '移入回收站',
+                          action: () => { void trashOutputImages(task.id, failedImageIds) },
+                        })}
+                        className="shrink-0 rounded border border-red-300 px-2 py-0.5 text-[11px] text-red-600 transition hover:bg-red-50 dark:border-red-500/40 dark:text-red-400 dark:hover:bg-red-500/10"
+                      >
+                        清理不合格（{failedImageIds.length}）
+                      </button>
                     </div>
                   )}
                 </div>
