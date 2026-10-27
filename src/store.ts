@@ -541,6 +541,8 @@ function isImageReferencedByState(state: AppState, imageId: string) {
   if (state.tasks.some((task) =>
     task.inputImageIds.includes(imageId) ||
     task.outputImages.includes(imageId) ||
+    // AI 原图是派发 / 再次后处理的源，不能因为成品换了内容就删掉
+    task.sourceImages?.includes(imageId) ||
     task.transparentOriginalImages?.includes(imageId) ||
     task.streamPartialImageIds?.includes(imageId) ||
     task.maskTargetImageId === imageId ||
@@ -2111,7 +2113,19 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
     return
   }
 
-  const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
+  /**
+   * 普通模式带参考图时，「数量」是拆成几个请求（每个请求固定 n=1），
+   * 这时候不该按渠道的单请求上限（OpenAI 10 / fal 4）收，否则批量想跑 100 张直接被砍到 10。
+   * 纯文生图、批量提示词这两条路径会把 n 原样发给渠道，仍然按渠道上限收。
+   */
+  const countsRequests = !batchPrompts.length
+    && !input.sopMode
+    && !input.variableMode
+    && (orderedInputImages.length > 0 || input.fixedImages.length > 0)
+  const normalizedParams = normalizeParamsForSettings(params, requestSettings, {
+    hasInputImages: orderedInputImages.length > 0,
+    countsRequests,
+  })
   const shouldUseTransparentOutput = (normalizedParams.output_format === 'png' || normalizedParams.output_format === 'webp') && normalizedParams.transparent_output
   const taskParams = shouldUseTransparentOutput
     ? getTransparentRequestParams(normalizedParams)
@@ -2648,6 +2662,10 @@ function addTaskReferencedImageIds(target: Set<string>, task: TaskRecord) {
   for (const id of task.inputImageIds || []) target.add(id)
   if (task.maskImageId) target.add(task.maskImageId)
   for (const id of task.outputImages || []) target.add(id)
+  // AI 原图单独存着（派发、再次后处理都要用），不能因为成品换了内容就当孤儿图删掉
+  for (const id of task.sourceImages || []) {
+    if (id) target.add(id)
+  }
   for (const id of task.transparentOriginalImages || []) {
     if (id) target.add(id)
   }
@@ -3045,8 +3063,11 @@ export async function reapplyPostTemplate(taskId: string): Promise<void> {
     }
 
     const folder = finishedFolderFor(item)
+    const trashedBefore = new Set(item.trashedOutputImages ?? [])
     const nextIds: string[] = []
     for (let index = 0; index < sourceUrls.length; index += 1) {
+      // 已进图片回收站的图不重做，也不该被这次重做「复活」
+      if (trashedBefore.has(item.outputImages[index])) continue
       let dataUrl = sourceUrls[index]
       const size = imageSizeFromDataUrl(dataUrl)
       const template = size ? pickTemplateForImage(templates, size.width, size.height, item.channel) : null
@@ -3086,7 +3107,8 @@ export async function reapplyPostTemplate(taskId: string): Promise<void> {
 
     if (!nextIds.length) continue
     oldIds.push(...item.outputImages, ...(item.transparentOriginalImages ?? []))
-    updateTaskInStore(item.id, { outputImages: nextIds })
+    // 回收的旧图这次被跳过、随 oldIds 一起清掉，标记也没有意义了
+    updateTaskInStore(item.id, { outputImages: nextIds, trashedOutputImages: undefined })
     total += nextIds.length
   }
 
@@ -5824,6 +5846,65 @@ export function collectTrashedOutputImages(tasks: TaskRecord[]): Array<{ task: T
   return tasks
     .filter((task) => (task.trashedOutputImages?.length ?? 0) > 0)
     .map((task) => ({ task, imageIds: task.trashedOutputImages ?? [] }))
+}
+
+/**
+ * 彻底删除图片回收站里的图：从成品数组和按序对齐的原图数组里一起摘掉，再删图片本体。
+ *
+ * 三个数组（成品 / AI 原图 / 透明背景原图）是按下标对齐的，
+ * 所以按「保留下来的下标」统一过滤，不能各自 filter，否则后面的图会错拿别人的原图。
+ */
+export async function purgeTrashedOutputImages(taskId: string, imageIds?: string[]): Promise<number> {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task) return 0
+  const targets = new Set(imageIds?.length ? imageIds : task.trashedOutputImages ?? [])
+  if (!targets.size) return 0
+
+  const removedIds = task.outputImages.filter((id) => targets.has(id))
+  const nextOutputs = task.outputImages.filter((id) => !targets.has(id))
+  const nextTrashed = (task.trashedOutputImages ?? []).filter((id) => !targets.has(id))
+  const keptIndexes: number[] = []
+  task.outputImages.forEach((id, index) => {
+    if (!targets.has(id)) keptIndexes.push(index)
+  })
+  // 长度对不上说明这份数组和成品不是同一次生成的，宁可不动它，也别按错位的下标删
+  const pickAligned = (list?: string[]) => (
+    list && list.length === task.outputImages.length ? keptIndexes.map((index) => list[index]) : list
+  )
+  const omitKeys = <T>(record: Record<string, T> | undefined) => {
+    if (!record) return record
+    const next: Record<string, T> = {}
+    for (const [key, value] of Object.entries(record)) {
+      if (!targets.has(key)) next[key] = value
+    }
+    return next
+  }
+
+  updateTaskInStore(taskId, {
+    outputImages: nextOutputs,
+    sourceImages: pickAligned(task.sourceImages),
+    transparentOriginalImages: pickAligned(task.transparentOriginalImages),
+    trashedOutputImages: nextTrashed.length ? nextTrashed : undefined,
+    actualParamsByImage: omitKeys(task.actualParamsByImage),
+    revisedPromptByImage: omitKeys(task.revisedPromptByImage),
+  })
+  await deleteUnreferencedImageIds(targets)
+  return removedIds.length
+}
+
+/** 清空图片回收站：所有被回收的单图都彻底删掉 */
+export async function purgeAllTrashedOutputImages(): Promise<number> {
+  const entries = collectTrashedOutputImages(useStore.getState().tasks)
+  let total = 0
+  for (const entry of entries) {
+    total += await purgeTrashedOutputImages(entry.task.id, entry.imageIds)
+    // 只记了 id、图已经不在了的，顺手把标记清掉，别在回收站里永远挂着
+    const latest = useStore.getState().tasks.find((item) => item.id === entry.task.id)
+    if (latest?.trashedOutputImages?.length) {
+      updateTaskInStore(entry.task.id, { trashedOutputImages: undefined })
+    }
+  }
+  return total
 }
 
 /** 批量把选中的任务归到某个「产品-方向」下，传 null 表示清空归属 */

@@ -1,8 +1,9 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { SopDirectionNode, TaskRecord } from '../types'
 import { useSopStore, directionPath } from '../lib/sopStore'
 import { purgeTrashBatchWithTasks, restoreTrashBatchWithTasks } from '../lib/directionTree'
-import { collectTrashedOutputImages, purgeAllTrashTasks, restoreOutputImages, useStore } from '../store'
+import { collectTrashedOutputImages, purgeAllTrashTasks, purgeAllTrashedOutputImages, purgeTrashedOutputImages, restoreOutputImages, useStore } from '../store'
+import { ensureImageThumbnailCached } from '../lib/imageCache'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { CloseIcon } from './icons'
@@ -11,6 +12,49 @@ const KIND_LABEL: Record<SopDirectionNode['kind'], string> = {
   category: '业务线',
   product: '产品',
   direction: '方向',
+}
+
+/** 回收站里的图片缩略图：只看不还原，点开进灯箱确认是哪几张 */
+function TrashImageThumbs({ ids }: { ids: string[] }) {
+  const setLightboxImageId = useStore((s) => s.setLightboxImageId)
+  const [thumbs, setThumbs] = useState<Array<{ id: string; src: string }>>([])
+  const key = ids.join('|')
+
+  useEffect(() => {
+    let cancelled = false
+    const preview = key ? key.split('|').slice(0, 8) : []
+    if (!preview.length) {
+      setThumbs([])
+      return
+    }
+    void Promise.all(preview.map(async (id) => {
+      const thumb = await ensureImageThumbnailCached(id).catch(() => undefined)
+      return { id, src: thumb?.src || '' }
+    })).then((list) => {
+      if (!cancelled) setThumbs(list.filter((item) => item.src))
+    })
+    return () => { cancelled = true }
+  }, [key])
+
+  if (!thumbs.length) return null
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1">
+      {thumbs.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => setLightboxImageId(item.id, ids)}
+          title="点击查看大图"
+          className="h-10 w-10 overflow-hidden rounded border border-black/5 bg-gray-100 transition-opacity hover:opacity-80 dark:border-white/10 dark:bg-white/[0.06]"
+        >
+          <img src={item.src} alt="" className="h-full w-full object-cover" />
+        </button>
+      ))}
+      {ids.length > thumbs.length && (
+        <span className="text-[10px] text-gray-400">+{ids.length - thumbs.length}</span>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -102,16 +146,23 @@ export default function TrashModal() {
   }
 
   const purgeAll = () => {
-    if (!batches.length) return
+    if (!batches.length && !totalTrashedImages) return
+    const parts = [
+      totalNodes > 0 ? `${totalNodes} 个业务树节点` : '',
+      totalTasks > 0 ? `${totalTasks} 个任务卡` : '',
+      totalTrashedImages > 0 ? `${totalTrashedImages} 张单图` : '',
+    ].filter(Boolean).join('、')
     setConfirmDialog({
       title: '清空回收站',
-      message: `将彻底删除 ${totalNodes} 个业务树节点和 ${totalTasks} 个任务卡${totalImages > 0 ? `（含 ${totalImages} 张图）` : ''}，**无法恢复**。确定继续吗？`,
+      message: `将彻底删除 ${parts}${totalImages > 0 ? `（含 ${totalImages} 张图）` : ''}，**无法恢复**。确定继续吗？`,
       tone: 'danger',
       confirmText: '彻底删除',
       action: () => {
         purgeAllTrash()
         void purgeAllTrashTasks()
-        showToast('回收站已清空', 'success')
+        void purgeAllTrashedOutputImages().then((count) => {
+          showToast(count > 0 ? `回收站已清空，彻底删除 ${count} 张图片` : '回收站已清空', 'success')
+        })
       },
     })
   }
@@ -130,7 +181,7 @@ export default function TrashModal() {
               : '空'}
           </span>
           <div className="flex-1" />
-          {batches.length > 0 && (
+          {(batches.length > 0 || totalTrashedImages > 0) && (
             <button
               type="button"
               onClick={purgeAll}
@@ -154,7 +205,7 @@ export default function TrashModal() {
             <p className="px-2 py-16 text-center text-xs leading-relaxed text-gray-400">
               回收站是空的
               <br />
-              删除方向或任务卡后会先出现在这里，可以随时恢复
+              删除方向或任务卡、在详情页把单张图移入回收站，都会先出现在这里，可以随时恢复
             </p>
           )}
 
@@ -173,6 +224,7 @@ export default function TrashModal() {
                       {task.sopName || task.prompt?.slice(0, 30) || '(无提示词)'}
                     </div>
                     <div className="mt-0.5 text-[10px] text-gray-400">{imageIds.length} 张图已筛出，不再展示与交付</div>
+                    <TrashImageThumbs ids={imageIds} />
                   </div>
                   <button
                     type="button"
@@ -180,6 +232,23 @@ export default function TrashModal() {
                     className="shrink-0 rounded-lg bg-blue-500 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-600"
                   >
                     还原
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDialog({
+                      title: '彻底删除这些图',
+                      message: `将从任务卡里删掉这 ${imageIds.length} 张图并删除图片本体，**无法恢复**。确定继续吗？`,
+                      tone: 'danger',
+                      confirmText: '彻底删除',
+                      action: () => {
+                        void purgeTrashedOutputImages(task.id, imageIds).then((count) => {
+                          showToast(count > 0 ? `已彻底删除 ${count} 张图片` : '这些图片已经不在任务卡里了', 'success')
+                        })
+                      },
+                    })}
+                    className="shrink-0 rounded-lg px-2 py-1 text-[11px] text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-500/10"
+                  >
+                    彻底删除
                   </button>
                 </div>
               ))}
@@ -262,7 +331,7 @@ export default function TrashModal() {
         </div>
 
         <div className="shrink-0 border-t border-gray-100 px-4 py-2 text-[11px] text-gray-400 dark:border-white/[0.06]">
-          删除方向会把它下面的任务卡一起放进来，恢复时也一起回去；图片在回收站期间不会被清理。
+          删除方向会把它下面的任务卡一起放进来，恢复时也一起回去；图片在回收站期间不会被清理，点「彻底删除」或「清空回收站」才真正删掉图片本体。
         </div>
       </div>
     </div>

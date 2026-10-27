@@ -7,7 +7,7 @@ import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolv
 import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
 import { splitBatchPrompts } from '../lib/batchPrompts'
-import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
+import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings, resolveOutputImageLimit } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageComments, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeCodexCliImageSize, normalizeImageSize } from '../lib/size'
 import { planGenerationSize } from '../lib/sizeCapability'
@@ -717,13 +717,23 @@ export default function InputBar() {
   const transparentOutputEnabled = transparentOutputAvailable && showTransparentOutputControl && params.transparent_output
   // 限制大小靠本地重压实现，PNG 无损压不下去，所以只在 JPEG / WebP 下可填
   const sizeLimitDisabled = params.output_format === 'png'
-  const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
+  /**
+   * 普通模式带参考图时，「数量」是拆成几个请求，每个请求固定 n=1，
+   * 所以不该用渠道的单请求上限（OpenAI 10 / fal 4）去卡它。
+   * 纯文生图没有拆分，数量会原样发给渠道，仍然按渠道上限收。
+   */
+  const countsRequests = appMode === 'gallery'
+    && plainMode
+    && (inputImages.length > 0 || fixedImages.length > 0)
+  const outputImageLimit = resolveOutputImageLimit(effectiveSettings, { countsRequests })
   const isFalTextToImage = isFalProvider && inputImages.length === 0
   const nDraftValue = Number(nInput)
   const effectiveNValue = Number.isNaN(nDraftValue) ? params.n : nDraftValue
   const streamConcurrentByN = activeProfile.provider === 'openai' && activeProfile.streamImages === true && !agentAutoImageCount && effectiveNValue > 1
   const nLimitHintText = agentAutoImageCount
     ? 'Agent 模式下数量由模型根据提示词自动决定'
+    : countsRequests
+    ? `普通模式的数量是请求次数，每个请求出 1 张，最多 ${outputImageLimit} 次`
     : isFalProvider
     ? `fal.ai 最大请求数量为 ${outputImageLimit}`
     : `OpenAI 最大请求数量为 ${outputImageLimit}`
@@ -900,12 +910,16 @@ export default function InputBar() {
   }, [agentAutoImageCount, params.n])
 
   useEffect(() => {
-    const normalizedParams = normalizeParamsForSettings(params, effectiveSettings, { hasInputImages: inputImages.length > 0 })
+    // countsRequests 决定数量上限：普通模式带图时数量是请求次数，不能被渠道 n 上限压回 10
+    const normalizedParams = normalizeParamsForSettings(params, effectiveSettings, {
+      hasInputImages: inputImages.length > 0,
+      countsRequests,
+    })
     const patch = getChangedParams(params, normalizedParams)
     if (Object.keys(patch).length) {
       setParams(patch)
     }
-  }, [inputImages.length, params, effectiveSettings, setParams])
+  }, [countsRequests, inputImages.length, params, effectiveSettings, setParams])
 
   useEffect(() => () => {
     if (imageHintTimerRef.current != null) {

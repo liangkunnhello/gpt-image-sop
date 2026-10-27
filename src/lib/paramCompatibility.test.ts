@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_SETTINGS, normalizeSettings } from './apiProfiles'
-import { getOutputImageLimitForSettings, normalizeParamsForSettings } from './paramCompatibility'
+import { getOutputImageLimitForSettings, normalizeParamsForSettings, resolveOutputImageLimit } from './paramCompatibility'
 
 describe('parameter compatibility', () => {
   it('limits OpenAI output count to 10', () => {
@@ -14,6 +14,23 @@ describe('parameter compatibility', () => {
 
     expect(getOutputImageLimitForSettings(settings)).toBe(10)
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 12 }, settings).n).toBe(10)
+  })
+
+  it('普通模式把数量当请求次数时不套用渠道上限', () => {
+    const openAIProfile = createDefaultOpenAIProfile({ apiKey: 'test-key', streamImages: false })
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [openAIProfile],
+      activeProfileId: openAIProfile.id,
+    })
+
+    // 每个拆分请求固定 n=1，数量只是「跑几次」，不该被 10 卡住
+    expect(resolveOutputImageLimit(settings, { countsRequests: true })).toBe(500)
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 120 }, settings, { countsRequests: true }).n).toBe(120)
+    // 防误填：仍然有上限
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 9999 }, settings, { countsRequests: true }).n).toBe(500)
+    // 不带参考图（纯文生图）时数量会原样发给渠道，回到渠道上限
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 120 }, settings).n).toBe(10)
   })
 
   it('limits fal.ai output count to 4', () => {

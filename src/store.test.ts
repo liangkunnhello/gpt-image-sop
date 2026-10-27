@@ -143,7 +143,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { addImagesFromFiles, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { addImagesFromFiles, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { groupSopTasks } from './lib/sopGroup'
 
@@ -649,6 +649,89 @@ describe('plain mode batch grouping', () => {
     await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(2))
 
     expect(useStore.getState().tasks.every((item) => item.params.size === 'auto')).toBe(true)
+  })
+
+  it('批量模式的数量是请求次数，不受渠道单请求上限 10 约束', async () => {
+    useStore.setState({
+      inputImages: Array.from({ length: 3 }, (_, index) => pngRef(`many-${index}`)),
+      params: { ...DEFAULT_PARAMS, size: 'auto', n: 25 },
+    })
+
+    void submitTask()
+    await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(25))
+
+    const tasks = useStore.getState().tasks
+    // 拆出来每个请求只出 1 张，数量只是「跑几次」
+    expect(tasks.every((item) => item.params.n === 1)).toBe(true)
+    expect(groupSopTasks(tasks)[0].prompt).toBe('批量 · 25 张图')
+  })
+
+  it('纯文生图没有拆分，数量仍按渠道单请求上限收', async () => {
+    useStore.setState({
+      inputImages: [],
+      params: { ...DEFAULT_PARAMS, size: 'auto', n: 25 },
+    })
+
+    void submitTask()
+    await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(1))
+
+    expect(useStore.getState().tasks[0].params.n).toBe(10)
+  })
+})
+
+describe('图片回收站的彻底删除', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    useStore.setState({
+      tasks: [],
+      trashedTasks: [],
+      inputImages: [],
+      fixedImages: [],
+      galleryInputDraft: null,
+      showToast: vi.fn(),
+    })
+  })
+
+  it('彻底删除同时摘掉成品与按序对齐的原图，不留空位', async () => {
+    useStore.setState({
+      tasks: [task({
+        id: 'trash-a',
+        outputImages: ['a', 'b', 'c'],
+        sourceImages: ['a-src', 'b-src', 'c-src'],
+        transparentOriginalImages: ['a-t', 'b-t', 'c-t'],
+        trashedOutputImages: ['b'],
+      })],
+    })
+
+    const removed = await purgeTrashedOutputImages('trash-a', ['b'])
+    expect(removed).toBe(1)
+
+    const next = useStore.getState().tasks[0]
+    expect(next.outputImages).toEqual(['a', 'c'])
+    expect(next.sourceImages).toEqual(['a-src', 'c-src'])
+    // 透明背景原图同样按保留的下标过滤，否则 c 会拿到 b 的原图
+    expect(next.transparentOriginalImages).toEqual(['a-t', 'c-t'])
+    expect(next.trashedOutputImages).toBeUndefined()
+  })
+
+  it('清空图片回收站把每张卡的回收图一起删掉', async () => {
+    useStore.setState({
+      tasks: [
+        task({ id: 'trash-b', outputImages: ['x1', 'x2'], trashedOutputImages: ['x1', 'x2'] }),
+        task({ id: 'trash-c', outputImages: ['y1', 'y2'], trashedOutputImages: ['y2'] }),
+        task({ id: 'keep', outputImages: ['z1'] }),
+      ],
+    })
+
+    const total = await purgeAllTrashedOutputImages()
+    expect(total).toBe(3)
+
+    const byId = new Map(useStore.getState().tasks.map((item) => [item.id, item]))
+    expect(byId.get('trash-b')?.outputImages).toEqual([])
+    expect(byId.get('trash-c')?.outputImages).toEqual(['y1'])
+    expect(byId.get('keep')?.outputImages).toEqual(['z1'])
+    expect(useStore.getState().tasks.every((item) => !item.trashedOutputImages?.length)).toBe(true)
   })
 })
 

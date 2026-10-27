@@ -46,6 +46,17 @@ export default function SopDirectionTree() {
   const postTemplates = useSopStore((s) => s.postTemplates)
   const setTrashOpen = useSopStore((s) => s.setTrashOpen)
   const tasks = useStore((s) => s.tasks)
+  const trashedTasks = useStore((s) => s.trashedTasks)
+  /** 回收站里的条目数：删掉的方向节点 + 任务卡 + 详情页单张回收的图 */
+  const trashCount = useMemo(() => {
+    let count = 0
+    for (const node of directions) {
+      if (node.deletedAt) count += 1
+    }
+    count += trashedTasks.length
+    for (const task of tasks) count += task.trashedOutputImages?.length ?? 0
+    return count
+  }, [directions, tasks, trashedTasks])
   const channelFilter = useStore((s) => s.channelFilter)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
@@ -635,12 +646,17 @@ export default function SopDirectionTree() {
                 <button
                   type="button"
                   onClick={() => setTrashOpen(true)}
-                  title="回收站：恢复或彻底删除已删的业务线与任务卡"
-                  className="flex h-5 w-5 items-center justify-center rounded text-gray-300 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-300"
+                  title={trashCount > 0
+                    ? `回收站（${trashCount} 项）：恢复或彻底删除已删的业务线、任务卡与单张图片`
+                    : '回收站：恢复或彻底删除已删的业务线与任务卡'}
+                  className="relative flex h-5 w-5 items-center justify-center rounded text-gray-300 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-300"
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-3 w-3">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={`h-3 w-3 ${trashCount > 0 ? 'text-red-400' : ''}`}>
                     <path strokeLinecap="round" d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" />
                   </svg>
+                  {trashCount > 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-500" />
+                  )}
                 </button>
                 <button
                   type="button"

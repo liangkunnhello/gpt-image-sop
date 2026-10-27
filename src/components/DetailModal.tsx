@@ -18,6 +18,7 @@ import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { downloadImageEntriesAsZip, downloadImageIds, downloadTaskImagesToFolder, downloadTaskImagesToWebFolder, getDownloadErrorMessage, getImageZipEntries, withSaveLocation } from '../lib/downloadImages'
 import { isTauri } from '../lib/platform'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
+import { visibleOutputImages } from '../lib/taskState'
 import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { getApiProviderLabel } from '../lib/apiProfiles'
 import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
@@ -162,10 +163,12 @@ export default function DetailModal() {
   }, [activeStreamPreviewSrc, detailTaskId, imageIndex])
 
   useEffect(() => {
+    // 回收的图不占位，完成态按「可见成品数」收口，否则删掉最后一张后会停在空槽上
+    const visibleCount = task ? visibleOutputImages(task).length : 0
     const count = task?.status === 'running'
       ? streamPreviewItems.length
       : task
-      ? (task.outputErrors?.length ? Math.max(task.params.n, task.outputImages.length + task.outputErrors.length) : task.outputImages.length)
+      ? (task.outputErrors?.length ? Math.max(task.params.n, visibleCount + task.outputErrors.length) : visibleCount)
       : 0
     if (count > 0 && imageIndex >= count) setImageIndex(count - 1)
   }, [imageIndex, streamPreviewItems.length, task, task?.status])
@@ -224,6 +227,9 @@ export default function DetailModal() {
   const allInputImageIds = task?.inputImageIds ?? []
   const outputSlots = useMemo(() => {
     if (!task) return []
+    // 已进图片回收站的图仍留在 outputImages 里（下标被 sourceImages 等字段依赖），
+    // 只在展示层打标记排除，不能真删元素
+    const trashHidden = new Set(task.trashedOutputImages ?? [])
     const outputErrors = task.outputErrors ?? []
     if (outputErrors.length === 0) {
       return task.outputImages.map((imageId, outputImageIndex) => ({
@@ -231,6 +237,7 @@ export default function DetailModal() {
         outputImageIndex,
         imageId,
         error: '',
+        trashed: trashHidden.has(imageId),
       }))
     }
 
@@ -239,13 +246,22 @@ export default function DetailModal() {
     let outputImageIndex = 0
     return Array.from({ length: requestedCount }, (_, requestIndex) => {
       const error = errorsByIndex.get(requestIndex)
-      if (error) return { requestIndex, outputImageIndex: -1, imageId: '', error }
+      if (error) return { requestIndex, outputImageIndex: -1, imageId: '', error, trashed: false }
       const imageId = task.outputImages[outputImageIndex] ?? ''
-      const slot = { requestIndex, outputImageIndex, imageId, error: '' }
+      const slot = { requestIndex, outputImageIndex, imageId, error: '', trashed: trashHidden.has(imageId) }
       outputImageIndex += 1
       return slot
     })
   }, [task])
+  /**
+   * 详情页真正展示的槽位：排掉图片回收站里的图。
+   * 下标在这里重排成「第几张可见图」，outputImageIndex 仍是 outputImages 的下标，
+   * 供原图 / 实际参数这类按原下标对齐的字段使用。
+   */
+  const visibleOutputSlots = useMemo(
+    () => outputSlots.filter((slot) => !slot.trashed),
+    [outputSlots],
+  )
   // 瀑布流：只给「目标列宽」，列数与每列实际宽度交给浏览器按可用空间连续计算
   const galleryTile = useMemo(() => {
     const sizes = (task?.outputImages ?? []).map((id) => imageSizes[id]).filter(Boolean)
@@ -262,7 +278,7 @@ export default function DetailModal() {
   /** 实际目标列宽 = 自适应基准 × 缩放倍率 */
   const galleryTileSize = Math.max(48, Math.round(galleryTile * galleryZoom))
 
-  const currentOutputSlot = outputSlots[imageIndex]
+  const currentOutputSlot = visibleOutputSlots[imageIndex]
   const currentOutputImageId = currentOutputSlot?.imageId || ''
   const currentOutputImageIndex = currentOutputSlot?.outputImageIndex ?? -1
   const currentOutputError = currentOutputSlot?.error || ''
@@ -367,23 +383,24 @@ export default function DetailModal() {
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
 
   // 检查面板用的聚合结果：质检取最差的一张，重复度取最高的一个
-  const inspectQcList = task.outputImages.map((id) => clipQc[id]).filter(Boolean)
+  const inspectQcList = visibleOutputImages(task).map((id) => clipQc[id]).filter(Boolean)
   const inspectQc = inspectQcList.find((item) => item.verdict === 'fail')
     ?? inspectQcList.find((item) => item.verdict === 'unsure')
     ?? inspectQcList[0]
     ?? null
-  const inspectScoreValues = task.outputImages.map((id) => clipScores[id]?.max).filter((v): v is number => typeof v === 'number')
+  const inspectScoreValues = visibleOutputImages(task).map((id) => clipScores[id]?.max).filter((v): v is number => typeof v === 'number')
   const inspectScore = inspectScoreValues.length ? Math.max(...inspectScoreValues) : null
   const showPendingPrompt = isAgentTaskPromptPending(task)
   const isAgentEditTool = task.status === 'done' && String(task.agentToolAction ?? '').toLowerCase() === 'edit'
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
 
-  const outputLen = outputSlots.length
-  // 只有保留过 AI 原图、且不是透明背景的任务才能重跑后处理
+  const outputLen = visibleOutputSlots.length
+  // 只有保留过 AI 原图、且不是透明背景的任务才能重跑后处理。
+  // 对齐判断用 outputImages 全量：重做是按原图整批重来的，与展示上隐藏了几张无关
   const canReapplyPost = Boolean(
     isTauri
-    && outputLen > 0
-    && task?.sourceImages?.length === outputLen
+    && task.outputImages.length > 0
+    && task?.sourceImages?.length === task.outputImages.length
     && task.sourceImages.every(Boolean)
     && !task.transparentOutput,
   )
@@ -459,7 +476,7 @@ export default function DetailModal() {
     setInspecting(true)
     try {
       const entries: Array<{ imageId: string; dataUrl: string }> = []
-      for (const id of task.outputImages) {
+      for (const id of visibleOutputImages(task)) {
         const dataUrl = await ensureImageCached(id)
         if (dataUrl) entries.push({ imageId: id, dataUrl })
       }
@@ -467,7 +484,7 @@ export default function DetailModal() {
       for (const peer of tasks) {
         if (peer.id === task.id || peer.status !== 'done') continue
         if (peer.sopDirectionId !== task.sopDirectionId) continue
-        for (const id of peer.outputImages.slice(0, 2)) {
+        for (const id of visibleOutputImages(peer).slice(0, 2)) {
           const dataUrl = await ensureImageCached(id)
           if (dataUrl) entries.push({ imageId: id, dataUrl })
         }
@@ -679,7 +696,11 @@ export default function DetailModal() {
 
   const handleDownloadAllOutputs = async (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!task?.outputImages?.length) return
+    if (!task) return
+    // 「下载全部」只下还在画廊里的图：回收站里的不参与，否则用户删了又出现在压缩包里
+    const visible = visibleOutputImages(task)
+    if (!visible.length) return
+    const downloadTask = { ...task, outputImages: visible }
 
     try {
       const fileNameBase = `task-${task.id}`
@@ -696,13 +717,13 @@ export default function DetailModal() {
       }
       let result: Awaited<ReturnType<typeof downloadImageIds>>
       if (settings.zipDownloadRoutes.includes('task-detail-all')) {
-        result = await downloadImageEntriesAsZip(getImageZipEntries(task.outputImages, fileNameBase), fileNameBase)
+        result = await downloadImageEntriesAsZip(getImageZipEntries(visible, fileNameBase), fileNameBase)
       } else if (isTauri) {
-        result = await downloadTaskImagesToFolder(task, folderOptions)
+        result = await downloadTaskImagesToFolder(downloadTask, folderOptions)
       } else {
         // 网页端用浏览器的目录权限建文件夹，不支持的浏览器退回单张下载
-        const folderResult = await downloadTaskImagesToWebFolder(task, folderOptions)
-        result = folderResult.webUnsupported ? await downloadImageIds(task.outputImages, fileNameBase) : folderResult
+        const folderResult = await downloadTaskImagesToWebFolder(downloadTask, folderOptions)
+        result = folderResult.webUnsupported ? await downloadImageIds(visible, fileNameBase) : folderResult
       }
       if (result.canceled) return
       if (result.successCount === 0) {
@@ -769,7 +790,7 @@ export default function DetailModal() {
 
         {/* 左侧：图片 */}
         <div className="md:w-[56%] md:min-w-0 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
-          {task.status === 'done' && outputLen > 0 && (currentOutputImageId || task.outputImages.length > 0) && (
+          {task.status === 'done' && outputLen > 0 && (
             <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
               {currentOutputImageId && (
                 <div className="relative group flex">
@@ -812,7 +833,7 @@ export default function DetailModal() {
                   </ViewportTooltip>
                 </div>
               )}
-              {task.outputImages.length > 1 && (
+              {outputLen > 1 && (
                 <div className="relative group flex">
                   <button
                     type="button"
@@ -834,11 +855,11 @@ export default function DetailModal() {
               )}
             </div>
           )}
-          {task.status === 'done' && outputLen > 0 && (currentOutputImageId || task.outputImages.length > 0) && (
+          {task.status === 'done' && outputLen > 0 && (
             <>
               <div className="absolute inset-0 overflow-y-auto px-3 pb-12 pt-12">
                 <div style={{ columnWidth: `${galleryTileSize}px`, columnCount: 8, columnGap: '8px' }}>
-                  {outputSlots.map((slot, index) => {
+                  {visibleOutputSlots.map((slot, index) => {
                     if (slot.error) {
                       return (
                         <div
@@ -858,7 +879,7 @@ export default function DetailModal() {
                         type="button"
                         onClick={() => {
                           setImageIndex(index)
-                          setLightboxImageId(slot.imageId, task.outputImages)
+                          setLightboxImageId(slot.imageId, visibleOutputImages(task))
                         }}
                         style={{ breakInside: 'avoid', marginBottom: '8px' }}
                         className={`group relative block w-full overflow-hidden rounded-lg transition-shadow ${index === imageIndex ? 'ring-2 ring-blue-500' : ''}`}

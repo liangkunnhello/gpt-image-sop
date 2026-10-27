@@ -6,18 +6,37 @@ import { normalizeCodexCliImageSize, normalizeImageSize } from './size'
 export const DEFAULT_FAL_IMAGE_SIZE = '1360x1024'
 export const MAX_FAL_OUTPUT_IMAGES = 4
 export const MAX_OPENAI_OUTPUT_IMAGES = 10
+/**
+ * 普通模式带参考图时，「数量」是拆成几个请求，不是一个请求要几张图：
+ * 每个请求固定 n=1，所以不受渠道单请求上限（OpenAI 10 / fal 4）约束。
+ * 这里只留一个防误填的上限，和「一次跑多少条提示词」用同一个量级。
+ */
+export const MAX_PLAIN_REQUESTS = 500
 
+/** 单请求张数上限：只有「数量」会被原样发给渠道时才适用 */
 export function getOutputImageLimitForSettings(settings: AppSettings) {
   return getActiveApiProfile(settings).provider === 'fal' ? MAX_FAL_OUTPUT_IMAGES : MAX_OPENAI_OUTPUT_IMAGES
+}
+
+/**
+ * 当前模式下「数量」真正代表什么，决定上限：
+ * - countsRequests：普通模式（融图 / 批量）带参考图 → 拆请求次数，用 MAX_PLAIN_REQUESTS
+ * - 否则：直接作为单请求的 n 发给渠道 → 用渠道上限（OpenAI 10 / fal 4）
+ */
+export function resolveOutputImageLimit(
+  settings: AppSettings,
+  options: { countsRequests?: boolean } = {},
+) {
+  return options.countsRequests ? MAX_PLAIN_REQUESTS : getOutputImageLimitForSettings(settings)
 }
 
 export function normalizeParamsForSettings(
   params: TaskParams,
   settings: AppSettings,
-  options: { hasInputImages?: boolean } = {},
+  options: { hasInputImages?: boolean; countsRequests?: boolean } = {},
 ): TaskParams {
   const activeProfile = getActiveApiProfile(settings)
-  const outputImageLimit = getOutputImageLimitForSettings(settings)
+  const outputImageLimit = resolveOutputImageLimit(settings, { countsRequests: options.countsRequests })
   const nextParams: TaskParams = {
     ...params,
     size: normalizeImageSize(params.size) || DEFAULT_PARAMS.size,
