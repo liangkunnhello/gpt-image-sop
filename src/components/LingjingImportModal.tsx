@@ -347,7 +347,7 @@ export default function LingjingImportModal({ onClose }: { onClose: () => void }
                 <li>方向树：新增 {loginResult.tree.created} 个，复用 {loginResult.tree.reused} 个</li>
                 <li>
                   后处理模板：新增 {loginResult.templates.created} 套，更新 {loginResult.templates.updated} 套
-                  {loginResult.templates.logosSkipped > 0 && `，${loginResult.templates.logosSkipped} 个 logo 图层取不到图片已跳过`}
+                  {loginResult.templates.logosSkipped > 0 && `；${loginResult.templates.logosSkipped} 个 logo 图层没取到图片（COS 跨域），补齐请见下方说明`}
                 </li>
                 {loginResult.templates.failed.length > 0 && (
                   <li className="text-amber-600 dark:text-amber-400">
@@ -369,6 +369,11 @@ export default function LingjingImportModal({ onClose }: { onClose: () => void }
                   {fileResult.templates.inherited > 0 && `；${fileResult.templates.inherited} 个方向直接继承产品的水印，没另存`}
                   {fileResult.templates.logosSkipped > 0 && `；跳过 ${fileResult.templates.logosSkipped} 个取不到图的 logo 图层`}
                 </li>
+                {fileResult.templates.empty > 0 && (
+                  <li className="text-gray-500 dark:text-gray-400">
+                    {fileResult.templates.empty} 套「空白 / 透明水印」在灵境里所有图层都是关闭的，按空处理（不算失败）
+                  </li>
+                )}
                 {fileResult.delivery.applied + fileResult.delivery.inherited > 0 && (
                   <li>
                     NAS 交付地址：设置 {fileResult.delivery.applied} 个
@@ -382,6 +387,12 @@ export default function LingjingImportModal({ onClose }: { onClose: () => void }
                   <li className="text-amber-600 dark:text-amber-400">
                     {fileResult.templates.failed.length} 条没导成：{fileResult.templates.failed.slice(0, 2).join('；')}
                     {fileResult.templates.failed.length > 2 ? ' 等' : ''}
+                  </li>
+                )}
+                {fileResult.templates.logosSkipped > 0 && (
+                  <li className="text-amber-600 dark:text-amber-400">
+                    Logo 存在腾讯云 COS 上、桶没开跨域，浏览器直连取不到。装客户端版导入可全部取到；
+                    本机 dev 已挂代理，重启 dev server 后重新导入一次即可补上（同名模板会原地更新，不会变成两套）
                   </li>
                 )}
               </ul>

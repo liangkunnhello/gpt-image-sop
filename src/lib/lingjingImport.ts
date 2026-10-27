@@ -13,6 +13,7 @@
 
 import type { SopDirectionNode } from '../types'
 import type { PostElement, PostTemplate } from './postTemplate'
+import { apiFetch } from './platform'
 
 // ===== 灵境侧的数据形状 =====
 
@@ -213,13 +214,27 @@ export async function resolveLingjingWatermarks(
  * 把远程图片转成 dataURL。
  *
  * 必须走 fetch 而不是 `<img>` + canvas：远程图直接画进 canvas 会把画布标记为「被污染」，
- * `toDataURL` 会直接抛错，整套模板套用就失败了。fetch 拿不到（没开 CORS）就返回 null，
- * 调用方跳过该图层 —— 文字层还能用，总比整套模板废掉好。
+ * `toDataURL` 会直接抛错，整套模板套用就失败了。
+ *
+ * 灵境的 logo 放在腾讯云 COS 上，**桶没配 CORS**（不回 Access-Control-Allow-Origin），
+ * 所以浏览器直连必失败；客户端里 `apiFetch` 走 Rust 侧请求、不受 CORS 限制，能正常取到。
+ * 网页版（本机 dev）再退回 dev server 的 `/__imgproxy` 转发一次。
  */
-export async function downloadImageAsDataUrl(url: string, fetchImpl: FetchLike = fetch): Promise<string | null> {
+export async function downloadImageAsDataUrl(url: string, fetchImpl: FetchLike = apiFetch): Promise<string | null> {
   if (!url) return null
+  const direct = await fetchImageAsDataUrl(url, fetchImpl, { credentials: 'omit' })
+  if (direct) return direct
+  // 只有「没指定自定义 fetch」（即真实运行环境）才走代理兜底，单测注入的 impl 不会被这里拦住
+  if (fetchImpl === apiFetch) {
+    return fetchImageAsDataUrl(`/__imgproxy?url=${encodeURIComponent(url)}`, globalThis.fetch)
+  }
+  return null
+}
+
+/** 下载一次并转 dataURL；不是图片、请求失败、跨域被拦都返回 null */
+async function fetchImageAsDataUrl(url: string, fetchImpl: FetchLike, init?: RequestInit): Promise<string | null> {
   try {
-    const res = await fetchImpl(url, { credentials: 'omit' })
+    const res = await fetchImpl(url, init)
     if (!res.ok) return null
     const blob = await res.blob()
     if (!blob.type.startsWith('image/')) return null
@@ -327,6 +342,24 @@ export interface WatermarkConvertOptions {
   sizeLimitKb?: number | null
 }
 
+/**
+ * 同一个 logo 地址在多套水印里反复出现（实测 331 条水印只有 61 个不同 logo），
+ * 每次重下会白等几十秒，这里按地址缓存一次结果（含失败，失败不必重试）。
+ */
+export function memoizeLogoResolver(
+  resolve?: (url: string) => Promise<string | null>,
+): ((url: string) => Promise<string | null>) | undefined {
+  if (!resolve) return undefined
+  const cache = new Map<string, Promise<string | null>>()
+  return (url: string) => {
+    const hit = cache.get(url)
+    if (hit) return hit
+    const task = resolve(url).catch(() => null)
+    cache.set(url, task)
+    return task
+  }
+}
+
 export interface WatermarkConversion {
   template: PostTemplate | null
   /** 因取不到图片而跳过的 logo 图层数 */
@@ -354,9 +387,13 @@ export async function watermarkToTemplate(
 
   const converted: PostElement[] = []
   let logosSkipped = 0
+  let hidden = 0
   for (const [index, el] of elements.entries()) {
     // 灵境里「关掉的图层」用 opacity=0 表示，导过来只会是一层看不见的东西，直接丢
-    if (el.opacity != null && Number(el.opacity) <= 0) continue
+    if (el.opacity != null && Number(el.opacity) <= 0) {
+      hidden += 1
+      continue
+    }
     const id = `post-${watermark.id}-${index}`
     if (el.type === 'text') {
       const align = el.textAlign === 'center' ? 'center' : el.textAlign === 'right' ? 'right' : 'left'
@@ -411,7 +448,11 @@ export async function watermarkToTemplate(
     })
   }
 
-  if (!converted.length) return { template: null, logosSkipped, reason: '图层都转不了（logo 取不到图片）' }
+  if (!converted.length) {
+    // 灵境里「空白水印 / 透明水印」就是全部图层被关掉，不是出错，调用方按「空水印」跳过
+    const reason = logosSkipped ? '图层都转不了（logo 取不到图片）' : hidden ? '图层在灵境里全部是关闭状态' : '没有可用的图层'
+    return { template: null, logosSkipped, reason }
+  }
 
   // 灵境的 enabled 有 '1'/'0'、1/0、true/false 三种写法（归档里是数字，实时接口是字符串）
   const isDisabled = watermark.enabled === false
@@ -499,6 +540,8 @@ export interface LingjingImportResult {
 
 /** 跑一遍导入：登录 → 目录 → 逐组合 resolve → 转换 → 合并。全程不写 store。 */
 export async function runLingjingImport(options: LingjingImportOptions): Promise<LingjingImportResult> {
+  // 331 条水印只有 61 个不同 logo，同一个地址只下一次
+  const resolveLogo = memoizeLogoResolver(options.resolveLogo)
   const session = await lingjingLogin({
     baseUrl: options.baseUrl,
     username: options.username,
@@ -586,7 +629,7 @@ export async function runLingjingImport(options: LingjingImportOptions): Promise
               canvasWidth: canvasWidth || source.canvasWidth || size?.width,
               canvasHeight: canvasHeight || source.canvasHeight || size?.height,
             },
-            { resolveLogo: options.resolveLogo, sizeLimitKb: size?.maxFileSizeKb ?? null },
+            { resolveLogo, sizeLimitKb: size?.maxFileSizeKb ?? null },
           )
           if (conversion.logosSkipped) stats.logosSkipped += conversion.logosSkipped
           if (conversion.template) incoming.push(conversion.template)

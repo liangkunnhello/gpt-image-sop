@@ -262,6 +262,42 @@ describe('归档导入', () => {
     expect(logo.aspect).toBeCloseTo(0.889, 3)
   })
 
+  it('同一个 logo 地址只下一次（331 条水印只有 61 个不同 logo）', async () => {
+    const logoEl = (url: string) => ({ type: 'image', content: url, x: 0.02, y: 0.01, width: 0.1, height: 0.05, opacity: 1 })
+    const calls: string[] = []
+    const result = await runLingjingArchiveImport([
+      file('watermark_spec.json', watermarkSpec([
+        baseWatermark(100, { elements: [logoEl('https://cos.example.com/same.png')] }),
+        baseWatermark(200, { elements: [logoEl('https://cos.example.com/same.png')] }),
+      ])),
+      file('product_direction_map.json', {
+        mappings: [
+          mapping({ watermarks: [{ id: 100, canvasWidth: 1080, canvasHeight: 1920 }] }),
+          mapping({ directionId: 19, directionName: '月亮', watermarks: [{ id: 200, canvasWidth: 1080, canvasHeight: 1920 }] }),
+        ],
+      }),
+    ], {
+      ...options(),
+      resolveLogo: async (url) => {
+        calls.push(url)
+        return 'data:image/png;base64,AAA'
+      },
+    })
+    expect(calls).toHaveLength(1)
+    expect(Object.values(result.postTemplates).flat()).toHaveLength(2)
+  })
+
+  it('全部图层关掉的水印按「空」处理，不算失败', async () => {
+    const result = await runLingjingArchiveImport([
+      file('watermark_spec.json', watermarkSpec([
+        baseWatermark(100, { name: '空白水印', elements: [textEl({ opacity: 0 })] }),
+      ])),
+      file('product_direction_map.json', { mappings: [mapping()] }),
+    ], options())
+    expect(result.templates.empty).toBe(1)
+    expect(result.templates.failed).toEqual([])
+  })
+
   it('opacity=0 的图层是灵境里关掉的图层，不导', async () => {
     const result = await runLingjingArchiveImport([
       file('watermark_spec.json', watermarkSpec([

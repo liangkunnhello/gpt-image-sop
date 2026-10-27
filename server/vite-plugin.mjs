@@ -40,6 +40,35 @@ export default function sidecarPlugin() {
           return;
         }
 
+        // 远程图片代理：灵境的 logo 放在腾讯云 COS 上，那个桶没配 CORS，
+        // 浏览器直连必被拦。dev 里由 node 侧转发一次，网页版也能把 logo 存成 dataURL。
+        // 只放行图片响应，避免变成任何人都能用的开放代理
+        if (pathname === '/__imgproxy' && req.method === 'GET') {
+          const target = new URL(req.url || '', 'http://localhost').searchParams.get('url') || '';
+          if (!/^https?:\/\//i.test(target)) {
+            res.statusCode = 400;
+            res.end('bad url');
+            return;
+          }
+          fetch(target)
+            .then(async (upstream) => {
+              const type = upstream.headers.get('content-type') || '';
+              if (!upstream.ok || !type.startsWith('image/')) {
+                res.statusCode = upstream.ok ? 415 : upstream.status;
+                res.end('not an image');
+                return;
+              }
+              res.setHeader('Content-Type', type);
+              res.setHeader('Cache-Control', 'no-store');
+              res.end(Buffer.from(await upstream.arrayBuffer()));
+            })
+            .catch(() => {
+              res.statusCode = 502;
+              res.end('upstream failed');
+            });
+          return;
+        }
+
         if (isSidecarPath(pathname)) {
           api.emit('request', req, res);
           return;

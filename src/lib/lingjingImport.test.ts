@@ -274,4 +274,34 @@ describe('logo 图片转 dataURL', () => {
     const result = await downloadImageAsDataUrl('https://cos.example.com/a.png', fetchImpl)
     expect(result).toMatch(/^data:image\/png;base64,/)
   })
+
+  it('浏览器直连被 CORS 拦下时，退到 dev server 的图片代理再取一次', async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' })
+    const calls: string[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      calls.push(url)
+      // COS 桶没配 CORS：直连抛 TypeError，和浏览器里的表现一致
+      if (url.startsWith('https://cos.example.com')) throw new TypeError('Failed to fetch')
+      return { ok: true, blob: async () => blob } as unknown as Response
+    }) as typeof fetch
+    try {
+      const result = await downloadImageAsDataUrl('https://cos.example.com/a.png')
+      expect(result).toMatch(/^data:image\/png;base64,/)
+      expect(calls[1]).toBe(`/__imgproxy?url=${encodeURIComponent('https://cos.example.com/a.png')}`)
+    } finally {
+      globalThis.fetch = original
+    }
+  })
+
+  it('调用方自己传了 fetch 时不走代理兜底（单测与自定义请求只打一次）', async () => {
+    const calls: string[] = []
+    const fetchImpl = async (url: string) => {
+      calls.push(url)
+      throw new Error('blocked')
+    }
+    expect(await downloadImageAsDataUrl('https://cos.example.com/a.png', fetchImpl)).toBeNull()
+    expect(calls).toHaveLength(1)
+  })
 })

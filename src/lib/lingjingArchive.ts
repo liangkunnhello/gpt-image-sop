@@ -13,6 +13,7 @@ import type { SopDirectionNode } from '../types'
 import type { SopPreset } from './sopStore'
 import type { PostTemplate } from './postTemplate'
 import {
+  memoizeLogoResolver,
   mergeTemplates,
   planDirectionTree,
   watermarkToTemplate,
@@ -385,7 +386,15 @@ export interface ArchiveImportResult {
   deliveryDirs: Record<string, string>
   presets: SopPreset[]
   tree: { created: number; reused: number }
-  templates: { created: number; updated: number; logosSkipped: number; failed: string[]; inherited: number }
+  templates: {
+    created: number
+    updated: number
+    logosSkipped: number
+    /** 灵境里全部图层都被关掉的「空白水印」，不是错误，单独计数 */
+    empty: number
+    failed: string[]
+    inherited: number
+  }
   delivery: { applied: number; inherited: number }
   presetsStats: { created: number; updated: number }
   files: Array<{ name: string; kind: LingjingArchiveKind }>
@@ -426,7 +435,9 @@ export async function runLingjingArchiveImport(
   const postTemplates = { ...options.existingTemplates }
   const deliveryDirs = { ...options.existingDeliveryDirs }
   const presets = [...options.existingPresets]
-  const stats = { created: 0, updated: 0, logosSkipped: 0, failed: [] as string[], inherited: 0 }
+  const stats = { created: 0, updated: 0, logosSkipped: 0, empty: 0, failed: [] as string[], inherited: 0 }
+  // 331 条水印只有 61 个不同 logo，同一个地址只下一次
+  const resolveLogo = memoizeLogoResolver(options.resolveLogo)
   const delivery = { applied: 0, inherited: 0 }
   const presetsStats = { created: 0, updated: 0 }
 
@@ -487,10 +498,11 @@ export async function runLingjingArchiveImport(
           channelCode: ref.channelCode || spec.channelCode,
           name: spec.name || ref.name || '',
         },
-        { resolveLogo: options.resolveLogo, sizeLimitKb: size?.maxFileSizeKb ?? null },
+        { resolveLogo, sizeLimitKb: size?.maxFileSizeKb ?? null },
       )
       if (conversion.logosSkipped) stats.logosSkipped += conversion.logosSkipped
       if (conversion.template) incoming.push(conversion.template)
+      else if (conversion.reason === '图层在灵境里全部是关闭状态') stats.empty += 1
       else if (conversion.reason) stats.failed.push(`${label} · ${ref.name ?? ref.id}：${conversion.reason}`)
     }
 
