@@ -1383,6 +1383,9 @@ export function taskMatchesFilterStatus(task: TaskRecord, filterStatus: AppState
 export function taskMatchesSearchQuery(task: TaskRecord, query: string) {
   const q = query.trim().toLowerCase()
   if (!q) return true
+  // 任务 ID 也能搜：卡片上复制的完整 id、或者手抄的「# 后面那几位」都要能定位到这张卡
+  const idQuery = q.replace(/^#/, '').replace(/\s+/g, '')
+  if (idQuery && task.id.toLowerCase().includes(idQuery)) return true
   const prompt = getTaskPromptText(task.prompt || '', task.inputImageIds.length).toLowerCase()
   const paramStr = JSON.stringify(task.params).toLowerCase()
   const errorStr = [task.error, ...(task.outputErrors ?? []).map((item) => item.error)].filter(Boolean).join('\n').toLowerCase()

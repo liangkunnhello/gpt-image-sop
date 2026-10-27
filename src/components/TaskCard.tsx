@@ -11,6 +11,8 @@ import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskPromptText } from '../lib/promptImageMentions'
 import { isTaskUnread } from '../lib/unread'
 import { visibleOutputImages } from '../lib/taskState'
+import { taskIdLabel } from '../lib/taskId'
+import { copyTaskIdToClipboard } from '../lib/copyTaskId'
 import { CodeIcon, TransparentBgIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -672,6 +674,27 @@ export default function TaskCard({
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
+              {/* 任务 ID：沟通时报编号用，点一下复制完整 id（卡片上只显示尾部几位） */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void copyTaskIdToClipboard(task.id)
+                }}
+                onTouchStart={(e) => e.stopPropagation()}
+                onTouchMove={(e) => e.stopPropagation()}
+                onTouchEnd={(e) => e.stopPropagation()}
+                onTouchCancel={(e) => e.stopPropagation()}
+                title={`任务 ID：${task.id}\n点击复制`}
+                aria-label={`复制任务 ID ${task.id}`}
+                className="group/id flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-500 dark:text-gray-400 text-xs flex-shrink-0 font-mono transition-colors hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-500/10 dark:hover:text-blue-400"
+              >
+                <svg className="w-3 h-3 flex-shrink-0 text-gray-400 group-hover/id:text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V5a2 2 0 012-2h9a2 2 0 012 2v9a2 2 0 01-2 2h-2M5 8h9a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2v-9a2 2 0 012-2z" />
+                </svg>
+                {/* 尾部随机串才区分得开，完整 id 放在 title / 复制结果里 */}
+                <span>{taskIdLabel(task.id)}</span>
+              </button>
               {/* API Name */}
               {(task.apiProfileName || task.apiProvider) && (
                 <span 

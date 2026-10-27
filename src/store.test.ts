@@ -3843,6 +3843,17 @@ describe('agent context for removed outputs', () => {
     expect(taskMatchesSearchQuery(partial, 'failed to fetch')).toBe(true)
   })
 
+  it('任务 ID 能搜到：完整 id、带 # 的短号、卡片上显示的尾号都命中', () => {
+    const target = task({ id: 'm3k2j1a5f3x2q' })
+
+    expect(taskMatchesSearchQuery(target, 'm3k2j1a5f3x2q')).toBe(true)
+    expect(taskMatchesSearchQuery(target, 'M3K2J1A5F3X2Q')).toBe(true)
+    expect(taskMatchesSearchQuery(target, '#5f3x2q')).toBe(true)
+    expect(taskMatchesSearchQuery(target, ' 5f3x2q ')).toBe(true)
+    // 不相干的查询仍然不命中
+    expect(taskMatchesSearchQuery(target, 'zzzzzz')).toBe(false)
+  })
+
   it('clears partial failure markers without deleting successful outputs', async () => {
     const partial = task({
       id: 'partial-task',

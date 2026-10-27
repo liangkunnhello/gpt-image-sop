@@ -19,6 +19,7 @@ import { downloadImageEntriesAsZip, downloadImageIds, downloadTaskImagesToFolder
 import { isTauri } from '../lib/platform'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { visibleOutputImages } from '../lib/taskState'
+import { copyTaskIdToClipboard } from '../lib/copyTaskId'
 import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { getApiProviderLabel } from '../lib/apiProfiles'
 import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
@@ -1682,6 +1683,23 @@ export default function DetailModal() {
               </div>
             )}
             <div className="grid grid-cols-2 gap-2 text-xs mb-4 min-w-0">
+              {/* 任务 ID：详情页显示完整值，沟通时直接念 / 复制 */}
+              <div className="col-span-2 bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2 min-w-0 overflow-hidden">
+                <span className="text-gray-400 dark:text-gray-500">任务 ID</span>
+                <br />
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <span className="min-w-0 flex-1 truncate font-mono font-medium text-gray-700 dark:text-gray-200" title={task.id}>
+                    {task.id}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { void copyTaskIdToClipboard(task.id) }}
+                    className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 transition hover:bg-gray-100 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/10"
+                  >
+                    复制
+                  </button>
+                </div>
+              </div>
               <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2 min-w-0 overflow-hidden">
                 <span className="text-gray-400 dark:text-gray-500">尺寸</span>
                 <br />

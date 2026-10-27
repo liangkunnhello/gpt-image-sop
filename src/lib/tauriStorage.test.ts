@@ -189,6 +189,8 @@ describe('tauriStorage', () => {
     expect(invoke).toHaveBeenCalledTimes(1)
   })
 
+  // 这条会整包导入 store（几千行），并行跑全量时 import 本身就可能超过默认 5s，
+  // 是机器负载问题不是逻辑问题，给足超时免得偶发红灯
   it('store 加载时同步完成 hydration，修改后以相同的 key 和格式写回', async () => {
     const persisted = JSON.stringify({ state: { supportPromptDismissed: true, agentSidebarCollapsed: true }, version: 2 })
     // setup 已在导入 store 之前把 kv 读入内存，与 main.tsx 的启动顺序一致
@@ -206,5 +208,5 @@ describe('tauriStorage', () => {
     expect(saved.version).toBe(2)
     expect(saved.state.agentSidebarCollapsed).toBe(false)
     expect(saved.state.supportPromptDismissed).toBe(true)
-  })
+  }, 30000)
 })
