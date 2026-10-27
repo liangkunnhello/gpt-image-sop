@@ -46,6 +46,7 @@ import {
   replaceAgentConversations,
   clearAgentConversations as dbClearAgentConversations,
   getImage,
+  getImageMeta,
   getStoredImageThumbnail,
   getAllImageIds,
   putImage,
@@ -1791,13 +1792,20 @@ export async function initStore() {
   }
 
   // 只枚举 key 清理孤立图片，避免启动时把所有 4K 原图读进内存。
+  // 只清「生成出来的」：用户上传的参考图是素材，重新找图比重新生成贵得多，
+  // 而且任务卡的「复用配置」正靠这些图还原当时的输入。元数据取不到时也保留，宁可占点空间。
   const imageIds = await getAllImageIds()
   const referencedImageIds: string[] = []
   for (const imgId of imageIds) {
     if (referencedIds.has(imgId)) {
       referencedImageIds.push(imgId)
-    } else {
+      continue
+    }
+    const meta = await getImageMeta(imgId)
+    if (meta?.source === 'generated' || meta?.source === 'mask') {
       await deleteImage(imgId)
+    } else {
+      referencedImageIds.push(imgId)
     }
   }
   void scheduleMissingThumbnailBackfill(referencedImageIds)
@@ -2716,6 +2724,24 @@ function addTaskReferencedImageIds(target: Set<string>, task: TaskRecord) {
     if (id) target.add(id)
   }
   for (const id of task.streamPartialImageIds || []) target.add(id)
+}
+
+/**
+ * 删任务时可以清理的图片候选：只收「生成出来的」。
+ *
+ * 用户上传的参考图 / 固定图 / 变量图不放进来 —— 它们是素材，删了就得重新找，
+ * 而且下次拿同一批图复用配置还要用。清理只针对成品、AI 原图、透明底原图这些可再生的。
+ */
+function addTaskCleanupImageIds(target: Set<string>, task: TaskRecord) {
+  for (const id of task.outputImages || []) target.add(id)
+  for (const id of task.sourceImages || []) {
+    if (id) target.add(id)
+  }
+  for (const id of task.transparentOriginalImages || []) {
+    if (id) target.add(id)
+  }
+  for (const id of task.streamPartialImageIds || []) target.add(id)
+  if (task.maskImageId) target.add(task.maskImageId)
 }
 
 /**
@@ -5699,7 +5725,8 @@ async function removeTasks(taskIds: string[], updateState?: TaskDeletionStateUpd
 
   const deletedImageIds = new Set<string>()
   for (const task of deletedTasks) {
-    addTaskReferencedImageIds(deletedImageIds, task)
+    // 只把生成的图列为清理候选：参考图属于用户素材，删卡不连带删图
+    addTaskCleanupImageIds(deletedImageIds, task)
     const controller = task.agentConversationId && task.agentRoundId
       ? agentRoundControllers.get(getAgentRoundControllerKey(task.agentConversationId, task.agentRoundId))
       : undefined

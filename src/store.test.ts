@@ -737,6 +737,47 @@ describe('plain mode batch grouping', () => {
   })
 })
 
+describe('删任务卡时图片的处理', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    useStore.setState({
+      tasks: [],
+      trashedTasks: [],
+      inputImages: [],
+      fixedImages: [],
+      variableImages: [],
+      galleryInputDraft: null,
+      showToast: vi.fn(),
+    })
+  })
+
+  it('参考图留着，成品与 AI 原图跟着清掉', async () => {
+    await putImage({ id: 'keep-ref', dataUrl: 'data:image/png;base64,ref', createdAt: 1, source: 'upload' })
+    await putImage({ id: 'gen-out', dataUrl: 'data:image/png;base64,out', createdAt: 1, source: 'generated' })
+    await putImage({ id: 'ai-src', dataUrl: 'data:image/png;base64,src', createdAt: 1, source: 'generated' })
+    const target = task({
+      id: 'del-task',
+      inputImageIds: [],
+      sopReferenceImageIds: ['keep-ref'],
+      outputImages: ['gen-out'],
+      sourceImages: ['ai-src'],
+      status: 'done',
+      createdAt: 1,
+    })
+    useStore.setState({ tasks: [target] })
+
+    await removeTask(target)
+
+    expect(useStore.getState().tasks).toHaveLength(0)
+    // 上传的参考图是用户素材：删卡不连带删图，之后还要拿它复跑
+    expect(await getImage('keep-ref')).toBeTruthy()
+    // 生成出来的成品和 AI 原图可再生，跟着任务一起清
+    expect(await getImage('gen-out')).toBeUndefined()
+    expect(await getImage('ai-src')).toBeUndefined()
+  })
+})
+
 describe('图片回收站的彻底删除', () => {
   beforeEach(async () => {
     await clearTasks()
@@ -1450,11 +1491,12 @@ describe('agent conversation persistence', () => {
     expect(stored.map((conversation) => conversation.id)).toEqual(['stored-conversation', 'legacy-conversation'])
   })
 
-  it('启动清理孤儿图时保留 SOP 任务引用的参考图', async () => {
+  it('启动清理孤儿图时保留参考图，只清生成出来的图', async () => {
     await clearTasks()
     await clearImages()
     await putImage({ id: 'sop-ref', dataUrl: 'data:image/png;base64,ref', createdAt: 1, source: 'upload' })
-    await putImage({ id: 'orphan-img', dataUrl: 'data:image/png;base64,orphan', createdAt: 1, source: 'upload' })
+    await putImage({ id: 'loose-upload', dataUrl: 'data:image/png;base64,up', createdAt: 1, source: 'upload' })
+    await putImage({ id: 'orphan-generated', dataUrl: 'data:image/png;base64,gen', createdAt: 1, source: 'generated' })
     await putDbTask(task({
       id: 'sop-task',
       inputImageIds: [],
@@ -1469,8 +1511,10 @@ describe('agent conversation persistence', () => {
     // 参考图只记在 sopReferenceImageIds 里（SOP 模式 inputImageIds 是空的），
     // 被当孤儿图删掉的话，任务卡上的「复用配置」就还原不出参考图了
     expect(await getImage('sop-ref')).toBeTruthy()
-    // 真孤儿图照旧清掉，别把清理逻辑整个停掉
-    expect(await getImage('orphan-img')).toBeUndefined()
+    // 没被任何任务引用的上传图也保留：用户素材不清，之后还能拿同一批图复跑
+    expect(await getImage('loose-upload')).toBeTruthy()
+    // 生成出来的孤儿图照旧清掉，别把清理逻辑整个停掉
+    expect(await getImage('orphan-generated')).toBeUndefined()
   })
 
   it('strips generated image payloads from legacy task raw payloads during startup migration', async () => {    await putDbTask(task({
