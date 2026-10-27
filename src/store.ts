@@ -28,6 +28,7 @@ import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPre
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { collectSopLibrary, directionPath, mergeSopLibrary, useSopStore } from './lib/sopStore'
 import { pointNameForDirection } from './lib/sopPresets'
+import { proofreadPrompts } from './lib/promptProofread'
 import { ALL_SCOPE, filterTasksByScope, scopeNodeIds, type DirectionScope } from './lib/directionScope'
 import { channelForNewTask, channelLabel, taskMatchesChannel } from './lib/channel'
 import { planPlainRequests, type PlainImageMode } from './lib/plainImagePlan'
@@ -2068,6 +2069,28 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
   }
 
   const batchPrompts = normalizedSettings.showBatchPrompt && normalizedSettings.batchPromptEnabled ? splitBatchPrompts(prompt) : []
+
+  /**
+   * 发送前文字校对（普通模式）。
+   *
+   * 放在 beginBatch 之前：被拦下时不能留下一个「正在跑」的批量状态。
+   * 普通模式的卖点只是拼在提示词前面的文字、不要求变成画面文案，
+   * 所以这里不带 copyText，只查违规词与违规内容。
+   */
+  const proofreadText = options.promptPrefix?.trim()
+    ? `${options.promptPrefix.trim()}\n\n${prompt.trim()}`
+    : prompt.trim()
+  const proofread = await proofreadPrompts({
+    profile: activeProfile,
+    prompts: [proofreadText],
+    enabled: normalizedSettings.promptProofread !== false,
+  })
+  if (proofread.blocks.length) {
+    showToast(`提示词没通过校对，未发送：${proofread.blocks[0].reasons.join('；')}`, 'error')
+    return
+  }
+  for (const note of proofread.notes) showToast(note, 'info')
+
   // 排队在 submitTask 入口就处理了：能走到这里说明当前没有批在跑，直接占位开跑
   const batchId = batchPrompts.length ? beginBatch(batchPrompts.length) : 0
 

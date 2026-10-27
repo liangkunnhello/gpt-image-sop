@@ -164,6 +164,11 @@ export interface AppSettings {
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
   retryMode: RetryMode
+  /**
+   * 发送前做文字校对：卖点是否逐字写进提示词、有没有画面文案、有没有违规词。
+   * 关掉就不查（也能省掉一次模型调用）。
+   */
+  promptProofread: boolean
   allowPromptRewrite: boolean
   taskCompletionNotification: boolean
   /** 启动时检查 GitHub 上的新版本 */

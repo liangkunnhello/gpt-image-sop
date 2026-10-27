@@ -21,6 +21,7 @@ import { dedupePrompts, normalizeCopy } from './copyDedupe'
 import { planStrategyFills } from './variableSample'
 import { buildVariableImageHint, planVariableImageAssignments, withVariableImageHint } from './variableImages'
 import { shrinkToDataUrl, SOP_TEXT_MODEL } from './sopPipeline'
+import { describeBlocks, keepIndexes, proofreadPrompts } from './promptProofread'
 import { clampPromptCount } from './promptLimits'
 
 /** 与 SOP 反推用同一个文本模型 */
@@ -714,7 +715,6 @@ async function runJob(job: VariableJobRequest) {
       notes.length ? `\n---\n\n${notes.join('\n')}` : '',
     ].filter(Boolean).join('\n')
 
-    await removeSopPlaceholder(placeholderId)
     // 图生图：固定图每条都带、变量图按条轮换；没有图池时就是纯提示词出图
     const imagePlan = planVariableImageAssignments(
       job.fixedImages ?? [],
@@ -725,6 +725,29 @@ async function runJob(job: VariableJobRequest) {
       job.fixedImages?.length ?? 0,
       job.variableImages?.length ? 1 : 0,
     )
+    const promptsToSend = picked.map((item) => withVariableImageHint(item.prompt, imageHint))
+
+    // 发送前校对：变量模式没有「卖点原文」可对，只查有没有画面文案与违规内容
+    updateTaskInStore(placeholderId, { prompt: `${job.label} · 正在校对提示词…` })
+    const proofread = await proofreadPrompts({
+      profile,
+      prompts: promptsToSend,
+      enabled: useStore.getState().settings.promptProofread !== false,
+    })
+    if (proofread.blocks.length) {
+      useStore.getState().showToast(
+        `${job.label}：${proofread.blocks.length} 条没通过校对，已跳过（${describeBlocks(proofread.blocks)}）`,
+        'error',
+      )
+    }
+    for (const note of proofread.notes) useStore.getState().showToast(`${job.label}：${note}`, 'info')
+    const kept = keepIndexes(promptsToSend.length, proofread.blocks)
+    if (!kept.length) throw new Error(`提示词没通过校对：${describeBlocks(proofread.blocks, 2)}`)
+    const keptPicked = kept.map((index) => picked[index])
+    const keptPrompts = kept.map((index) => promptsToSend[index])
+    const keptAssignments = kept.map((index) => imagePlan.assignments[index])
+
+    await removeSopPlaceholder(placeholderId)
     void submitSopTasks({
       sopJobId,
       sopName: strategies[0]?.name || job.label,
@@ -732,13 +755,13 @@ async function runJob(job: VariableJobRequest) {
       sopText: specText,
       directionId: job.directionId,
       referenceImageIds: job.imageIds,
-      prompts: picked.map((item) => withVariableImageHint(item.prompt, imageHint)),
-      inputImagesPerPrompt: imagePlan.assignments.map((item) => item.images),
-      variableImageIds: imagePlan.assignments.map((item) => item.variableImage?.id),
+      prompts: keptPrompts,
+      inputImagesPerPrompt: keptAssignments.map((item) => item.images),
+      variableImageIds: keptAssignments.map((item) => item.variableImage?.id),
       variable: {
         promptName: job.variablePromptName,
         specText,
-        fills: picked.map((item) => ({
+        fills: keptPicked.map((item) => ({
           skeleton: item.fill.strategyName,
           assignments: item.fill.assignments,
         })),

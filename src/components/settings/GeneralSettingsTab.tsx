@@ -238,6 +238,25 @@ export default function GeneralSettingsTab({
         </div>
         <div className="block">
           <div className="mb-1 flex items-center justify-between">
+            <span className="block text-sm text-gray-600 dark:text-gray-300">发送前校对提示词</span>
+            <button
+              type="button"
+              onClick={() => commitSettings({ ...draft, promptProofread: !draft.promptProofread })}
+              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.promptProofread ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+              role="switch"
+              aria-checked={draft.promptProofread}
+              aria-label="发送前校对提示词"
+            >
+              <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.promptProofread ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+            </button>
+          </div>
+          <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+            生图前先查一遍提示词：卖点有没有逐字写进画面文案、有没有画面文案（漏了会出纯画面无字的图）、
+            有没有广告违禁词与违规内容。查出问题的条目不会发出去，其余照常出图（会多一次文本模型调用）。
+          </div>
+        </div>
+        <div className="block">
+          <div className="mb-1 flex items-center justify-between">
             <span className="block text-sm text-gray-600 dark:text-gray-300">成功任务仍然展示重试按钮</span>
             <button
               type="button"

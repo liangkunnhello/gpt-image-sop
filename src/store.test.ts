@@ -96,6 +96,11 @@ vi.mock('./lib/api', () => ({
     revisedPrompts: [],
   })),
 }))
+// 校对会真去调文本模型，测试里默认放行；需要验证拦截的用例再单独指定返回
+vi.mock('./lib/promptProofread', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/promptProofread')>()
+  return { ...actual, proofreadPrompts: vi.fn(async () => ({ blocks: [], notes: [] })) }
+})
 vi.mock('./lib/falAiImageApi', () => ({
   getFalErrorMessage: vi.fn((err: unknown) => err instanceof Error ? err.message : String(err)),
   getFalQueuedImageResult: vi.fn(async () => ({
@@ -146,6 +151,7 @@ import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { addImagesFromFiles, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName } from './lib/deliver'
+import { proofreadPrompts } from './lib/promptProofread'
 import { groupSopTasks } from './lib/sopGroup'
 
 const commitTaskDeletionImplementation = vi.mocked(commitTaskDeletion).getMockImplementation()!
@@ -708,6 +714,26 @@ describe('plain mode batch grouping', () => {
 
     // 收尾：别把方向和卖点留给同 describe 的其他用例
     useSopStore.setState({ directions: [], presets: [], activeDirectionId: '', lastPick: {}, defaultPick: {} })
+  })
+  it('提示词没通过校对时不建任务，并把原因说出来', async () => {
+    vi.mocked(proofreadPrompts).mockResolvedValueOnce({
+      blocks: [{ index: 0, reasons: ['含引流 / 诱导点击「二维码」'] }],
+      notes: [],
+    })
+    useStore.setState({
+      inputImages: [pngRef('proof-1')],
+      params: { ...DEFAULT_PARAMS, size: 'auto', n: 1 },
+    })
+
+    await submitTask()
+
+    expect(useStore.getState().tasks).toHaveLength(0)
+    expect(useStore.getState().showToast).toHaveBeenCalledWith(
+      expect.stringContaining('没通过校对'),
+      'error',
+    )
+    // 被拦下时不能留下「正在跑」的批量状态
+    expect(useStore.getState().batchProgress).toBeNull()
   })
 })
 

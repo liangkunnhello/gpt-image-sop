@@ -741,6 +741,8 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     reuseTaskApiProfileTemporarily: typeof record.reuseTaskApiProfileTemporarily === 'boolean' ? record.reuseTaskApiProfileTemporarily : false,
     alwaysShowRetryButton: typeof record.alwaysShowRetryButton === 'boolean' ? record.alwaysShowRetryButton : false,
     retryMode: normalizeRetryMode(record.retryMode, record.alwaysShowRetryButton === true),
+    // 默认开：出废图的代价远高于一次校对调用
+    promptProofread: typeof record.promptProofread === 'boolean' ? record.promptProofread : true,
     allowPromptRewrite: typeof record.allowPromptRewrite === 'boolean' ? record.allowPromptRewrite : false,
     taskCompletionNotification: typeof record.taskCompletionNotification === 'boolean' ? record.taskCompletionNotification : false,
     autoCheckUpdate: typeof record.autoCheckUpdate === 'boolean' ? record.autoCheckUpdate : true,
@@ -1336,6 +1338,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   reuseTaskApiProfileTemporarily: false,
   alwaysShowRetryButton: false,
   retryMode: 'new',
+  promptProofread: true,
   allowPromptRewrite: false,
   taskCompletionNotification: false,
   autoCheckUpdate: true,

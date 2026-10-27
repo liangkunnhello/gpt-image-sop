@@ -7,7 +7,8 @@ import { apiFetch } from './platform'
 import { resolvePostTemplates } from './applyPostTemplate'
 import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
 import { dedupePrompts } from './copyDedupe'
-import { checkPromptCopy, describeCopyIssues } from './copyCheck'
+import { checkPromptCopy } from './copyCheck'
+import { describeBlocks, keepIndexes, proofreadPrompts } from './promptProofread'
 import { variationCandidates } from './promptVariation'
 import { clampPromptCount, PROMPTS_PER_BATCH } from './promptLimits'
 
@@ -701,13 +702,32 @@ async function runJob(job: SopJobRequest) {
         prompts = await fixPromptCopy(profile, prompts, copyText)
         const after = checkPromptCopy(prompts, copyText)
         if (!after.ok) {
+          // 不再「按校正结果继续」：改不回来的那几条会出成没字 / 改过字的废图，
+          // 交给下面的发送前校对拦下来
           console.warn('卖点校正后仍有不一致：', after.issues)
-          useStore.getState().showToast(
-            `${job.label}：${describeCopyIssues(after.issues)}，已按校正结果继续`,
-            'info',
-          )
         }
       }
+    }
+
+    // 发送前校对：卖点逐字、有没有画面文案、广告违禁词与违规内容
+    updateTaskInStore(placeholderId, { prompt: `${job.label} · 正在校对提示词…` })
+    const proofread = await proofreadPrompts({
+      profile,
+      prompts,
+      copyText,
+      enabled: useStore.getState().settings.promptProofread !== false,
+    })
+    if (proofread.blocks.length) {
+      const kept = keepIndexes(prompts.length, proofread.blocks)
+      prompts = kept.map((index) => prompts[index])
+      useStore.getState().showToast(
+        `${job.label}：${proofread.blocks.length} 条没通过校对，已跳过（${describeBlocks(proofread.blocks)}）`,
+        'error',
+      )
+    }
+    for (const note of proofread.notes) useStore.getState().showToast(`${job.label}：${note}`, 'info')
+    if (!prompts.length) {
+      throw new Error(`提示词没通过校对：${describeBlocks(proofread.blocks, 2)}`)
     }
 
     await removeSopPlaceholder(placeholderId)
