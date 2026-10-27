@@ -92,7 +92,7 @@ import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage, type PostTemplate } from './lib/postTemplate'
 import { dataUrlByteSize, dataUrlFormat, limitDataUrlSize, resolveSizeLimitPlan } from './lib/outputFileSize'
 import { finishedFileName, finishedFolderName, writeFinishedImage } from './lib/postFinished'
-import { deliverCardGroup, deliverImageFileName, deliverTaskCard, cardFolderName, resolveCardDeliveryLocation, tasksOfCard, type DeliverResult } from './lib/deliver'
+import { cardKeyOf, deliverCardGroup, deliverImageFileName, deliverTaskCard, resolveCardDeliveryLocation, resolveCardFolderName, tasksOfCard, type DeliverResult } from './lib/deliver'
 import { dispatchSkipNote, pickDispatchTemplate } from './lib/dispatch'
 import { openDirectoryPath } from './lib/deliveryDirPicker'
 import { resolveDeliveryDir } from './lib/deliveryDir'
@@ -2787,7 +2787,29 @@ async function buildDeliverContext(): Promise<Parameters<typeof deliverTaskCard>
     template: settings.taskFolderTemplate,
     custom: settings.taskFolderCustom,
     fallbackDir,
+    claimCardFolder: claimCardDeliverFolder,
   }
+}
+
+/**
+ * 记下这张卡占用的交付文件夹名。
+ *
+ * 同一套配置跑两次会得到两张内容一样的卡，按命名模板算出来的文件夹名也一样，交付时就会互相覆盖。
+ * 先交付的那张把名字记下来（同卡各任务都记一份），后来的卡在 resolveCardFolderName 里
+ * 看到它已占用，自动改用 `-02`、`-03`；重交付自己时仍认这个名字，不会越交越多。
+ *
+ * 导出是为了让单测能直接验证占位确实落到任务上。
+ */
+export function claimCardDeliverFolder(cardKey: string, folder: string) {
+  const targets = useStore.getState().tasks.filter((item) => (
+    cardKeyOf(item) === cardKey && item.deliverFolder !== folder
+  ))
+  if (!targets.length) return
+  const ids = new Set(targets.map((item) => item.id))
+  useStore.setState((state) => ({
+    tasks: state.tasks.map((item) => (ids.has(item.id) ? { ...item, deliverFolder: folder } : item)),
+  }))
+  for (const item of targets) void putTask({ ...item, deliverFolder: folder })
 }
 
 /**
@@ -3397,7 +3419,9 @@ export async function dispatchTaskCard(taskId: string, targetIds: string[]): Pro
       try {
         const saveDir = await useSaveDir(dir)
         // 一张卡一个文件夹，命名与「立即交付」完全一致，重复派发落在同一个文件夹里
-        const folderName = cardFolderName(newTask, context, outputs[0]?.size)
+        // 同一个源卡派发两次会算出同一个文件夹名，交给占位逻辑避开
+        const folderName = resolveCardFolderName(newTask, context, outputs[0]?.size).folder
+        newTask.deliverFolder = folderName
         const folderInfo = await createSaveFolder(saveDir, folderName, true)
         folder = folderInfo.name
         path = folderInfo.path
@@ -3407,7 +3431,7 @@ export async function dispatchTaskCard(taskId: string, targetIds: string[]): Pro
             await saveFileToDir(
               saveDir,
               dataUrlToBytes(item.dataUrl).bytes,
-              deliverImageFileName(index + 1, newTask, context, item.size, item.ext),
+              deliverImageFileName(index + 1, newTask, context, item.size, item.ext, folderName),
               undefined,
               folderInfo.name,
               true,

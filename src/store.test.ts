@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { addImagesFromFiles, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashOutputImage, trashOutputImages, useStore } from './store'
+import { addImagesFromFiles, claimCardDeliverFolder, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -829,6 +829,33 @@ describe('卡片拼起来展示时的回收与改判', () => {
     // 立即交付只看「不合格就跳过」，人工改判的也生效
     expect(deliverableOutputImages(byId.get('sibling')!)).toEqual([])
     expect(deliverableOutputImages(byId.get('leader')!)).toEqual(['img-a'])
+  })
+})
+
+describe('交付文件夹占位', () => {
+  it('把占到的名字写到同卡所有任务上，别的卡不受影响', async () => {
+    useStore.setState({
+      tasks: [
+        task({ id: 'a', sopJobId: 'job-1' }),
+        task({ id: 'b', sopJobId: 'job-1' }),
+        task({ id: 'c', sopJobId: 'job-2' }),
+      ],
+    })
+
+    claimCardDeliverFolder('job-1', '20261027-百万医疗险-月亮-闪屏-大字报')
+    // 同卡各任务都要记：任何一条任务被单独交付时，都要认出「这是我们自己那个文件夹」
+    const tasks = useStore.getState().tasks
+    expect(tasks.find((item) => item.id === 'a')?.deliverFolder).toBe('20261027-百万医疗险-月亮-闪屏-大字报')
+    expect(tasks.find((item) => item.id === 'b')?.deliverFolder).toBe('20261027-百万医疗险-月亮-闪屏-大字报')
+    expect(tasks.find((item) => item.id === 'c')?.deliverFolder).toBeUndefined()
+  })
+
+  it('名字没变时不重复写库', async () => {
+    useStore.setState({ tasks: [task({ id: 'a', sopJobId: 'job-1', deliverFolder: 'X' })] })
+    const before = useStore.getState().tasks
+    claimCardDeliverFolder('job-1', 'X')
+    // 同一个数组引用说明没触发改写
+    expect(useStore.getState().tasks).toBe(before)
   })
 })
 

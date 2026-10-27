@@ -82,6 +82,23 @@ export interface DeliverContext {
   custom?: string
   /** 三级都没配交付地址时回退用的地址；没有则返回 noTarget */
   fallbackDir?: string
+  /**
+   * 第一次给某张卡用某个文件夹名时回调，调用方负责把它记到任务上（`deliverFolder`）。
+   *
+   * 不在这里直接写库：这个模块要保持纯逻辑，写库与状态同步归 store。
+   */
+  claimCardFolder?: (cardKey: string, folder: string) => void
+}
+
+/** 一张卡的标识：同一 sopJobId 的多条任务算一张卡 */
+export function cardKeyOf(task: Pick<TaskRecord, 'id' | 'sopJobId'>): string {
+  return task.sopJobId ?? task.id
+}
+
+/** 比较两个交付地址是否同一个目录（忽略末尾分隔符与大小写差异） */
+function sameDir(a: string | undefined, b: string | undefined): boolean {
+  const norm = (value: string | undefined) => (value ?? '').trim().replace(/[\\/]+$/, '').toLowerCase()
+  return norm(a) === norm(b)
 }
 
 /**
@@ -103,6 +120,54 @@ export function cardFolderName(task: TaskRecord, context: DeliverContext, sizeOv
     custom,
   })
   return name || `task-${task.id.slice(0, 8)}`
+}
+
+/** 占位结果：base 是按模板算出来的名字，folder 是最终可用的那个 */
+export interface CardFolderClaim {
+  base: string
+  folder: string
+  /** true 表示这个名字是这次新占的，调用方应该记到任务上 */
+  isNew: boolean
+}
+
+/**
+ * 定下这张卡最终用哪个交付文件夹名 —— 解决「同一套配置跑两次，两张卡互相覆盖」。
+ *
+ * 规则：
+ * 1. 这张卡已经占过一个名字（任务上有 `deliverFolder`）且仍以当前模板名为前缀 → 直接用，
+ *    重交付就是覆盖自己上次那套，不会堆出 -02、-03；
+ * 2. 否则从模板名开始找第一个**没有被同一个交付目录下的其他卡占用**的名字：`名字` → `名字-02` → `名字-03`；
+ * 3. 交付目录不同的卡不算冲突（各写各的目录，同名也不打架）。
+ */
+export function resolveCardFolderName(
+  task: TaskRecord,
+  context: DeliverContext,
+  sizeOverride?: string,
+): CardFolderClaim {
+  const base = cardFolderName(task, context, sizeOverride)
+  const key = cardKeyOf(task)
+  const group = tasksOfCard(context.tasks, task)
+  const own = group.map((item) => item.deliverFolder).find(Boolean)
+  if (own && (own === base || own.startsWith(`${base}-`))) return { base, folder: own, isNew: false }
+
+  const targetDir = resolveDeliveryDir(context.deliveryDirs, context.directions, task.sopDirectionId)?.path
+    ?? context.fallbackDir
+  const used = new Set<string>()
+  for (const item of context.tasks) {
+    if (item.deletedAt) continue
+    if (cardKeyOf(item) === key) continue
+    if (!item.deliverFolder) continue
+    const itemDir = resolveDeliveryDir(context.deliveryDirs, context.directions, item.sopDirectionId)?.path
+      ?? context.fallbackDir
+    if (!sameDir(itemDir, targetDir)) continue
+    used.add(item.deliverFolder)
+  }
+
+  let folder = base
+  for (let index = 2; used.has(folder) && index < 100; index += 1) {
+    folder = `${base}-${String(index).padStart(2, '0')}`
+  }
+  return { base, folder, isNew: folder !== own }
 }
 
 /**
@@ -156,7 +221,7 @@ export async function resolveCardDeliveryLocation(
       // 读不出来就退回请求尺寸，只影响名字里的尺寸段
     }
   }
-  const folder = cardFolderName(task, context, sizeOverride)
+  const folder = resolveCardFolderName(task, context, sizeOverride).folder
   return {
     dir,
     folder,
@@ -181,8 +246,10 @@ export function deliverImageFileName(
   context: DeliverContext,
   realSize: string,
   ext: string,
+  /** 用这张卡实际占到的文件夹名当文件名前缀（带 -02 时文件名也跟着带，拷出去也分得清） */
+  stemOverride?: string,
 ): string {
-  const stem = cardFolderName(task, context, realSize) || `task-${task.id.slice(0, 8)}`
+  const stem = stemOverride?.trim() || cardFolderName(task, context, realSize) || `task-${task.id.slice(0, 8)}`
   // Windows 单段文件名上限 255，留出扩展名与序号余量；先截模板再拼序号，序号不会被截掉
   const name = `${stem.slice(0, 170)}-${String(sequence).padStart(2, '0')}`
   return `${name}.${ext}`.replace(/[\\/:*?"<>|]/g, '_')
@@ -238,7 +305,7 @@ async function readImageBytes(imageId: string): Promise<{ ext: string; bytes: Ui
 export async function deliverTaskCard(
   task: TaskRecord,
   context: DeliverContext,
-  options?: { indexOffset?: number; excludeImageIds?: Set<string> },
+  options?: { indexOffset?: number; excludeImageIds?: Set<string>; folderOverride?: string },
 ): Promise<DeliverResult> {
   const images = deliverableOutputImages(task, options?.excludeImageIds)
   if (!images.length) return { ok: false, written: 0, nothingToDeliver: true }
@@ -254,21 +321,29 @@ export async function deliverTaskCard(
     if (!supportsWebFolder()) return { ok: false, written: 0, error: '当前浏览器不支持写入文件夹' }
     const root = await pickWebFolderRoot()
     if (!root) return { ok: false, written: 0, error: '已取消选择文件夹' }
-    const files: Array<{ name: string; blob: Blob }> = []
-    let read = 0
+    // 文件夹名要在拼文件名之前定下来，先读第一张拿真实尺寸
     let firstSize = ''
     for (const imageId of images) {
       const entry = await readImageBytes(imageId)
       if (!entry) continue
+      firstSize = realSizeOf(entry.bytes, task)
+      break
+    }
+    // 同名卡按模板算出的名字会重复，resolveCardFolderName 跳过已被别的卡占用的（-02、-03）
+    const claim = resolveCardFolderName(task, context, firstSize)
+    const folder = options?.folderOverride ?? claim.folder
+    if (!options?.folderOverride && claim.isNew) context.claimCardFolder?.(cardKeyOf(task), folder)
+    const files: Array<{ name: string; blob: Blob }> = []
+    let read = 0
+    for (const imageId of images) {
+      const entry = await readImageBytes(imageId)
+      if (!entry) continue
       const size = realSizeOf(entry.bytes, task)
-      if (!firstSize) firstSize = size
       const blob = new Blob([new Uint8Array(entry.bytes)] as BlobPart[], { type: MIME_BY_EXT[entry.ext] ?? 'image/png' })
-      files.push({ name: deliverImageFileName(seqBase + read + 1, task, context, size, entry.ext), blob })
+      files.push({ name: deliverImageFileName(seqBase + read + 1, task, context, size, entry.ext, folder), blob })
       read += 1
     }
     if (!files.length) return { ok: false, written: 0, error: '没有可交付的图片文件' }
-    // 文件夹名用第一张成品的真实尺寸，不用请求尺寸：后处理会改成品尺寸
-    const folder = cardFolderName(task, context, firstSize)
     try {
       const actual = await writeFilesToWebFolder(root, folder, files)
       return { ok: true, written: files.length, folder: actual, location: `${root.name}/${actual}` }
@@ -285,7 +360,11 @@ export async function deliverTaskCard(
     firstSize = realSizeOf(entry.bytes, task)
     break
   }
-  const folder = cardFolderName(task, context, firstSize)
+  // 两张「同名同内容」的卡按模板算出来的名字会一模一样，交付时互相覆盖；
+  // resolveCardFolderName 会跳过已被别的卡占用的名字（-02、-03），并把新名字记下来
+  const claim = resolveCardFolderName(task, context, firstSize)
+  const folder = options?.folderOverride ?? claim.folder
+  if (!options?.folderOverride && claim.isNew) context.claimCardFolder?.(cardKeyOf(task), folder)
 
   let dir: SaveDir
   try {
@@ -311,7 +390,7 @@ export async function deliverTaskCard(
       await saveFileToDir(
         dir,
         entry.bytes,
-        deliverImageFileName(seqBase + written + 1, task, context, realSizeOf(entry.bytes, task), entry.ext),
+        deliverImageFileName(seqBase + written + 1, task, context, realSizeOf(entry.bytes, task), entry.ext, folder),
         undefined,
         folderInfo.name,
         true,
@@ -343,9 +422,17 @@ export async function deliverCardGroup(
   // 该卡一共该写多少张：写少了要如实报出来，不能只说「已交付 N 张」让人以为全好了
   const expected = group.reduce((sum, item) => sum + deliverableOutputImages(item, options?.excludeImageIds).length, 0)
   let last: DeliverResult = { ok: false, written: 0 }
+  let folderOverride: string | undefined
   for (const item of group) {
     // 提示词序号自带唯一编号的走自己的，普通任务用累计游标接着排
-    const result = await deliverTaskCard(item, context, { indexOffset: cursor, excludeImageIds: options?.excludeImageIds })
+    const result = await deliverTaskCard(item, context, {
+      indexOffset: cursor,
+      excludeImageIds: options?.excludeImageIds,
+      folderOverride,
+    })
+    // 同卡各任务共用一个文件夹：第一张定下来后直接传下去，
+    // 否则刚占到的名字在 context.tasks 快照里还没有，后面的任务会重新算出另一个
+    if (result.folder) folderOverride = result.folder
     written += result.written
     cursor += result.written
     last = result
