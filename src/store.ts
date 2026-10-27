@@ -545,6 +545,11 @@ function isImageReferencedByState(state: AppState, imageId: string) {
     task.outputImages.includes(imageId) ||
     // AI 原图是派发 / 再次后处理的源，不能因为成品换了内容就删掉
     task.sourceImages?.includes(imageId) ||
+    // 参考图只记在 sopReferenceImageIds 里（SOP 模式 inputImageIds 是空的），
+    // 漏判会在重启清理孤儿图时被删掉，复用配置就还原不出来了
+    task.sopReferenceImageIds?.includes(imageId) ||
+    task.variableImageId === imageId ||
+    task.variableFixedImageIds?.includes(imageId) ||
     task.transparentOriginalImages?.includes(imageId) ||
     task.streamPartialImageIds?.includes(imageId) ||
     task.maskTargetImageId === imageId ||
@@ -2693,6 +2698,18 @@ function addTaskReferencedImageIds(target: Set<string>, task: TaskRecord) {
   for (const id of task.outputImages || []) target.add(id)
   // AI 原图单独存着（派发、再次后处理都要用），不能因为成品换了内容就当孤儿图删掉
   for (const id of task.sourceImages || []) {
+    if (id) target.add(id)
+  }
+  /**
+   * 参考图 / 变量图只记在这个字段里（SOP 模式 inputImageIds 是空的），
+   * 漏了它们，下次启动清理孤儿图时会把它们删掉 ——
+   * 表现就是「复用配置」还原不出当时的参考图。
+   */
+  for (const id of task.sopReferenceImageIds || []) {
+    if (id) target.add(id)
+  }
+  if (task.variableImageId) target.add(task.variableImageId)
+  for (const id of task.variableFixedImageIds || []) {
     if (id) target.add(id)
   }
   for (const id of task.transparentOriginalImages || []) {
@@ -5373,7 +5390,12 @@ export async function reuseConfig(task: TaskRecord) {
   const inputIds = snapshot
     ? (snapshot.mode === 'plain' ? (snapshot.variableImageIds ?? []) : referenceIds)
     : referenceIds
-  setInputImages(await loadImages(inputIds))
+  const restoredInputImages = await loadImages(inputIds)
+  if (inputIds.length && restoredInputImages.length < inputIds.length) {
+    // 老版本把参考图当孤儿图清掉了，还原不出来要说一声，否则看着像「点了没反应」
+    showToast(`有 ${inputIds.length - restoredInputImages.length} 张参考图已被清理，没能还原`, 'info')
+  }
+  setInputImages(restoredInputImages)
 
   // 固定图区：有快照按快照，老任务在变量模式下才拆得出来；两种来源都要真的写回 store
   const fixedIds = snapshot
@@ -6160,6 +6182,9 @@ function collectTaskImageIds(tasks: TaskRecord[]) {
   for (const task of tasks) {
     for (const id of task.outputImages || []) ids.add(id)
     for (const id of task.inputImageIds || []) ids.add(id)
+    // AI 原图 / 参考图：导出后换台机器也要能「下载原图」「复用配置」
+    for (const id of task.sourceImages || []) ids.add(id)
+    for (const id of task.sopReferenceImageIds || []) ids.add(id)
     for (const id of task.transparentOriginalImages || []) ids.add(id)
     for (const id of task.streamPartialImageIds || []) ids.add(id)
     if (task.maskImageId) ids.add(task.maskImageId)

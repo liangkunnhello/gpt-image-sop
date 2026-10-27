@@ -1450,8 +1450,30 @@ describe('agent conversation persistence', () => {
     expect(stored.map((conversation) => conversation.id)).toEqual(['stored-conversation', 'legacy-conversation'])
   })
 
-  it('strips generated image payloads from legacy task raw payloads during startup migration', async () => {
+  it('启动清理孤儿图时保留 SOP 任务引用的参考图', async () => {
+    await clearTasks()
+    await clearImages()
+    await putImage({ id: 'sop-ref', dataUrl: 'data:image/png;base64,ref', createdAt: 1, source: 'upload' })
+    await putImage({ id: 'orphan-img', dataUrl: 'data:image/png;base64,orphan', createdAt: 1, source: 'upload' })
     await putDbTask(task({
+      id: 'sop-task',
+      inputImageIds: [],
+      sopReferenceImageIds: ['sop-ref'],
+      status: 'done',
+      createdAt: 1,
+    }))
+    useStore.setState({ tasks: [], inputImages: [], fixedImages: [], variableImages: [] })
+
+    await initStore()
+
+    // 参考图只记在 sopReferenceImageIds 里（SOP 模式 inputImageIds 是空的），
+    // 被当孤儿图删掉的话，任务卡上的「复用配置」就还原不出参考图了
+    expect(await getImage('sop-ref')).toBeTruthy()
+    // 真孤儿图照旧清掉，别把清理逻辑整个停掉
+    expect(await getImage('orphan-img')).toBeUndefined()
+  })
+
+  it('strips generated image payloads from legacy task raw payloads during startup migration', async () => {    await putDbTask(task({
       id: 'legacy-task',
       outputImages: ['image-live'],
       rawResponsePayload: JSON.stringify({
