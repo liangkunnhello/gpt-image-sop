@@ -10,6 +10,7 @@ import { nearestScopeId } from '../lib/sopScope'
 import { taskMatchesChannel } from '../lib/channel'
 import { isTaskUnread } from '../lib/unread'
 import type { PostTemplateScope } from '../lib/applyPostTemplate'
+import LingjingImportModal from './LingjingImportModal'
 import PostTemplateModal from './PostTemplateModal'
 import PostTemplateImportModal from './PostTemplateImportModal'
 import MoveNodeModal from './MoveNodeModal'
@@ -61,6 +62,7 @@ export default function SopDirectionTree() {
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
 
+  const [lingjingOpen, setLingjingOpen] = useState(false)
   const [postTarget, setPostTarget] = useState<{ id: string; name: string; scope: PostTemplateScope } | null>(null)
   const [folded, setFolded] = useState<Set<string>>(new Set())
   const [draft, setDraft] = useState('')
@@ -645,6 +647,16 @@ export default function SopDirectionTree() {
                 <div className="flex-1" />
                 <button
                   type="button"
+                  onClick={() => setLingjingOpen(true)}
+                  title="从灵境导入：分组/产品/方向 + 水印转后处理模板"
+                  className="flex h-5 w-5 items-center justify-center rounded text-gray-300 transition-colors hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-500/10 dark:hover:text-blue-400"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-3 w-3">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v10m0 0l-3.5-3.5M12 13l3.5-3.5M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setTrashOpen(true)}
                   title={trashCount > 0
                     ? `回收站（${trashCount} 项）：恢复或彻底删除已删的业务线、任务卡与单张图片`
@@ -858,6 +870,11 @@ export default function SopDirectionTree() {
           node={deliveryTarget}
           onClose={() => setDeliveryTarget(null)}
         />,
+        document.body,
+      )}
+
+      {lingjingOpen && createPortal(
+        <LingjingImportModal onClose={() => setLingjingOpen(false)} />,
         document.body,
       )}
     </aside>
