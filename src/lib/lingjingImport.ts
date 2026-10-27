@@ -34,6 +34,8 @@ export interface LingjingDirection {
   directionName: string
   productId: number
   sortOrder?: number
+  /** 方向文案（卖点 / 风格说明），离线归档里带，实时接口的 direction/all 也有这个字段 */
+  productCopy?: string
 }
 
 export interface LingjingSize {
@@ -73,7 +75,8 @@ export interface LingjingWatermark {
   baseSizeId?: number
   canvasWidth?: number
   canvasHeight?: number
-  enabled?: string | boolean
+  /** 灵境侧有 '1'/'0'、1/0、true/false 三种写法（归档给数字，实时接口给字符串） */
+  enabled?: string | boolean | number
   elements?: LingjingWatermarkElement[]
   /**
    * catalog 里的原始字段：图层是 JSON 字符串（resolve 的 effective 才给解析好的数组）。
@@ -410,6 +413,12 @@ export async function watermarkToTemplate(
 
   if (!converted.length) return { template: null, logosSkipped, reason: '图层都转不了（logo 取不到图片）' }
 
+  // 灵境的 enabled 有 '1'/'0'、1/0、true/false 三种写法（归档里是数字，实时接口是字符串）
+  const isDisabled = watermark.enabled === false
+    || watermark.enabled === 0
+    || watermark.enabled === '0'
+    || String(watermark.enabled).toLowerCase() === 'false'
+
   return {
     logosSkipped,
     template: {
@@ -418,7 +427,7 @@ export async function watermarkToTemplate(
       width,
       height,
       channel: watermark.channelCode || undefined,
-      enabled: watermark.enabled == null ? true : !(watermark.enabled === '0' || watermark.enabled === false),
+      enabled: !isDisabled,
       isDefault: false,
       avoidOverlay: true,
       maxFileKb: options.sizeLimitKb ?? null,
