@@ -41,6 +41,7 @@ import { taskMatchesChannel } from '../lib/channel'
 import { enqueueSopJobs, splitReferenceGroups } from '../lib/sopPipeline'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
+import PromptOptimizeModal from './PromptOptimizeModal'
 import { CommentBadge } from './CommentMarks'
 import ButtonTooltip from './input/buttonTooltip'
 import DragUploadOverlay from './input/dragUploadOverlay'
@@ -396,6 +397,9 @@ export default function InputBar() {
   const [promptExpandedTop, setPromptExpandedTop] = useState(0)
   const [promptCanExpand, setPromptCanExpand] = useState(false)
   const [clearPromptHover, setClearPromptHover] = useState(false)
+  const [optimizePromptHover, setOptimizePromptHover] = useState(false)
+  /** 优化提示词弹窗：输入优化要求，模型改写后覆盖回输入框 */
+  const [optimizeOpen, setOptimizeOpen] = useState(false)
   const [expandPromptHover, setExpandPromptHover] = useState(false)
   const [submitHover, setSubmitHover] = useState(false)
   const [attachHover, setAttachHover] = useState(false)
@@ -898,6 +902,13 @@ export default function InputBar() {
       textareaRef.current.focus()
     }
   }, [setPrompt])
+
+  /** 优化结果覆盖输入框：置 false 才会走 prompt → contentEditable 的同步（@图 提及会重新变成标签） */
+  const handleApplyOptimizedPrompt = useCallback((text: string) => {
+    isUserInputRef.current = false
+    setPrompt(text)
+    showToast('提示词已优化并覆盖输入框', 'success')
+  }, [setPrompt, showToast])
 
   useEffect(() => {
     setSizeLimitInput(
@@ -2033,6 +2044,17 @@ export default function InputBar() {
         />
       )}
 
+      {optimizeOpen && (
+        <PromptOptimizeModal
+          prompt={prompt}
+          // 参考图：普通 / 变量模式下都在 inputImages 里，固定图也一起带上更准
+          images={[...inputImages, ...fixedImages]}
+          profile={activeProfile}
+          onApply={handleApplyOptimizedPrompt}
+          onClose={() => setOptimizeOpen(false)}
+        />
+      )}
+
       <div
         data-input-bar
         className={`fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl sm:w-max sm:min-w-[min(56rem,100%)] sm:max-w-[min(80rem,100%)] px-3 sm:px-4 transition-all duration-300${promptExpanded ? ' flex flex-col' : ''}`}
@@ -2213,10 +2235,10 @@ export default function InputBar() {
                 syncMentionTagSelection(el)
               }}
               aria-label={promptPlaceholder}
-              className={`col-start-1 row-start-1 min-h-[42px] w-full overflow-hidden ios-rounded-scroll-fix whitespace-pre-wrap break-words rounded-2xl border border-gray-200/60 bg-white/50 pl-4 pr-10 py-3 text-sm leading-relaxed shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:ring-1 focus:ring-blue-300/40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/30${promptExpanded ? ' !h-full !overflow-y-auto' : ''}`}
+              className={`col-start-1 row-start-1 min-h-[42px] w-full overflow-hidden ios-rounded-scroll-fix whitespace-pre-wrap break-words rounded-2xl border border-gray-200/60 bg-white/50 pl-4 pr-16 py-3 text-sm leading-relaxed shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:ring-1 focus:ring-blue-300/40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/30${promptExpanded ? ' !h-full !overflow-y-auto' : ''}`}
             />
             {prompt.length === 0 && (
-              <div className={`prompt-placeholder col-start-1 row-start-1 pointer-events-none pl-4 pr-10 py-3 text-sm leading-relaxed text-gray-400 dark:text-gray-500${
+              <div className={`prompt-placeholder col-start-1 row-start-1 pointer-events-none pl-4 pr-16 py-3 text-sm leading-relaxed text-gray-400 dark:text-gray-500${
                 isMobile && mobileCollapsed ? ' truncate' : ''
               }`}>
                 {promptPlaceholder}
@@ -2224,24 +2246,51 @@ export default function InputBar() {
             )}
             {prompt.length > 0 && (
               <div
-                className={`absolute z-10 ${
+                className={`absolute z-10 flex items-center gap-0.5 ${
                   isSingleLine ? 'right-3 top-1/2 -translate-y-1/2' : 'right-3 top-3'
                 }`}
-                onMouseEnter={() => setClearPromptHover(true)}
-                onMouseLeave={() => setClearPromptHover(false)}
               >
-                <ButtonTooltip visible={clearPromptHover} text="清空文本" />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setClearPromptHover(false)
-                    handleClearPrompt()
-                  }}
-                  className="flex items-center justify-center rounded-full p-1 text-gray-400 transition-all duration-200 hover:bg-gray-100 hover:text-gray-600 focus:outline-none dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
-                  aria-label="清空文本"
+                {/* 优化提示词：Agent 模式下面是聊天输入，改写提示词没有意义 */}
+                {appMode !== 'agent' && (
+                  <div
+                    onMouseEnter={() => setOptimizePromptHover(true)}
+                    onMouseLeave={() => setOptimizePromptHover(false)}
+                  >
+                    <ButtonTooltip visible={optimizePromptHover} text="优化提示词" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOptimizePromptHover(false)
+                        setOptimizeOpen(true)
+                      }}
+                      className="flex items-center justify-center rounded-full p-1 text-gray-400 transition-all duration-200 hover:bg-blue-50 hover:text-blue-500 focus:outline-none dark:hover:bg-blue-500/10 dark:hover:text-blue-400"
+                      aria-label="优化提示词"
+                    >
+                      {/* 星光：和「优化 / 改写」的语义一致，比文字按钮省地方 */}
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.7} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M18 16l.8 2.2L21 19l-2.2.8L18 22l-.8-2.2L15 19l2.2-.8L18 16z" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
+                <div
+                  onMouseEnter={() => setClearPromptHover(true)}
+                  onMouseLeave={() => setClearPromptHover(false)}
                 >
-                  <CloseIcon className="w-3.5 h-3.5" />
-                </button>
+                  <ButtonTooltip visible={clearPromptHover} text="清空文本" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setClearPromptHover(false)
+                      handleClearPrompt()
+                    }}
+                    className="flex items-center justify-center rounded-full p-1 text-gray-400 transition-all duration-200 hover:bg-gray-100 hover:text-gray-600 focus:outline-none dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
+                    aria-label="清空文本"
+                  >
+                    <CloseIcon className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             )}
             {showPromptExpand && (

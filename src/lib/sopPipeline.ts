@@ -41,8 +41,11 @@ export function shrinkToDataUrl(dataUrl: string, max: number): Promise<string> {
   })
 }
 
-/** 一轮纯文本/多模态对话，返回助手消息正文 */
-async function chat(
+/**
+ * 一轮纯文本/多模态对话，返回助手消息正文。
+ * 导出给「优化提示词」这类单轮改写用，复用同一套代理 / 降级 / thinking 关闭逻辑。
+ */
+export async function chat(
   profile: ApiProfile,
   messages: unknown[],
   timeoutSeconds = 240,
