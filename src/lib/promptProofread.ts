@@ -15,6 +15,7 @@
 
 import type { ApiProfile } from '../types'
 import { chat } from './sopPipeline'
+import { normalizeCopy } from './copyDedupe'
 import { checkPromptCopy, extractQuotedCopy, splitCopyLines } from './copyCheck'
 
 export interface BannedWordRule {
@@ -94,27 +95,58 @@ export interface ProofreadOutcome {
   notes: string[]
 }
 
-/** 规则层：不联网就能判的部分 */
-export function checkPromptRules(prompt: string, copyText: string): string[] {
-  const reasons: string[] = []
+export interface RuleCheckResult {
+  /** 拦下来不发的原因 */
+  blocks: string[]
+  /** 只提示、不拦的原因（可能有两处写法，但不影响出图） */
+  warnings: string[]
+}
+
+/**
+ * 规则层：拿「输入栏里选的卖点正文」和「提示词里「」包住的画面文案」对。
+ *
+ * 注意比的是**卖点正文**而不是卖点名字（名字只是下拉里显示的标签），
+ * 一条卖点可以有多行，每行单独比对；空格、标点、全半角先归一化再比。
+ *
+ * 判定口径（都是为了不被正常写法误伤）：
+ * - 归一化后互相包含就算同一条 —— 「600万」和「600万保额」视为一致；
+ * - 卖点没进「」但正文里写了 → 只提示「没加引号」，不拦；
+ * - 「」里出现与卖点无关的文字 → 只提示，不拦（可能是必要的补充小字）；
+ * - 卖点既没进「」也没进正文 → 拦（这就是出「没有文案的图」的根因）。
+ */
+export function checkPromptRules(prompt: string, copyText: string): RuleCheckResult {
+  const blocks: string[] = []
+  const warnings: string[] = []
   const copyLines = splitCopyLines(copyText)
+  const quoted = extractQuotedCopy(prompt)
 
   if (copyLines.length) {
-    // 有卖点就必须逐字出现，且不能自己加字
-    const single = checkPromptCopy([prompt], copyText)
-    for (const issue of single.issues) {
-      reasons.push(issue.kind === 'missing' ? `缺卖点「${issue.detail}」` : `文案被改写「${issue.detail}」`)
+    const checked = checkPromptCopy([prompt], copyText)
+    const bodyNorm = normalizeCopy(prompt)
+    const missing = checked.issues.filter((item) => item.kind === 'missing').map((item) => item.detail)
+
+    for (const issue of checked.issues) {
+      if (issue.kind === 'altered') {
+        warnings.push(`多出卖点以外的画面文案「${issue.detail}」`)
+      }
     }
-    // 一句都没有：出图必然是纯画面，正是「没有文案得图」的典型原因
-    if (!extractQuotedCopy(prompt).length) {
-      reasons.push('没有任何画面文案（有卖点却一个字都没写进提示词）')
+    for (const line of missing) {
+      if (bodyNorm.includes(normalizeCopy(line))) {
+        warnings.push(`卖点「${line}」写在正文里但没加「」，模型可能不把它当画面文字`)
+      } else {
+        blocks.push(`缺卖点「${line}」`)
+      }
+    }
+    // 一个「」都没有、卖点也没写进正文：典型「出纯画面无字图」，单独给一句更直白的
+    if (!quoted.length && missing.length === copyLines.length && !copyLines.some((line) => bodyNorm.includes(normalizeCopy(line)))) {
+      blocks.unshift('整条提示词里没有任何画面文案（卖点一个字都没写进去）')
     }
   }
 
   for (const hit of findBannedWords(prompt)) {
-    reasons.push(`含${hit.label}「${hit.word}」`)
+    blocks.push(`含${hit.label}「${hit.word}」`)
   }
-  return Array.from(new Set(reasons))
+  return { blocks: Array.from(new Set(blocks)), warnings: Array.from(new Set(warnings)) }
 }
 
 const COMPLIANCE_SYSTEM = [
@@ -211,11 +243,15 @@ export async function proofreadPrompts({ profile, prompts, copyText = '', enable
     reasons.set(index, list)
   }
 
+  const warnings: string[] = []
   prompts.forEach((prompt, index) => {
-    for (const reason of checkPromptRules(prompt, copyText)) push(index, reason)
+    const checked = checkPromptRules(prompt, copyText)
+    for (const reason of checked.blocks) push(index, reason)
+    for (const warning of checked.warnings) warnings.push(`第 ${index + 1} 条：${warning}`)
   })
 
   const notes: string[] = []
+  if (warnings.length) notes.push(describeWarnings(warnings))
   const compliance = await checkCompliance(profile, prompts, copyText)
   if (compliance.note) notes.push(compliance.note)
   for (const [index, reason] of compliance.violations) push(index, `疑似违规：${reason}`)
@@ -241,4 +277,11 @@ export function describeBlocks(blocks: PromptBlock[], max = 3): string {
   const parts = blocks.slice(0, max).map((item) => `第 ${item.index + 1} 条：${item.reasons[0]}`)
   const rest = blocks.length - parts.length
   return `${parts.join('；')}${rest > 0 ? `；另有 ${rest} 条` : ''}`
+}
+
+/** 只提示不拦的那些也别刷屏：最多列 3 条 */
+export function describeWarnings(warnings: string[], max = 3): string {
+  const parts = warnings.slice(0, max)
+  const rest = warnings.length - parts.length
+  return `${parts.join('；')}${rest > 0 ? `；另有 ${rest} 处` : ''}`
 }

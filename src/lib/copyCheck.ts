@@ -39,28 +39,43 @@ export interface CopyCheckResult {
 }
 
 /**
+ * 归一化后互相包含就算同一条文案。
+ *
+ * 卖点是「600万」，模型写成「600万保额」/「保额600万」都是同一句话的扩写，
+ * 逐字相等会把这些正常写法全判成「缺卖点 + 被改写」——
+ * 而这个判定现在会拦着不发，误判代价比漏判大得多。
+ */
+function sameCopy(a: string, b: string) {
+  if (!a || !b) return false
+  return a === b || a.includes(b) || b.includes(a)
+}
+
+/**
  * 逐条比对：
- * - 卖点每一条都必须出现在「」里（missing 表示漏了）
- * - 「」里不能出现卖点以外的文字（altered 表示被改写或自己加了字）
+ * - 卖点每一条都必须出现在「」里（missing 表示漏了），允许被扩写 / 缩写（见 sameCopy）
+ * - 「」里与卖点毫无关系的文字算 altered（模型自己加的，或把卖点改得面目全非）
  * 长度小于 2 的碎片不做 altered 判定，避免把「¥」「1」这类误判成篡改。
  */
 export function checkPromptCopy(prompts: string[], copyText: string): CopyCheckResult {
   const lines = splitCopyLines(copyText)
-  const expected = new Set(lines.map(normalizeCopy))
-  if (!expected.size) return { ok: true, issues: [] }
+  const expected = lines.map(normalizeCopy).filter(Boolean)
+  if (!expected.length) return { ok: true, issues: [] }
 
   const issues: CopyCheckIssue[] = []
   prompts.forEach((prompt, index) => {
     const quoted = extractQuotedCopy(prompt)
-    const got = new Set(quoted.map(normalizeCopy))
+    const quotedNorm = quoted.map(normalizeCopy).filter(Boolean)
     for (const line of lines) {
-      if (!got.has(normalizeCopy(line))) {
+      const key = normalizeCopy(line)
+      if (!key) continue
+      if (!quotedNorm.some((item) => sameCopy(item, key))) {
         issues.push({ index, kind: 'missing', detail: line })
       }
     }
     for (const item of quoted) {
       const key = normalizeCopy(item)
-      if (!expected.has(key) && key.length >= 2) {
+      if (!key || key.length < 2) continue
+      if (!expected.some((line) => sameCopy(key, line))) {
         issues.push({ index, kind: 'altered', detail: item })
       }
     }

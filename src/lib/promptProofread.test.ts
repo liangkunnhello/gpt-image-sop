@@ -40,30 +40,50 @@ describe('违禁词规则', () => {
 describe('规则层校对', () => {
   const copy = '住院医疗费用报销\n不限社保范围'
 
-  it('卖点逐字一致时没有问题', () => {
-    expect(checkPromptRules('画面写「住院医疗费用报销」和「不限社保范围」', copy)).toEqual([])
+  it('卖点逐字一致时不报任何问题', () => {
+    expect(checkPromptRules('画面写「住院医疗费用报销」和「不限社保范围」', copy))
+      .toEqual({ blocks: [], warnings: [] })
   })
 
-  it('漏了一条卖点会报出来', () => {
-    const reasons = checkPromptRules('画面写「住院医疗费用报销」', copy)
-    expect(reasons.some((item) => item.includes('缺卖点') && item.includes('不限社保范围'))).toBe(true)
+  it('漏了一条卖点会拦下来', () => {
+    const result = checkPromptRules('画面写「住院医疗费用报销」', copy)
+    expect(result.blocks.some((item) => item.includes('缺卖点') && item.includes('不限社保范围'))).toBe(true)
   })
 
-  it('自己加了卖点以外的文案算改写', () => {
-    const reasons = checkPromptRules('画面写「住院医疗费用报销」「不限社保范围」「限时福利」', copy)
-    expect(reasons.some((item) => item.includes('文案被改写') && item.includes('限时福利'))).toBe(true)
+  it('卖点被扩写不算缺失（600万 → 600万保额）', () => {
+    // 只是把卖点包进了更长的句子，属于正常写法，不能拦
+    expect(checkPromptRules('主标题「600万保额」，副标题「住院 0 免赔」', '600万\n住院 0 免赔'))
+      .toEqual({ blocks: [], warnings: [] })
+    expect(checkPromptRules('主标题「保额600万」', '600万')).toEqual({ blocks: [], warnings: [] })
   })
 
-  it('有卖点却一个「」文案都没有：直接判成没有画面文案', () => {
-    const reasons = checkPromptRules('一对夫妻站在阳台上看城市天际线', copy)
-    expect(reasons.some((item) => item.includes('没有任何画面文案'))).toBe(true)
+  it('真的换了说法仍然拦（保额 vs 医疗保障）', () => {
+    const result = checkPromptRules('主标题「600万保额」', '600 万医疗保障')
+    expect(result.blocks.some((item) => item.includes('缺卖点'))).toBe(true)
+  })
+
+  it('自己加了卖点以外的文案只提示，不拦', () => {
+    const result = checkPromptRules('画面写「住院医疗费用报销」「不限社保范围」「限时福利」', copy)
+    expect(result.blocks).toEqual([])
+    expect(result.warnings.some((item) => item.includes('限时福利'))).toBe(true)
+  })
+
+  it('卖点写在正文里但没加「」：只提示，不拦', () => {
+    const result = checkPromptRules('画面上写住院医疗费用报销和不限社保范围两个信息', copy)
+    expect(result.blocks).toEqual([])
+    expect(result.warnings.some((item) => item.includes('没加「」'))).toBe(true)
+  })
+
+  it('有卖点却一个「」文案都没有：判成没有画面文案', () => {
+    const result = checkPromptRules('一对夫妻站在阳台上看城市天际线', copy)
+    expect(result.blocks.some((item) => item.includes('没有任何画面文案'))).toBe(true)
     // 同时还会报两条「缺卖点」，都算出来便于用户判断
-    expect(reasons.filter((item) => item.includes('缺卖点'))).toHaveLength(2)
+    expect(result.blocks.filter((item) => item.includes('缺卖点'))).toHaveLength(2)
   })
 
   it('没有卖点时不做文案比对，只查违规词', () => {
-    expect(checkPromptRules('一对夫妻站在阳台上', '')).toEqual([])
-    expect(checkPromptRules('画面写「全网最低」', '')).toEqual(['含绝对化用语「全网最低」'])
+    expect(checkPromptRules('一对夫妻站在阳台上', '')).toEqual({ blocks: [], warnings: [] })
+    expect(checkPromptRules('画面写「全网最低」', '').blocks).toEqual(['含绝对化用语「全网最低」'])
   })
 })
 
@@ -112,6 +132,22 @@ describe('proofreadPrompts', () => {
     const result = await proofreadPrompts({ profile, prompts: ['画面写「保证赔付」'], copyText: '' })
     expect(result.blocks).toHaveLength(1)
     expect(result.blocks[0].reasons).toEqual(['含医疗功效承诺「保证赔付」', '疑似违规：疑似医疗夸大'])
+  })
+
+  it('只提示的问题进 notes，不拦条目', async () => {
+    chat.mockResolvedValue(CLEAN_REPLY)
+    const result = await proofreadPrompts({
+      profile,
+      prompts: [
+        '画面上写住院医疗费用报销和不限社保范围两个信息',
+        '画面写「住院医疗费用报销」「不限社保范围」「限时福利」',
+      ],
+      copyText: '住院医疗费用报销\n不限社保范围',
+    })
+    expect(result.blocks).toEqual([])
+    expect(result.notes[0]).toContain('第 1 条')
+    expect(result.notes[0]).toContain('没加「」')
+    expect(result.notes[0]).toContain('限时福利')
   })
 
   it('模型调用失败不拦人，只留一条说明', async () => {
