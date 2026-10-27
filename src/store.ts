@@ -27,6 +27,7 @@ import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgen
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { collectSopLibrary, directionPath, mergeSopLibrary, useSopStore } from './lib/sopStore'
+import { pointNameForDirection } from './lib/sopPresets'
 import { ALL_SCOPE, filterTasksByScope, scopeNodeIds, type DirectionScope } from './lib/directionScope'
 import { channelForNewTask, channelLabel, taskMatchesChannel } from './lib/channel'
 import { planPlainRequests, type PlainImageMode } from './lib/plainImagePlan'
@@ -2187,6 +2188,8 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
       // 写进任务会变成一个查不到节点的脏方向；点类目筛选也不该把图挂到分组容器上。
       // 归属与渠道都取提交瞬间的快照：排队执行时界面可能已经切到别的方向/渠道
       sopDirectionId: input.directionId || undefined,
+      // 卖点名快照：命名模板 {point} 用，之后换卖点不会把旧卡的名字改掉
+      sopPointName: pointNameForTask(input.directionId) || undefined,
       channel: channelForNewTask(input.channel),
       // 恢复输入框用；同一批拆出的请求共用同一份快照
       inputSnapshot: snapshot,
@@ -2673,6 +2676,17 @@ function addTaskReferencedImageIds(target: Set<string>, task: TaskRecord) {
     if (id) target.add(id)
   }
   for (const id of task.streamPartialImageIds || []) target.add(id)
+}
+
+/**
+ * 提交瞬间的卖点名快照（方向没配就继承产品）。
+ *
+ * 存在任务上而不是交付时再解析：卖点是「按方向记上一次使用」的，
+ * 之后换了卖点再交付旧卡，文件夹名会写成别的卖点。
+ */
+function pointNameForTask(directionId?: string): string {
+  const sop = useSopStore.getState()
+  return pointNameForDirection(sop.directions, sop.presets, directionId, sop.lastPick, sop.defaultPick)
 }
 
 /** 成品图落盘的文件夹名：一个任务卡一个文件夹，命名沿用设置里的任务文件夹模板 */
@@ -3279,6 +3293,8 @@ export async function dispatchTaskCard(taskId: string, targetIds: string[]): Pro
       // 名字里的 - 会被文件夹命名拆成两段，所以无论源卡名多长，「派发」这个标识都会保留下来
       sopName: `派发-${sourceName}`,
       sopDirectionId: targetId,
+      // 派发出来的卡沿用源卡的卖点：它套的是同一批原图
+      sopPointName: task.sopPointName,
       channel: task.channel,
       sourceMode: task.sourceMode ?? 'gallery',
       dispatchFromTaskId: task.id,
@@ -6607,6 +6623,8 @@ export async function submitSopTasks(input: {
       sopLibraryName: input.savedSopName,
       sopText: input.sopText,
       sopDirectionId: input.directionId || undefined,
+      // 与归属一样取提交瞬间的卖点：命名模板 {point} 用（SOP / 变量两条模式都走这里）
+      sopPointName: pointNameForTask(input.directionId) || undefined,
       // 渠道不选在弹窗里，统一继承输入区当前的渠道筛选（「全部 / 未指定」不写）
       channel: channelForNewTask(useStore.getState().channelFilter),
       sopReferenceImageIds: input.referenceImageIds,

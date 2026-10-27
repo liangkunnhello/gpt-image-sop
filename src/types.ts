@@ -415,6 +415,14 @@ export interface TaskRecord {
   sopLibraryName?: string
   /** SOP 模式：这次生成依据的 SOP 全文（Markdown），同一 sopJobId 的各任务内容相同 */
   sopText?: string
+  /**
+   * 提交时选中的卖点名。
+   *
+   * 存快照而不是交付时再解析：卖点是「按方向记上一次使用」的，
+   * 之后换了卖点再交付旧卡，名字就会写成别的卖点，文件跟内容对不上。
+   * 命名模板 {point} 取的就是它。
+   */
+  sopPointName?: string
   /** 归属的「产品-方向」节点 id，用于左侧栏筛选；空表示未归属 */
   sopDirectionId?: string
   /**

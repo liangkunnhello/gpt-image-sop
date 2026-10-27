@@ -145,6 +145,7 @@ import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { addImagesFromFiles, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
+import { cardFolderName } from './lib/deliver'
 import { groupSopTasks } from './lib/sopGroup'
 
 const commitTaskDeletionImplementation = vi.mocked(commitTaskDeletion).getMockImplementation()!
@@ -676,6 +677,37 @@ describe('plain mode batch grouping', () => {
     await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(1))
 
     expect(useStore.getState().tasks[0].params.n).toBe(10)
+  })
+
+  it('提交时把当前卖点名快照到任务上，命名模板 {point} 直接取得到', async () => {
+    const direction = { id: 'dir-1', parentId: null, name: '月亮', kind: 'direction' as const }
+    useSopStore.setState({
+      directions: [direction],
+      presets: [{ id: 'k1', productId: 'dir-1', kind: 'point', name: '小病住院有保额', content: '正文', updatedAt: 0 }],
+      activeDirectionId: 'dir-1',
+      lastPick: {},
+      defaultPick: {},
+    })
+    useStore.setState({
+      inputImages: [pngRef('point-1')],
+      params: { ...DEFAULT_PARAMS, size: 'auto', n: 1 },
+    })
+
+    void submitTask()
+    await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(1))
+
+    const created = useStore.getState().tasks[0]
+    expect(created.sopPointName).toBe('小病住院有保额')
+    // 命名模板直接能拼出卖点，不用交付时再查当前选的是哪份
+    expect(cardFolderName(created, {
+      tasks: [created],
+      directions: [direction],
+      deliveryDirs: {},
+      template: '{product}-{direction}-{point}',
+    })).toBe('月亮-小病住院有保额')
+
+    // 收尾：别把方向和卖点留给同 describe 的其他用例
+    useSopStore.setState({ directions: [], presets: [], activeDirectionId: '', lastPick: {}, defaultPick: {} })
   })
 })
 

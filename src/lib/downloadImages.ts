@@ -62,7 +62,7 @@ export interface TaskFolderDownloadOptions {
  * 重名时客户端自动补 -02、-03；网页版没有文件夹，调用方应退回原来的下载方式。
  */
 export async function downloadTaskImagesToFolder(
-  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName'>,
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName'>,
   options: TaskFolderDownloadOptions,
 ): Promise<DownloadImagesResult> {
   const imageIds = task.outputImages || []
@@ -77,6 +77,7 @@ export async function downloadTaskImagesToFolder(
     direction: options.direction,
     size: task.params?.size,
     sopName: task.sopName,
+    pointName: task.sopPointName,
     custom: options.custom,
   }
   const folderName = buildTaskFolderName(options.template, context) || `task-${task.id}`
@@ -116,6 +117,8 @@ export interface TaskCardFolderTask {
   outputImages: string[]
   params?: { size?: string }
   sopName?: string
+  /** 提交时选中的卖点名，命名模板 {point} 用 */
+  sopPointName?: string
   sopDirectionId?: string
 }
 
@@ -151,6 +154,7 @@ export async function downloadTaskCardsToFolders(
           direction: names.direction,
           size: task.params?.size,
           sopName: task.sopName,
+          pointName: task.sopPointName,
           custom: options.custom,
         }) || `task-${task.id}`
         const folder = await createSaveFolder(dir, sanitizeFileNamePart(base) || `task-${task.id}`)
@@ -181,7 +185,7 @@ export async function downloadTaskCardsToFolders(
  * 不支持的浏览器返回 webUnsupported，调用方退回原来的下载方式。
  */
 export async function downloadTaskImagesToWebFolder(
-  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName'>,
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName'>,
   options: TaskFolderDownloadOptions,
 ): Promise<DownloadImagesResult & { webUnsupported?: boolean }> {
   const imageIds = task.outputImages || []
@@ -197,6 +201,7 @@ export async function downloadTaskImagesToWebFolder(
     direction: options.direction,
     size: task.params?.size,
     sopName: task.sopName,
+    pointName: task.sopPointName,
     custom: options.custom,
   }) || `task-${task.id}`
 
@@ -254,6 +259,7 @@ export async function downloadTaskCardsToWebFolders(
         direction: names.direction,
         size: task.params?.size,
         sopName: task.sopName,
+    pointName: task.sopPointName,
         custom: options.custom,
       }) || `task-${task.id}`
       const files: Array<{ name: string; blob: Blob }> = []

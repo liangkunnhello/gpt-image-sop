@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildTaskFolderName, DEFAULT_TASK_FOLDER_TEMPLATE, MAX_SOP_NAME_CHARS, sizeLabel, truncateSopName } from './taskFolderName'
+import {
+  buildTaskFolderName,
+  DEFAULT_TASK_FOLDER_TEMPLATE,
+  MAX_POINT_NAME_CHARS,
+  MAX_SOP_NAME_CHARS,
+  sizeLabel,
+  truncatePointName,
+  truncateSopName,
+} from './taskFolderName'
 
 describe('sizeLabel', () => {
   it('1280x720 叫大图，1080x1920 叫闪屏', () => {
@@ -26,8 +34,20 @@ describe('buildTaskFolderName', () => {
     custom: '第三批',
   }
 
-  it('默认模板按 日期-产品-方向-尺寸-SOP-自定义 拼', () => {
+  it('默认模板按 日期-产品-方向-尺寸-SOP-卖点-自定义 拼', () => {
+    expect(buildTaskFolderName(DEFAULT_TASK_FOLDER_TEMPLATE, { ...context, pointName: '小病住院' }))
+      .toBe('20261021-百万医疗险-月亮-大图-SOP A-小病住院-第三批')
+  })
+
+  it('没配卖点时整段跳过，不留空分隔符', () => {
     expect(buildTaskFolderName(DEFAULT_TASK_FOLDER_TEMPLATE, context)).toBe('20261021-百万医疗险-月亮-大图-SOP A-第三批')
+  })
+
+  it('卖点名和 SOP 名一样按「字」截断，超长不会撑开名字', () => {
+    const longPoint = '住院医疗费用报销额度高达六百万且不限社保范围'
+    expect(Array.from(truncatePointName(longPoint))).toHaveLength(MAX_POINT_NAME_CHARS)
+    expect(buildTaskFolderName('{product}-{point}', { product: '京东保', pointName: longPoint }))
+      .toBe(`京东保-${truncatePointName(longPoint)}`)
   })
 
   it('没填的段自动省略，不留下多余分隔符', () => {
@@ -65,6 +85,8 @@ describe('SOP 名截断', () => {
 
   it('按字算长度，emoji 不会被劈成半个', () => {
     expect(truncateSopName('🎨🎨🎨🎨🎨🎨🎨')).toBe('🎨🎨🎨🎨🎨🎨')
+    expect(truncatePointName('🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨')).toBe(truncatePointName('🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨'))
+    expect(Array.from(truncatePointName('🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨🎨'))).toHaveLength(MAX_POINT_NAME_CHARS)
   })
 
   it('文件夹名与文件名共用这套截断', () => {

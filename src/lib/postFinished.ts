@@ -21,7 +21,7 @@ function nameOf(directions: SopDirectionNode[], id: string | undefined): string 
  * 文件夹名沿用设置里的「任务文件夹命名」模板，和导出用的是同一套规则。
  */
 export function finishedFolderName(
-  task: Pick<TaskRecord, 'id' | 'createdAt' | 'params' | 'sopName' | 'sopDirectionId'>,
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'params' | 'sopName' | 'sopPointName' | 'sopDirectionId'>,
   directions: SopDirectionNode[],
   template: string,
   custom: string | undefined,
@@ -33,6 +33,7 @@ export function finishedFolderName(
     direction: nameOf(directions, task.sopDirectionId),
     size: task.params?.size,
     sopName: task.sopName,
+    pointName: task.sopPointName,
     custom,
   })
   // 极端情况下模板全是空值，退回任务 id，至少不会写进 finished 根目录

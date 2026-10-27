@@ -1,34 +1,9 @@
-import type { SopPick, SopPreset } from '../lib/sopStore'
+import type { SopPreset } from '../lib/sopStore'
 import { NO_PRESET, useSopStore } from '../lib/sopStore'
+import { resolvePickedPreset } from '../lib/sopPresets'
 
-/**
- * 按「默认项 → 上次使用 → 就近第一条」决定当前选中的卖点/风格。
- * scopeIds 是自身 → 父 → 根的作用域链，方向没配就继承产品的。
- */
-export function resolvePickedPreset(
-  presets: SopPreset[],
-  directionId: string,
-  scopeIds: string[],
-  kind: SopPreset['kind'],
-  lastPick: Record<string, SopPick>,
-  defaultPick: Record<string, SopPick>,
-) {
-  const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
-  const id = kind === 'point' ? pick.pointId : pick.styleId
-  if (id === NO_PRESET) return undefined
-  if (id) {
-    for (const scopeId of scopeIds) {
-      const hit = presets.find((item) => item.productId === scopeId && item.kind === kind && item.id === id)
-      if (hit) return hit
-    }
-    return undefined
-  }
-  for (const scopeId of scopeIds) {
-    const first = presets.find((item) => item.productId === scopeId && item.kind === kind)
-    if (first) return first
-  }
-  return undefined
-}
+// 解析逻辑搬到了 lib（命名、任务快照也要用），这里保留导出，避免改了所有调用方
+export { resolvePickedPreset } from '../lib/sopPresets'
 
 interface Props {
   kind: SopPreset['kind']

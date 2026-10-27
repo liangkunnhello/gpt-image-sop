@@ -1740,7 +1740,7 @@ describe('model list', () => {
 describe('任务卡文件夹命名设置', () => {
   it('缺省时用默认模板，自定义为空', () => {
     const settings = normalizeSettings({})
-    expect(settings.taskFolderTemplate).toBe('{date}-{product}-{direction}-{size}-{sop}-{custom}')
+    expect(settings.taskFolderTemplate).toBe('{date}-{product}-{direction}-{size}-{sop}-{point}-{custom}')
     expect(settings.taskFolderCustom).toBe('')
   })
 

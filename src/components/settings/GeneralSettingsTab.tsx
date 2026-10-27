@@ -40,6 +40,7 @@ export default function GeneralSettingsTab({
     direction: '月亮',
     size: '1280x720',
     sopName: 'SOP名',
+    pointName: '卖点名',
     custom: draft.taskFolderCustom,
   })
 
@@ -397,6 +398,9 @@ export default function GeneralSettingsTab({
               <div data-selectable-text className="mt-1.5 break-all text-xs text-gray-500 dark:text-gray-500">
                 保存一张任务卡的全部图片时，按这个规则建同名文件夹（重复时自动加 -02、-03）。预览：
                 <span className="ml-1 font-mono text-gray-600 dark:text-gray-300">{folderNamePreview}</span>
+              </div>
+              <div className="mt-1 text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                {'{point}'} 取提交这张卡时选中的卖点名（最多 12 个字；没配卖点就整段跳过，不会留下空分隔符）。
               </div>
             </div>
             {isTauri && (

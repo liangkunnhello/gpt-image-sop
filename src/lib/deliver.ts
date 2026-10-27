@@ -92,6 +92,7 @@ export function cardFolderName(task: TaskRecord, context: DeliverContext, sizeOv
     direction: nameOf(task.sopDirectionId ?? ''),
     size: sizeOverride?.trim() || task.params?.size,
     sopName: task.sopName,
+    pointName: task.sopPointName,
     custom,
   })
   return name || `task-${task.id.slice(0, 8)}`
