@@ -415,6 +415,9 @@ function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false
     hasCopy
       ? '【版式随卖点条数走】每条提示词先数清楚这份卖点有几条，再决定版面：3 条卖点就排 3 个文字位（主标题 + 副标题 + 角标），不要设计第 4 个装饰性文字位；卖点只有 1 条时就用单一大标题撑版面，把版面让给主视觉。'
       : '',
+    hasCopy
+      ? '【SOP 禁忌与卖点冲突时以卖点为准】SOP 里如果写了「画面不出现任何文字 / 不出现文案 / 纯画面」这类禁忌，它针对的是 logo、水印、二维码这些元素，不包括卖点文案 —— 卖点文字仍必须逐字排进画面。'
+      : '',
     ignoreCompliance
       ? '不要写品牌 logo、免责声明、风险提示、警示语、合规说明，也不要写「请见条款及投保须知」「本素材纯属广告创意」这类附加小字。'
       : '',
@@ -597,6 +600,23 @@ export function sopTitleOf(sopText: string, fallback: string): string {
   return (firstBody || fallback).slice(0, 40)
 }
 
+/** 卖点一节的标题；附进存档 SOP 时用它，重复附加以防 */
+export const COPY_SECTION_HEADER = '# 卖点文案（最高优先级 · 图上文字的唯一来源）'
+
+/**
+ * 把卖点作为最高优先级的一节附到存档 SOP 末尾。
+ *
+ * 「直接使用 SOP」路径原本只把卖点单独喂给写提示词，SOP 文本本身看不到卖点，
+ * 而且 SOP 里常写「画面不出现任何文字」这类禁忌，跟卖点文字互相打架。
+ * 附上这一节后，SOP 全文（卡上、详情页、后续补充生图）都带着卖点。
+ * 已经附过（比如拿存档过的任务卡再补充生图）就不重复加。
+ */
+export function appendCopySection(sopText: string, copyText: string): string {
+  const copy = copyText.trim()
+  if (!copy || sopText.includes(COPY_SECTION_HEADER)) return sopText
+  return `${sopText.trim()}\n\n${COPY_SECTION_HEADER}\n${copy}`
+}
+
 // ===== 后台队列：点击后立即返回，界面不锁 =====
 
 export interface SopJobRequest {
@@ -666,7 +686,7 @@ async function runJob(job: SopJobRequest) {
 
   try {
     // 已存档的 SOP 直接拿来写提示词；没有才按参考图反推
-    const sop = job.sopText?.trim()
+    let sop = job.sopText?.trim()
       || await generateSop(
         profile,
         job.systemPromptText,
@@ -676,6 +696,10 @@ async function runJob(job: SopJobRequest) {
         job.copyText ?? '',
         job.avoidCta !== false,
       )
+    const copyText = (job.copyText ?? '').trim()
+    // 直接用存档 SOP 时把卖点并进 SOP 文本：卡上、详情页看到的 SOP 就带着卖点，
+    // 和「反推」路径一致；不然 SOP 里连卖点一节都找不到，看起来像没生效
+    if (presetSop && copyText) sop = appendCopySection(sop, copyText)
     let prompts = await generatePrompts(
       profile,
       sop,
@@ -694,7 +718,6 @@ async function runJob(job: SopJobRequest) {
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
 
     // 生图前校验：选了卖点就必须逐字一致，不一致先让模型改回原文再验一次
-    const copyText = (job.copyText ?? '').trim()
     if (copyText) {
       const before = checkPromptCopy(prompts, copyText)
       if (!before.ok) {

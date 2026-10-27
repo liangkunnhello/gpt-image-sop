@@ -1,8 +1,10 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import type { SavedSop, SopDirectionNode, SopSystemPrompt, VariablePrompt } from '../types'
+import { isTauri } from './platform'
 import type { PostTemplate } from './postTemplate'
 import { clampPromptCount } from './promptLimits'
+import { safeJsonStorage, tauriStorage } from './tauriStorage'
 
 /** 初始树按现有策略分类搭骨架，内容后续在界面里增删 */
 const SEED_DIRECTIONS: SopDirectionNode[] = [
@@ -509,6 +511,9 @@ export const useSopStore = create<SopState>()(
     }),
     {
       name: 'gpt-image-sop-store',
+      // 客户端走 SQLite（tauriStorage）：这个 store 装着灵境导入的后处理模板（logo 是 base64），
+      // 放默认 localStorage 会写满配额，persist 的同步写入一抛异常就把点发送这类操作炸断
+      storage: createJSONStorage(() => (isTauri ? tauriStorage : safeJsonStorage())),
       // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边；v5：变量提示词库；v6：节点伪删除；
       // v7：productId 为空的配置认领到顶层节点；v8：新增按节点存的交付地址；
       // v9：新增生图 SOP 库（整份 SOP 存下来直接出图）

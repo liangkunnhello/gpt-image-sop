@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiProfile } from '../types'
-import { generatePrompts, rewriteSopText } from './sopPipeline'
+import { appendCopySection, buildPromptMessages, generatePrompts, rewriteSopText, sopTitleOf } from './sopPipeline'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from './promptLimits'
 
 const profile = {
@@ -183,5 +183,41 @@ describe('generatePrompts 分批写', () => {
     const prompts = await generatePrompts(profile, SOP, MAX_PROMPTS_PER_RUN + 500)
     expect(prompts.length).toBeLessThanOrEqual(MAX_PROMPTS_PER_RUN)
     expect(fetchMock.mock.calls.length).toBeGreaterThan(1)
+  })
+})
+
+describe('appendCopySection 卖点并入存档 SOP', () => {
+  it('把卖点作为最高优先级一节附到末尾', () => {
+    const merged = appendCopySection(SOP, '赔付总限额600万')
+    expect(merged).toContain('# 卖点文案（最高优先级 · 图上文字的唯一来源）')
+    expect(merged).toContain('赔付总限额600万')
+    // 原 SOP 内容一字不动，标题还能从「SOP 名称」取到
+    expect(merged).toContain('不画按钮，不加引导点击的箭头。')
+    expect(sopTitleOf(merged, '兜底')).toBe('百万医疗险 · 月亮夜景')
+  })
+
+  it('已带卖点一节时不重复加', () => {
+    const once = appendCopySection(SOP, '赔付总限额600万')
+    const twice = appendCopySection(once, '赔付总限额600万')
+    expect(twice).toBe(once)
+  })
+
+  it('卖点为空时原样返回', () => {
+    expect(appendCopySection(SOP, '  ')).toBe(SOP)
+  })
+
+  it('buildPromptMessages 提示 SOP 禁忌与卖点冲突时以卖点为准', () => {
+    const { system } = buildPromptMessages({
+      sopText: SOP,
+      count: 1,
+      copyText: '赔付总限额600万',
+    })
+    expect(system).toContain('以卖点为准')
+    expect(system).toContain('画面不出现任何文字')
+  })
+
+  it('没有卖点时不出现冲突规则', () => {
+    const { system } = buildPromptMessages({ sopText: SOP, count: 1 })
+    expect(system).not.toContain('以卖点为准')
   })
 })

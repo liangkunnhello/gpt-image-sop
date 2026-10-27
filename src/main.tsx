@@ -7,7 +7,7 @@ import './index.css'
 import { getProxySetting } from './lib/networkProxy'
 import { installBrowserBehaviorGuards, installExternalLinkHandler, isTauri } from './lib/platform'
 import { installTauriLog } from './lib/tauriLog'
-import { installTauriStorageFlush, loadTauriStorage } from './lib/tauriStorage'
+import { installTauriStorageFlush, loadTauriStorage, migrateLocalStorageStores } from './lib/tauriStorage'
 import { installMobileViewportGuards } from './lib/viewport'
 
 installMobileViewportGuards()
@@ -39,6 +39,8 @@ if (!isTauri && 'serviceWorker' in navigator) {
 async function start() {
   if (isTauri) {
     await loadTauriStorage()
+    // SOP store 之前留在 localStorage（写满配额会抛异常），搬进 SQLite；必须在 store 加载前做
+    migrateLocalStorageStores(['gpt-image-sop-store'])
     void installTauriStorageFlush().catch((err) => console.error('注册关闭前保存失败：', err))
   }
   const { default: App } = await import('./App')

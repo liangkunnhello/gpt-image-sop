@@ -101,7 +101,7 @@ import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
 import { pickSaveDir, saveFile, saveFileToDir, getDefaultSaveDir, createSaveFolder, useSaveDir, type SaveOptions } from './lib/saveFile'
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
 import { throwIfAborted } from './lib/serverSentEvents'
-import { tauriStorage } from './lib/tauriStorage'
+import { safeJsonStorage, tauriStorage } from './lib/tauriStorage'
 
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
@@ -1258,8 +1258,8 @@ export const useStore = create<AppState>()(
     }),
     {
       name: 'gpt-image-playground',
-      // 与 zustand 默认存储（window.localStorage）一致；客户端改用预加载到内存的 SQLite kv
-      storage: createJSONStorage(() => isTauri ? tauriStorage : window.localStorage),
+      // 与 zustand 默认存储（window.localStorage）一致，但写满配额只告警不抛异常；客户端改用预加载到内存的 SQLite kv
+      storage: createJSONStorage(() => isTauri ? tauriStorage : safeJsonStorage()),
       version: 2,
       migrate: migratePersistedState,
       partialize: getPersistedState,

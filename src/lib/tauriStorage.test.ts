@@ -210,3 +210,60 @@ describe('tauriStorage', () => {
     expect(saved.state.supportPromptDismissed).toBe(true)
   }, 30000)
 })
+
+describe('migrateLocalStorageStores / safeJsonStorage', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    window.localStorage.clear()
+  })
+
+  it('localStorage 里的存档搬进 SQLite 并删掉本地残留', async () => {
+    const { migrateLocalStorageStores } = await setup({})
+    window.localStorage.setItem('gpt-image-sop-store', '{"state":{"presets":[1]},"version":9}')
+    migrateLocalStorageStores(['gpt-image-sop-store'])
+    expect(window.localStorage.getItem('gpt-image-sop-store')).toBeNull()
+    // 防抖后写进 kv
+    await vi.advanceTimersByTimeAsync(300)
+    expect(invoke).toHaveBeenCalledWith('kv_set', { key: 'gpt-image-sop-store', value: '{"state":{"presets":[1]},"version":9}' }, undefined)
+  })
+
+  it('SQLite 里已有更全的数据时不覆盖', async () => {
+    const remote = JSON.stringify({ state: { presets: [1, 2, 3] }, version: 9 })
+    const { migrateLocalStorageStores, tauriStorage } = await setup({ 'gpt-image-sop-store': remote })
+    window.localStorage.setItem('gpt-image-sop-store', '{"state":{},"version":9}')
+    migrateLocalStorageStores(['gpt-image-sop-store'])
+    expect(tauriStorage.getItem('gpt-image-sop-store')).toBe(remote)
+    // 本地残留仍要清掉
+    expect(window.localStorage.getItem('gpt-image-sop-store')).toBeNull()
+  })
+
+  it('safeJsonStorage 写满配额时只告警不抛异常', async () => {
+    const { safeJsonStorage } = await setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // jsdom 的 localStorage 方法 spy 不生效，直接把 window.localStorage 换成会抛配额异常的桩
+    const throwing = {
+      getItem: () => null,
+      setItem: () => { throw new DOMException('exceeded the quota', 'QuotaExceededError') },
+      removeItem: () => {},
+      clear: () => {},
+      key: () => null,
+      get length() { return 0 },
+    }
+    const original = Object.getOwnPropertyDescriptor(window, 'localStorage')
+    Object.defineProperty(window, 'localStorage', { configurable: true, get: () => throwing })
+    try {
+      const storage = safeJsonStorage()
+      expect(() => storage.setItem('k', 'v')).not.toThrow()
+      expect(warn).toHaveBeenCalled()
+      // 读取 / 删除同样不抛
+      expect(storage.getItem('k')).toBeNull()
+      expect(() => storage.removeItem('k')).not.toThrow()
+    } finally {
+      if (original) Object.defineProperty(window, 'localStorage', original)
+    }
+  })
+})

@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { StateStorage } from 'zustand/middleware'
 import { call } from './dbTauri'
+import { isTauri } from './platform'
 
 // 设置每次变化都会触发 persist 写入，合并到停顿后再写库
 const FLUSH_DELAY_MS = 300
@@ -110,4 +111,52 @@ export async function installTauriStorageFlush() {
     if (closeGuard && !(await closeGuard())) return event.preventDefault()
     await flushTauriStorageBeforeExit()
   })
+}
+
+/**
+ * 包装 localStorage：写满配额（QuotaExceededError）时降级为告警，不再往外抛。
+ *
+ * persist 的 setItem 是在 store.set() 里同步调用的，一抛异常就会把调用方炸掉 ——
+ * 实际发生过：SOP store 写满后点发送，队列刚入队还没启动就中断，任务卡永远停在 0/4。
+ * 写不进去只能放弃持久化（本次改动重启会丢），比卡死整个操作流程好得多。
+ */
+export function safeJsonStorage(): StateStorage {
+  return {
+    getItem: (key) => {
+      try { return window.localStorage.getItem(key) } catch { return null }
+    },
+    setItem: (key, value) => {
+      try {
+        window.localStorage.setItem(key, value)
+      } catch (err) {
+        console.warn(`本地设置写不下（${key}），本次改动只在内存里生效：`, err)
+      }
+    },
+    removeItem: (key) => {
+      try { window.localStorage.removeItem(key) } catch { /* 忽略 */ }
+    },
+  }
+}
+
+/**
+ * 一次性迁移：把留在 WebView localStorage 里的 zustand persist 存档搬进 SQLite。
+ *
+ * SOP store 之前走默认 localStorage，导入灵境后处理模板（logo 是 base64）后体积
+ * 超出 WebView 配额，写入开始抛 QuotaExceededError。搬进 SQLite 没有这个上限。
+ *
+ * 两边都有存档时取**字节数多的那份**：SQLite 里可能只有很早以前的残缺记录，
+ * localStorage 才是用户真正在用的数据；反过来（本地是老残片）也不会覆盖新的。
+ * 必须在 store 创建之前调用（模块加载即 hydration，晚了就读错数据）。
+ */
+export function migrateLocalStorageStores(keys: string[]) {
+  if (!isTauri) return
+  for (const key of keys) {
+    let local: string | null = null
+    try { local = window.localStorage.getItem(key) } catch { continue }
+    if (!local) continue
+    // tauriStorage 的 getItem 是同步的（启动时已全量载入内存），这里必然拿到 string | null
+    const remote = tauriStorage.getItem(key) as string | null
+    if (!remote || local.length > remote.length) tauriStorage.setItem(key, local)
+    try { window.localStorage.removeItem(key) } catch { /* 忽略 */ }
+  }
 }
