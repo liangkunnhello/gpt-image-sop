@@ -5611,12 +5611,21 @@ export async function reuseConfig(task: TaskRecord) {
   }
 
   /**
-   * 提示词：普通模式还原发送前的原文（快照里有）；
-   * SOP / 变量模式按约定保留 task.prompt（模型生成的那条），方便微调重发。
+   * 输入框：三种模式统一还原「发送瞬间输入框里的原文」。
+   *
+   * 以前 SOP / 变量模式还原的是 task.prompt —— 那是模型写出来的最终提示词
+   * （一长段，还带系统提示词/变量要求的口吻），而这两种模式下输入框根本不参与生成，
+   * 塞进去只有噪音，也让人以为「输入框被换成了别的东西」。
+   *
+   * 快照里没记原文（老任务，或当时输入框是空的）时：普通模式退回 task.prompt 兜底，
+   * SOP / 变量模式保持空 —— 那才是它们真实的输入状态。
    */
+  // 没有快照的老任务：靠 variableMode / sopText 认出「当年是 SOP 或变量模式」，
+  // 同样给空，不再把生成的提示词塞进一个不参与生成的输入框
+  const legacyNonPlain = Boolean(task.variableMode || task.sopText)
   const restorePrompt = snapshot
-    ? (snapshot.mode === 'plain' ? (snapshot.prompt ?? task.prompt) : task.prompt)
-    : task.prompt
+    ? (snapshot.mode === 'plain' ? (snapshot.prompt ?? task.prompt) : (snapshot.prompt ?? ''))
+    : (legacyNonPlain ? '' : task.prompt)
   // 部分参考图可能已被删除，按图片 id 重新对齐提示词中的图片序号，避免评论和提及错位到其他图片
   setPrompt(remapImageMentionsForOrder(restorePrompt, inputIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
@@ -7051,13 +7060,12 @@ export async function submitSopTasks(input: {
       // 同一批的固定图都一样；存下来是为了复用配置时能拆回「固定图」区
       variableFixedImageIds: fixedImageIds.length ? fixedImageIds : undefined,
       /**
-       * 快照整批共用一份，但变量模式每条的 prompt 是「本条的填词结果」。
-       * SOP 模式下 inputSnapshot.prompt 留空：输入框里的提示词是模型生成的，
-       * 复用配置时按约定保留 task.prompt（见 reuseConfig），不还原成空的。
+       * 快照整批共用一份。`prompt` 在这里是「本条填词/写出来的提示词」，
+       * 不是用户输入框里的原文 —— 输入框原文由调用方放进 inputSnapshot.prompt
+       * （见 sopPipeline / variablePipeline 的 inputPrompt），这一层不能拿它覆盖，
+       * 否则复用配置会把模型生成的长提示词塞回输入框。
        */
-      inputSnapshot: input.inputSnapshot
-        ? { ...input.inputSnapshot, prompt: input.inputSnapshot.mode === 'sop' ? undefined : prompt }
-        : undefined,
+      inputSnapshot: input.inputSnapshot,
     }
   })
 

@@ -585,6 +585,12 @@ export interface VariableJobRequest {
   /** 内部用：占位卡已经转成错误卡时不再弹卖点提示 */
   quietCopyCheck?: boolean
   /**
+   * 发送瞬间输入框里的原文。
+   * 变量模式不拿它生成（用的是变量提示词提取出的策略），
+   * 但「复用配置」要能原样还原回输入框，别拿模型生成的提示词顶替。
+   */
+  inputPrompt?: string
+  /**
    * 图生图：每条提示词都带上的固定图（产品实拍、包装等）。
    * 不传就是原来「纯靠提示词出图」的行为。
    */
@@ -773,6 +779,8 @@ async function runJob(job: VariableJobRequest) {
        */
       inputSnapshot: {
         mode: 'variable',
+        // 输入框原文：变量模式不拿它生成，只是「复用配置」时要原样还原回输入框
+        prompt: job.inputPrompt?.trim() || undefined,
         fixedImageIds: (job.fixedImages ?? []).map((img) => img.id),
         variableImageIds: (job.variableImages ?? []).map((img) => img.id),
       },

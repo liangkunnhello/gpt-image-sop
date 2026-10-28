@@ -6121,8 +6121,9 @@ describe('reuse config restores input snapshot', () => {
     expect(state.inputImages.map((img) => img.id)).toEqual([refImage.id])
     expect(state.fixedImages.map((img) => img.id)).toEqual([fixedA.id])
     expect(state.variableImages.map((img) => img.id)).toEqual([varA.id, varB.id])
-    // SOP / 变量模式按约定保留生成出的提示词，便于微调重发
-    expect(state.prompt).toBe('骨架填出来的这一条提示词')
+    // 快照里没记输入框原文时留空：这两种模式本来就不用输入框生成，
+    // 塞模型生成的提示词进去只会让人以为「输入框被换成了别的东西」
+    expect(state.prompt).toBe('')
   })
 
   it('SOP 模式：切回 SOP 模式并把参考图放回输入区', async () => {
@@ -6145,7 +6146,57 @@ describe('reuse config restores input snapshot', () => {
     expect(useSopStore.getState().variableMode).toBe(false)
     expect(state.inputImages.map((img) => img.id)).toEqual([refImage.id])
     expect(state.fixedImages).toHaveLength(0)
-    expect(state.prompt).toBe('SOP 生成出来的提示词')
+    expect(state.prompt).toBe('')
+  })
+
+  it('SOP / 变量模式：快照记了输入框原文就原样还原，不拿生成的提示词顶替', async () => {
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: 'SOP 生成出来的长提示词（几千字那种）',
+      sopText: '## SOP',
+      inputImageIds: [],
+      inputSnapshot: {
+        mode: 'sop',
+        prompt: '用户当时在输入框写的补充要求',
+        fixedImageIds: [],
+        variableImageIds: [],
+      },
+    }))
+    expect(useStore.getState().prompt).toBe('用户当时在输入框写的补充要求')
+
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: '变量模式填词出来的提示词',
+      variableMode: true,
+      inputSnapshot: {
+        mode: 'variable',
+        prompt: '变量模式的输入框原文',
+        fixedImageIds: [],
+        variableImageIds: [],
+      },
+    }))
+    expect(useStore.getState().prompt).toBe('变量模式的输入框原文')
+  })
+
+  it('老任务没有快照：SOP / 变量卡给空，普通卡仍退回 task.prompt', async () => {
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: 'SOP 生成的提示词',
+      sopText: '## SOP',
+      inputImageIds: [],
+    }))
+    expect(useStore.getState().prompt).toBe('')
+
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: '普通模式的提示词',
+      inputImageIds: [],
+    }))
+    expect(useStore.getState().prompt).toBe('普通模式的提示词')
   })
 
   it('快照里的图已被删除时跳过，不影响其余还原', async () => {

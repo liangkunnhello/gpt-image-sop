@@ -676,6 +676,12 @@ export interface SopJobRequest {
   useImageSellingPoints?: boolean
   /** 避免按钮、悬浮球这类引导点击的仿系统界面设计，默认开启 */
   avoidCta?: boolean
+  /**
+   * 发送瞬间输入框里的原文。
+   * SOP 模式不会拿它去生成，但「复用配置」要能把它还原回输入框 ——
+   * 否则只能塞模型生成的那条长提示词，看着像「输入框被替换成了别的东西」。
+   */
+  inputPrompt?: string
 }
 
 /** 同时在跑的任务卡数量 */
@@ -814,6 +820,7 @@ async function runJob(job: SopJobRequest) {
        */
       inputSnapshot: {
         mode: 'sop',
+        prompt: job.inputPrompt?.trim() || undefined,
         fixedImageIds: [],
         variableImageIds: [],
       },

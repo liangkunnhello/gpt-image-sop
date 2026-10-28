@@ -642,6 +642,8 @@ export default function InputBar() {
       ignoreCompliance: options.ignoreCompliance,
       useImageSellingPoints: options.useImageSellingPoints,
       avoidCta: options.avoidCta,
+      // 输入框原文：这两种模式不拿它生成，但「复用配置」要能原样还原回输入框
+      inputPrompt: useStore.getState().prompt,
     })))
   }, [inputImages, pickedPoint, pickedStyle])
 
@@ -671,6 +673,8 @@ export default function InputBar() {
       variableImages,
       // 参考图为空 = 直出：不调模型提取策略，直接把变量提示词解析成骨架 + 可变项
       skipExtract: options.skipExtract,
+      // 输入框原文：复用配置时原样还原，不拿生成的提示词顶替
+      inputPrompt: useStore.getState().prompt,
     })))
   }, [inputImages, fixedImages, variableImages])
 
