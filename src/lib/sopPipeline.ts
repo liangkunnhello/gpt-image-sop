@@ -682,6 +682,11 @@ export interface SopJobRequest {
    * 否则只能塞模型生成的那条长提示词，看着像「输入框被替换成了别的东西」。
    */
   inputPrompt?: string
+  /**
+   * 不把后处理预留区写进提示词。由「额外要求」里“避开 Logo / 警示语位置”那条控制：
+   * 用户关掉它就不该再算预留区，否则会继续强行避让。
+   */
+  skipOverlay?: boolean
 }
 
 /** 同时在跑的任务卡数量 */
@@ -711,7 +716,8 @@ async function runJob(job: SopJobRequest) {
   // 后处理预留区：出图后要在固定位置叠 Logo / 警示语，写提示词时就让模型避开
   // 关掉后处理就不用留位了，画面可以画满
   const sopState = useSopStore.getState()
-  const avoidTemplate = sopState.avoidOverlay === false || state.params.post_process === false
+  // skipOverlay 来自「额外要求」里“避开 Logo / 警示语位置”有没有选
+  const avoidTemplate = job.skipOverlay || sopState.avoidOverlay === false || state.params.post_process === false
     ? null
     : pickAvoidTemplate(
       resolvePostTemplates(sopState.postTemplates, sopState.directions, job.directionId).templates,

@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useSopStore } from '../lib/sopStore'
+import { resolveExtraIds } from '../lib/extraRequirements'
+import { ExtraChecklist } from './ExtraRequirementsModal'
 import { splitReferenceGroups } from '../lib/sopPipeline'
 import { collectAvoidZones } from '../lib/postReserve'
 import { BUILTIN_VARIABLE_PROMPT } from '../lib/variablePipeline'
@@ -19,8 +21,6 @@ export interface VariableRunOptions {
   styleText: string
   groupCount: number
   fillsPerCard: number
-  ignoreCompliance: boolean
-  avoidCta: boolean
   /**
    * 直出：不调模型，直接把变量提示词解析成「骨架 + 可变项」。
    * 不再让用户勾，由「有没有参考图」自动决定：没参考图就没法提取。
@@ -52,12 +52,9 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
   const presets = useSopStore((s) => s.presets)
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
-  const ignoreCompliance = useSopStore((s) => s.ignoreCompliance)
-  const setIgnoreCompliance = useSopStore((s) => s.setIgnoreCompliance)
-  const avoidCtaDesign = useSopStore((s) => s.avoidCtaDesign)
-  const setAvoidCtaDesign = useSopStore((s) => s.setAvoidCtaDesign)
-  const avoidOverlay = useSopStore((s) => s.avoidOverlay)
-  const setAvoidOverlay = useSopStore((s) => s.setAvoidOverlay)
+  const extraPick = useSopStore((s) => s.extraPick)
+  const setExtraPick = useSopStore((s) => s.setExtraPick)
+  const setExtraOpen = useSopStore((s) => s.setExtraOpen)
   const postTemplates = useSopStore((s) => s.postTemplates)
   const variablesPerCard = useSopStore((s) => s.variablesPerCard)
   const setVariablesPerCard = useSopStore((s) => s.setVariablesPerCard)
@@ -80,6 +77,8 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
   const currentDirectionId = productChildren.some((n) => n.id === directionId)
     ? directionId
     : productChildren[0]?.id || ''
+  /** 当前方向勾选的额外要求（与 SOP 模式同一份库） */
+  const pickedExtras = resolveExtraIds(extraPick, currentDirectionId)
 
   // 变量提示词、卖点、风格都在输入框上方选好了，这里只读当前值做确认；方向为空则就近继承产品
   const scopeIds = scopeChain(directions, productId)
@@ -317,54 +316,26 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
             采样保证选出的组合两两差异最大，因此同样张数下重图最少；组合池不够时会自动少出，不会重复填同一句。
           </div>
 
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
-            <input
-              type="checkbox"
-              checked={ignoreCompliance}
-              onChange={(e) => setIgnoreCompliance(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-violet-500"
+          {/* 额外要求：和 SOP 模式同一份库，能改名 / 改内容 / 增删 */}
+          <div className="rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-gray-700 dark:text-gray-200">额外要求</span>
+              <button
+                type="button"
+                onClick={() => setExtraOpen(true)}
+                className="text-[11px] text-violet-600 transition-colors hover:underline dark:text-violet-400"
+              >
+                管理 / 新增
+              </button>
+            </div>
+            <p className="mb-1.5 text-[11px] leading-relaxed text-gray-400">
+              选中的会写进策略提取与提示词。想改措辞或加自己的规则，点「管理 / 新增」。
+            </p>
+            <ExtraChecklist
+              value={pickedExtras}
+              onChange={(ids) => currentDirectionId && setExtraPick(currentDirectionId, ids)}
             />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">不提取 logo 与合规文案</span>
-              <span className="block text-[11px] leading-relaxed text-gray-400">
-                开启后策略与变量选项都不含品牌 logo、免责声明、风险提示。
-              </span>
-            </span>
-          </label>
-
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
-            <input
-              type="checkbox"
-              checked={avoidCtaDesign}
-              onChange={(e) => setAvoidCtaDesign(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-violet-500"
-            />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">不要按钮 / 引导点击的设计</span>
-              <span className="block text-[11px] leading-relaxed text-gray-400">
-                默认开启：不提取按钮、悬浮球、进度条这类仿系统控件，也不写「立即领取」「点击查看」。
-              </span>
-            </span>
-          </label>
-
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
-            <input
-              type="checkbox"
-              checked={avoidOverlay !== false}
-              onChange={(e) => setAvoidOverlay(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-violet-500"
-            />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">提示词避开 Logo / 警示语位置</span>
-              <span className="block text-[11px] leading-relaxed text-gray-400">
-                把后处理模板的预留区写进提示词要求，出图后叠 Logo 和警示语就不会压住画面。
-                {' '}
-                {overlayInfo.templates
-                  ? `当前方向实际生效的 ${overlayInfo.templates} 套模板配了预留区，最多 ${overlayInfo.zones} 处。`
-                  : '当前方向没有生效的后处理模板，可在方向树里给方向或产品打开后处理模板设置。'}
-              </span>
-            </span>
-          </label>
+          </div>
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-gray-200 px-5 py-3 dark:border-white/[0.08]">
@@ -383,8 +354,6 @@ export default function VariableRunModal({ imageCount, fixedCount = 0, variableC
               styleText: pickedStyle?.content ?? '',
               groupCount,
               fillsPerCard: variablesPerCard,
-              ignoreCompliance,
-              avoidCta: avoidCtaDesign,
               skipExtract,
             })}
             className="rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"

@@ -122,3 +122,38 @@ describe('按钮 / 引导点击开关', () => {
     expect(buildPromptMessages({ sopText: 'SOP', count: 2, avoidCta: false }).system).not.toContain('立即领取')
   })
 })
+
+describe('额外要求并进提示词', () => {
+  it('排在文案之后、系统提示词之前，编号成条', () => {
+    const { merged } = buildPromptBundle({
+      systemPrompt: '画面要求',
+      point: '赔付总限额600万',
+      extras: ['不画按钮', '避开左上角'],
+    })
+    const copyAt = merged.indexOf('# 文案')
+    const extraAt = merged.indexOf('# 额外要求')
+    const systemAt = merged.indexOf('# 系统提示词')
+    expect(copyAt).toBeGreaterThanOrEqual(0)
+    expect(extraAt).toBeGreaterThan(copyAt)
+    expect(systemAt).toBeGreaterThan(extraAt)
+    expect(merged).toContain('1. 不画按钮')
+    expect(merged).toContain('2. 避开左上角')
+  })
+
+  it('没有额外要求时不产生这一节', () => {
+    const { merged } = buildPromptBundle({ systemPrompt: '画面要求' })
+    expect(merged).not.toContain('# 额外要求')
+  })
+
+  it('空白条目被丢掉，不会出现「1. 」这种空行', () => {
+    const { merged } = buildPromptBundle({ extras: ['  ', '', '真要求'] })
+    expect(merged).toContain('1. 真要求')
+    expect(merged).not.toContain('2.')
+  })
+
+  it('只有额外要求时也能拼出一份（不依赖系统提示词/卖点）', () => {
+    const { merged } = buildPromptBundle({ extras: ['不画按钮'] })
+    expect(merged).toContain('# 额外要求')
+    expect(merged).toContain('不画按钮')
+  })
+})

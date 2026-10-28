@@ -39,6 +39,8 @@ import { parseSizeLimitKb } from '../lib/outputFileSize'
 import { buildPromptBundle } from '../lib/promptBundle'
 import { taskMatchesChannel } from '../lib/channel'
 import { enqueueSopJobs, splitReferenceGroups } from '../lib/sopPipeline'
+import { extraContents, hasExtra, resolveExtraIds } from '../lib/extraRequirements'
+import SopExtraPicker from './SopExtraPicker'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import PromptOptimizeModal from './PromptOptimizeModal'
@@ -619,10 +621,18 @@ export default function InputBar() {
   const runSop = useCallback((options: SopRunOptions) => {
     setSopSplitOpen(false)
     // 三个板块合成一份再发：卖点排最前并写死优先级，避免被系统提示词里的文案盖掉
+    const sopSnapshot = useSopStore.getState()
+    const extraIds = resolveExtraIds(sopSnapshot.extraPick, options.directionId || sopSnapshot.activeDirectionId)
+    const extras = extraContents(sopSnapshot.extraRequirements, extraIds)
+    // 这几条原来靠弹窗勾选，现在由「额外要求」里对应条目决定：
+    // 文案已经进提示词，代码这边只保留必须配合的行为（剔按钮位、避让预留区）
+    const avoidCta = hasExtra(sopSnapshot.extraRequirements, extraIds, 'strip-cta')
+    const skipOverlay = !hasExtra(sopSnapshot.extraRequirements, extraIds, 'avoid-overlay')
     const bundle = buildPromptBundle({
       systemPrompt: options.systemPromptText,
       point: pickedPoint?.content,
       style: pickedStyle?.content,
+      extras,
     })
     // 没有参考图时 splitEven 会返回一个空组：这一组只靠系统提示词与卖点反推文字版 SOP
     // 参考图不进生图接口，只按用户选的卡数均分，不限张数、也不再自动多分卡
@@ -639,9 +649,11 @@ export default function InputBar() {
       copyText: bundle.copyText,
       promptsPerGroup: options.promptsPerGroup,
       directionId: options.directionId,
-      ignoreCompliance: options.ignoreCompliance,
-      useImageSellingPoints: options.useImageSellingPoints,
-      avoidCta: options.avoidCta,
+      // 这两条的文案已由额外要求提供，硬编码那段不再生成，避免同一规则写两遍
+      ignoreCompliance: false,
+      useImageSellingPoints: true,
+      avoidCta,
+      skipOverlay,
       // 输入框原文：这两种模式不拿它生成，但「复用配置」要能原样还原回输入框
       inputPrompt: useStore.getState().prompt,
     })))
@@ -652,6 +664,17 @@ export default function InputBar() {
     setVariableRunOpen(false)
     // 三种图都算来源：只拖了固定图也要能跑（纯靠固定图 + 提示词出图），漏判会导致点确认后毫无反应
     if (!inputImages.length && !fixedImages.length && !variableImages.length) return
+    // 额外要求拼进变量提示词：策略提取与逐条填词都会带着这些约束
+    const varSnapshot = useSopStore.getState()
+    const varExtraIds = resolveExtraIds(varSnapshot.extraPick, options.directionId || varSnapshot.activeDirectionId)
+    const varExtras = extraContents(varSnapshot.extraRequirements, varExtraIds)
+    const avoidCta = hasExtra(varSnapshot.extraRequirements, varExtraIds, 'strip-cta')
+    const variablePromptText = [
+      options.variablePromptText.trim(),
+      varExtras.length
+        ? `额外要求（硬性约束，必须遵守）：\n${varExtras.map((line, index) => `${index + 1}. ${line}`).join('\n')}`
+        : '',
+    ].filter(Boolean).join('\n\n')
     // 参考图只用于提取策略、不进生图接口，按用户选的卡数均分，不限张数
     const referenceGroups = inputImages.length
       ? splitReferenceGroups(inputImages, options.groupCount)
@@ -660,14 +683,15 @@ export default function InputBar() {
       label: `第 ${index + 1}/${referenceGroups.length} 张卡`,
       imageDataUrls: group.map((img) => img.dataUrl),
       imageIds: group.map((img) => img.id),
-      variablePromptText: options.variablePromptText,
+      variablePromptText,
       variablePromptName: options.variablePromptName,
       copyText: options.copyText,
       styleText: options.styleText,
       fillsPerCard: options.fillsPerCard,
       directionId: options.directionId,
-      ignoreCompliance: options.ignoreCompliance,
-      avoidCta: options.avoidCta,
+      // 由「额外要求」里对应条目决定（文案已进 variablePromptText，这里只管剔按钮位的行为）
+      ignoreCompliance: false,
+      avoidCta,
       // 图生图：固定图每条都带、变量图逐条轮换；参考图不进生图接口
       fixedImages,
       variableImages,
@@ -2139,6 +2163,7 @@ export default function InputBar() {
               )}
               <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
               <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
+              <SopExtraPicker />
             </div>
           )}
           {/* 变量模式：变量提示词与系统提示词并行，卖点/风格两个模式通用 */}
@@ -2147,6 +2172,7 @@ export default function InputBar() {
               <VariablePromptPicker scopeIds={sopScopeIds} directionId={pickerDirectionId} />
               <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
               <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
+              <SopExtraPicker />
             </div>
           )}
           {/* 普通模式：卖点 / 风格保留，系统提示词的位置换成「融图 / 批量」切换。
@@ -2156,6 +2182,7 @@ export default function InputBar() {
               <PlainImageModeSwitch />
               <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
               <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
+              <SopExtraPicker />
             </div>
           )}
 

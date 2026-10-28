@@ -18,6 +18,7 @@ import AgentWorkspace from './components/AgentWorkspace'
 import InputBar from './components/InputBar'
 import SopDirectionTree from './components/SopDirectionTree'
 import SopLibraryModal from './components/SopLibraryModal'
+import ExtraRequirementsModal from './components/ExtraRequirementsModal'
 import TrashModal from './components/TrashModal'
 import CardAssignModal from './components/CardAssignModal'
 import DetailModal from './components/DetailModal'
@@ -232,6 +233,7 @@ export default function App() {
       )}
       <InputBar />
       <SopLibraryModal />
+      <ExtraRequirementsModal />
       <TrashModal />
       <CardAssignModal />
       <DetailModal />

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { SopLibraryTab } from '../lib/sopStore'
+import { pickExtraRequirements, resolveExtraIds } from '../lib/extraRequirements'
 import { NO_PRESET, SOP_LIBRARY_LABEL, directionPath, useSopStore } from '../lib/sopStore'
 import { nearestScopeId, scopeWithItems } from '../lib/sopScope'
 import { useStore } from '../store'
@@ -73,6 +74,11 @@ export default function SopLibraryModal() {
   const updatePreset = useSopStore((s) => s.updatePreset)
   const removePreset = useSopStore((s) => s.removePreset)
   const showToast = useStore((s) => s.showToast)
+
+  const setExtraOpen = useSopStore((s) => s.setExtraOpen)
+  const extraAll = useSopStore((s) => s.extraRequirements)
+  const extraPick = useSopStore((s) => s.extraPick)
+  const extraCount = pickExtraRequirements(extraAll, resolveExtraIds(extraPick, activeDirectionId)).length
 
   const tab: SopLibraryTab = libraryTab ?? 'prompt'
   const path = activeDirectionId ? directionPath(directions, activeDirectionId) : ''
@@ -388,6 +394,16 @@ export default function SopLibraryModal() {
               )}
             </button>
           ))}
+          {/* 额外要求是「多选 + 全局」，和上面这几个按产品分组、单选的库不是一套结构，
+              所以单独一个弹窗管理；这里只留入口，别让人以为它藏在别处 */}
+          <button
+            type="button"
+            onClick={() => { setLibraryTab(null); setExtraOpen(true) }}
+            title="额外要求：写进提示词的硬性约束，可增删改、按方向多选"
+            className="ml-auto rounded-lg border border-dashed border-gray-300 px-2.5 py-1 text-[11px] text-gray-600 transition-colors hover:border-amber-400 hover:text-amber-600 dark:border-white/20 dark:text-gray-300 dark:hover:border-amber-400/60 dark:hover:text-amber-400"
+          >
+            额外要求 {extraCount} 条
+          </button>
         </div>
 
         <div className="flex min-h-0 flex-1">

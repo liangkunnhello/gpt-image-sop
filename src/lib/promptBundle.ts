@@ -1,5 +1,5 @@
 /**
- * 把「系统提示词 / 卖点 / 风格」三份 Markdown 合成一份发给模型。
+ * 把「系统提示词 / 卖点 / 风格 / 额外要求」几份 Markdown 合成一份发给模型。
  *
  * 前端分区是为了好维护，但模型只看一份文本：分开喂的时候，系统提示词里的
  * 旧文案、参考图上的文案很容易盖过卖点，实测生图就不按卖点写了。
@@ -13,6 +13,11 @@ export interface PromptBundleInput {
   point?: string
   /** 风格 */
   style?: string
+  /**
+   * 额外要求：可编辑的规则文本（不参考 logo、不要按钮、避开预留区…）。
+   * 优先级排在文案之后、系统提示词之前 —— 它们是硬性约束，不能被系统提示词里的措辞盖掉。
+   */
+  extras?: string[]
 }
 
 export interface PromptBundle {
@@ -24,14 +29,23 @@ export interface PromptBundle {
 
 const COPY_RULE = '优先级：文案 > 系统提示词 > 风格。图上出现的每一句文字都必须逐字来自「文案」，不得改写、缩写、扩写、合并或新增；其余部分与文案冲突时，一律以文案为准。'
 
-export function buildPromptBundle({ systemPrompt = '', point = '', style = '' }: PromptBundleInput): PromptBundle {
+export function buildPromptBundle({
+  systemPrompt = '',
+  point = '',
+  style = '',
+  extras = [],
+}: PromptBundleInput): PromptBundle {
   const system = systemPrompt.trim()
   const copy = point.trim()
   const styleText = style.trim()
+  const extraLines = extras.map((item) => item.trim()).filter(Boolean)
 
   const sections: string[] = []
   if (copy) {
     sections.push(`# 文案（最高优先级 · 图上文字的唯一来源）\n${copy}`)
+  }
+  if (extraLines.length) {
+    sections.push(`# 额外要求（硬性约束，必须遵守）\n${extraLines.map((line, index) => `${index + 1}. ${line}`).join('\n')}`)
   }
   if (system) {
     sections.push(`# 系统提示词（画面、版式与执行要求）\n${system}`)

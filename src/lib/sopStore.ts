@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 import type { SavedSop, SopDirectionNode, SopSystemPrompt, VariablePrompt } from '../types'
 import { isTauri } from './platform'
 import type { PostTemplate } from './postTemplate'
+import { BUILTIN_EXTRAS, type ExtraRequirement } from './extraRequirements'
 import { clampPromptCount } from './promptLimits'
 import { safeJsonStorage, tauriStorage } from './tauriStorage'
 
@@ -106,6 +107,13 @@ interface SopState {
   presets: SopPreset[]
   /** 每个方向上次用过的卖点/风格，打开时自动带出 */
   lastPick: Record<string, SopPick>
+  /**
+   * 额外要求库：写进提示词的规则文本，可在提示词库里增删改。
+   * 全局一份（不按产品分），按方向多选生效。
+   */
+  extraRequirements: ExtraRequirement[]
+  /** 按方向记的多选；没配过的方向用默认那几条（见 DEFAULT_EXTRA_IDS） */
+  extraPick: Record<string, string[]>
   /** 用户右键指定的默认项，优先级高于上次记录 */
   defaultPick: Record<string, SopPick>
   /** 生成时忽略参考图上的 logo、合规说明、风险提示，默认开启 */
@@ -145,6 +153,9 @@ interface SopState {
   setPostPreviewImage: (ownerId: string, ratioKey: string, imageId: string | null) => void
   /** 提示词库弹窗当前打开的分组，null 表示关闭。运行时状态，不落盘 */
   libraryTab: SopLibraryTab | null
+  /** 额外要求管理弹窗是否打开。运行时状态，不落盘 */
+  extraOpen: boolean
+  setExtraOpen: (value: boolean) => void
   /** 回收站弹窗是否打开。运行时状态，不落盘 */
   trashOpen: boolean
   setTrashOpen: (value: boolean) => void
@@ -165,6 +176,10 @@ interface SopState {
   setActiveDirection: (id: string) => void
   setActiveFilter: (id: string | null) => void
   setSidebarCollapsed: (value: boolean) => void
+  addExtraRequirement: (name: string, content: string) => string
+  updateExtraRequirement: (id: string, patch: Partial<Pick<ExtraRequirement, 'name' | 'content'>>) => void
+  removeExtraRequirement: (id: string) => void
+  setExtraPick: (directionId: string, ids: string[]) => void
   addPreset: (productId: string, kind: SopPreset['kind'], name: string, content: string) => string
   updatePreset: (id: string, patch: Partial<Pick<SopPreset, 'name' | 'content'>>) => void
   removePreset: (id: string) => void
@@ -215,6 +230,8 @@ export const useSopStore = create<SopState>()(
       presets: [],
       lastPick: {},
       defaultPick: {},
+      extraRequirements: BUILTIN_EXTRAS,
+      extraPick: {},
       ignoreCompliance: true,
       useImageSellingPoints: false,
       avoidCtaDesign: true,
@@ -232,6 +249,8 @@ export const useSopStore = create<SopState>()(
         return { deliveryDirs: next }
       }),
       libraryTab: null,
+      extraOpen: false,
+      setExtraOpen: (value) => set({ extraOpen: value }),
       trashOpen: false,
       setTrashOpen: (value) => set({ trashOpen: value }),
       setLibraryTab: (tab) => set({ libraryTab: tab }),
@@ -278,6 +297,33 @@ export const useSopStore = create<SopState>()(
         }
       }),
       setSidebarCollapsed: (value) => set({ sidebarCollapsed: value }),
+      addExtraRequirement: (name, content) => {
+        const id = `extra-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+        set((state) => ({
+          extraRequirements: [...state.extraRequirements, { id, name: name.trim() || '新额外要求', content: content.trim() }],
+        }))
+        return id
+      },
+      updateExtraRequirement: (id, patch) => set((state) => ({
+        extraRequirements: state.extraRequirements.map((item) => (
+          item.id === id
+            ? { ...item, ...(patch.name !== undefined ? { name: patch.name } : {}), ...(patch.content !== undefined ? { content: patch.content } : {}) }
+            : item
+        )),
+      })),
+      removeExtraRequirement: (id) => set((state) => {
+        const extraPick: Record<string, string[]> = {}
+        for (const [directionId, ids] of Object.entries(state.extraPick)) {
+          extraPick[directionId] = ids.filter((item) => item !== id)
+        }
+        return {
+          extraRequirements: state.extraRequirements.filter((item) => item.id !== id),
+          extraPick,
+        }
+      }),
+      setExtraPick: (directionId, ids) => set((state) => ({
+        extraPick: { ...state.extraPick, [directionId]: ids },
+      })),
       addPreset: (productId, kind, name, content) => {
         const id = newId(`preset-${kind}`)
         set((state) => ({
@@ -595,7 +641,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, savedSops: state.savedSops, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
+      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, savedSops: state.savedSops, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, extraRequirements: state.extraRequirements, extraPick: state.extraPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
     },
   ),
 )

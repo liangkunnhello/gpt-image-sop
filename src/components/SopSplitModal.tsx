@@ -8,6 +8,8 @@ import { nearestScopeId, scopeChain } from '../lib/sopScope'
 import { effectiveNodeKind } from '../lib/directionTree'
 import { resolvePostTemplates } from '../lib/applyPostTemplate'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from '../lib/promptLimits'
+import { resolveExtraIds } from '../lib/extraRequirements'
+import { ExtraChecklist } from './ExtraRequirementsModal'
 
 export interface SopRunOptions {
   directionId: string
@@ -20,10 +22,6 @@ export interface SopRunOptions {
   savedSopName?: string
   groupCount: number
   promptsPerGroup: number
-  ignoreCompliance: boolean
-  useImageSellingPoints: boolean
-  /** 避免按钮、悬浮球这类引导点击的仿系统界面设计 */
-  avoidCta: boolean
 }
 
 interface Props {
@@ -37,14 +35,10 @@ type SplitMode = 'one' | 'perImage' | 'custom'
 export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props) {
   const directions = useSopStore((s) => s.directions)
   const systemPrompts = useSopStore((s) => s.systemPrompts)
-  const ignoreCompliance = useSopStore((s) => s.ignoreCompliance)
-  const setIgnoreCompliance = useSopStore((s) => s.setIgnoreCompliance)
-  const useImageSellingPoints = useSopStore((s) => s.useImageSellingPoints)
-  const setUseImageSellingPoints = useSopStore((s) => s.setUseImageSellingPoints)
-  const avoidCtaDesign = useSopStore((s) => s.avoidCtaDesign)
-  const setAvoidCtaDesign = useSopStore((s) => s.setAvoidCtaDesign)
-  const avoidOverlay = useSopStore((s) => s.avoidOverlay)
-  const setAvoidOverlay = useSopStore((s) => s.setAvoidOverlay)
+
+  const extraPick = useSopStore((s) => s.extraPick)
+  const setExtraPick = useSopStore((s) => s.setExtraPick)
+  const setExtraOpen = useSopStore((s) => s.setExtraOpen)
   const postTemplates = useSopStore((s) => s.postTemplates)
 
   // 产品下拉按层级判断，不信可能写错的 kind：只有第三层及更深的才算方向
@@ -66,6 +60,8 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
   const currentDirectionId = productChildren.some((n) => n.id === directionId)
     ? directionId
     : productChildren[0]?.id || ''
+  /** 当前方向勾选的额外要求：弹窗里就能勾，改措辞去「管理 / 新增」 */
+  const pickedExtras = resolveExtraIds(extraPick, currentDirectionId)
 
   const lastPick = useSopStore((s) => s.lastPick)
   const defaultPick = useSopStore((s) => s.defaultPick)
@@ -278,71 +274,26 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             </p>
           )}
 
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
-            <input
-              type="checkbox"
-              checked={ignoreCompliance}
-              onChange={(e) => setIgnoreCompliance(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
+          {/* 额外要求：不再是写死的勾选，条目在「额外要求」弹窗里能改名 / 改内容 / 增删 */}
+          <div className="rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-gray-700 dark:text-gray-200">额外要求</span>
+              <button
+                type="button"
+                onClick={() => setExtraOpen(true)}
+                className="text-[11px] text-blue-600 transition-colors hover:underline dark:text-blue-400"
+              >
+                管理 / 新增
+              </button>
+            </div>
+            <p className="mb-1.5 text-[11px] leading-relaxed text-gray-400">
+              选中的会作为硬性约束写进提示词。想改措辞或加自己的规则，点「管理 / 新增」。
+            </p>
+            <ExtraChecklist
+              value={pickedExtras}
+              onChange={(ids) => currentDirectionId && setExtraPick(currentDirectionId, ids)}
             />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">不参考 logo 与合规文案</span>
-              <span className="block text-[11px] leading-relaxed text-gray-400">
-                开启后生成的图不带品牌 logo、免责声明、风险提示；关掉则按参考图原样保留。
-              </span>
-            </span>
-          </label>
-
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
-            <input
-              type="checkbox"
-              checked={avoidCtaDesign}
-              onChange={(e) => setAvoidCtaDesign(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
-            />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">不要按钮 / 引导点击的设计</span>
-              <span className="block text-[11px] leading-relaxed text-gray-400">
-                默认开启：画面不出现按钮、悬浮球、进度条、返回箭头这类仿系统控件，也不写「立即领取」「点击查看」「滑动解锁」这类引导点击的文案。取消勾选则允许参考图上的按钮样式。
-              </span>
-            </span>
-          </label>
-
-          {!pickedSop && (
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
-            <input
-              type="checkbox"
-              checked={useImageSellingPoints}
-              onChange={(e) => setUseImageSellingPoints(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
-            />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">使用参考图上的卖点文案</span>
-              <span className="block text-[11px] leading-relaxed text-gray-400">
-                默认关闭，卖点以上方选择器为准；打开后模型会从参考图文字里提炼卖点。
-              </span>
-            </span>
-          </label>
-          )}
-
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
-            <input
-              type="checkbox"
-              checked={avoidOverlay !== false}
-              onChange={(e) => setAvoidOverlay(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
-            />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-gray-700 dark:text-gray-200">提示词避开 Logo / 警示语位置</span>
-              <span className="block text-[11px] leading-relaxed text-gray-400">
-                开启后写提示词会带上后处理模板里的预留区（位置、大小），主体和文字会避开这些区域，出图后再叠 Logo 和警示语就不会压住画面内容。
-                {' '}
-                {overlayInfo.templates
-                  ? `当前方向实际生效的 ${overlayInfo.templates} 套模板配了预留区，最多 ${overlayInfo.zones} 处。`
-                  : '当前方向没有生效的后处理模板，可在方向树里给方向或产品打开后处理模板设置。'}
-              </span>
-            </span>
-          </label>
+          </div>
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-gray-200 px-5 py-3 dark:border-white/[0.08]">
@@ -363,9 +314,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               savedSopName: pickedSop?.name,
               groupCount,
               promptsPerGroup,
-              ignoreCompliance,
-              useImageSellingPoints,
-              avoidCta: avoidCtaDesign,
+
             })}
             className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
           >
