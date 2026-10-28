@@ -96,6 +96,8 @@ import { cardKeyOf, deliverCardGroup, deliverImageFileName, deliverTaskCard, del
 import { dispatchSkipNote, pickDispatchTemplate } from './lib/dispatch'
 import { openDirectoryPath } from './lib/deliveryDirPicker'
 import { resolveDeliveryDir } from './lib/deliveryDir'
+import { peersForTask } from './lib/duplicateScope'
+import { useInspectConfig } from './lib/inspectConfig'
 import { useClipStore } from './lib/clipSimilarity'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
 import { pickSaveDir, saveFile, saveFileToDir, getDefaultSaveDir, createSaveFolder, removeDeliveredFile, useSaveDir, type SaveOptions } from './lib/saveFile'
@@ -5120,10 +5122,10 @@ async function executeTask(taskId: string) {
     if (outputIds.length) {
       const doneTask = useStore.getState().tasks.find((item) => item.id === taskId)
       if (doneTask) {
-        const peers = useStore.getState().tasks
-          .filter((item) => item.id !== taskId && item.status === 'done' && item.sopDirectionId && item.sopDirectionId === doneTask.sopDirectionId)
-          .slice(0, 12)
-        useClipStore.getState().enqueueTask(doneTask, peers)
+        // 比对范围按设置在「同一张任务卡」与「同产品-方向」之间切
+        const scope = useInspectConfig.getState().config.duplicateScope
+        const peers = peersForTask(useStore.getState().tasks, doneTask, scope, 12)
+        useClipStore.getState().enqueueTask(doneTask, peers, scope)
       }
     }
 

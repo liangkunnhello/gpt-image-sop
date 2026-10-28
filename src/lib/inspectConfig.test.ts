@@ -109,3 +109,17 @@ describe('常用检查项预设', () => {
     expect(config.customRules.every((rule) => rule.enabled && rule.detail)).toBe(true)
   })
 })
+
+describe('重复度比对范围', () => {
+  it('默认按同产品-方向比', () => {
+    expect(DEFAULT_INSPECT_CONFIG.duplicateScope).toBe('direction')
+    expect(normalizeInspectConfig({}).duplicateScope).toBe('direction')
+  })
+
+  it('选了卡内就保留，认不出来的值退回默认', () => {
+    expect(normalizeInspectConfig({ duplicateScope: 'card' }).duplicateScope).toBe('card')
+    expect(normalizeInspectConfig({ duplicateScope: 'card' }).duplicateScope).toBe('card')
+    expect(normalizeInspectConfig({ duplicateScope: 'whatever' }).duplicateScope).toBe('direction')
+    expect(normalizeInspectConfig({ duplicateScope: 123 }).duplicateScope).toBe('direction')
+  })
+})

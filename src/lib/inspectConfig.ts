@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 
 import { readLocal, writeLocal } from './localRecord'
+import type { DuplicateScope } from './duplicateScope'
+import { toDuplicateScope } from './duplicateScope'
 import type { QcRule } from './visionQc'
 
 /**
@@ -27,6 +29,11 @@ export interface InspectConfig {
   customRules: QcRule[]
   /** 重复度判定线，相似度超过它判为重复 */
   limit: number
+  /**
+   * 重复度的比对范围：只跟同一张任务卡比，还是跟同产品-方向的所有成品比。
+   * 口径一变，之前算的重复度就不再成立，会按新口径重算。
+   */
+  duplicateScope: DuplicateScope
   /** 一次性最多送多少张图去比对 */
   maxImages: number
   /** 每张图最多带几张同方向历史图作参照 */
@@ -44,6 +51,7 @@ export const DEFAULT_INSPECT_CONFIG: InspectConfig = {
   checkOverlap: true,
   customRules: [],
   limit: 0.92,
+  duplicateScope: 'direction',
   maxImages: 36,
   peerLimit: 10,
   qcConcurrency: 3,
@@ -128,6 +136,7 @@ export function normalizeInspectConfig(raw: unknown): InspectConfig {
     checkOverlap: toBool(record.checkOverlap, d.checkOverlap),
     customRules: toQcRules(record.customRules),
     limit: toNumber(record.limit, d.limit, LIMIT_MIN, LIMIT_MAX),
+    duplicateScope: toDuplicateScope(record.duplicateScope),
     maxImages: Math.round(toNumber(record.maxImages, d.maxImages, 4, 60)),
     peerLimit: Math.round(toNumber(record.peerLimit, d.peerLimit, 1, 20)),
     qcConcurrency: Math.round(toNumber(record.qcConcurrency, d.qcConcurrency, 1, 8)),

@@ -26,6 +26,8 @@ import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
 import { inspectImages, useClipStore } from '../lib/clipSimilarity'
 import { expectFromPrompt } from '../lib/batchCheck'
 import { filterGalleryIndexes, galleryFilterCounts, type GalleryFilter } from '../lib/galleryFilter'
+import { DUPLICATE_SCOPE_LABEL, duplicateScopeKey, peersForTask, scopeTasksFor } from '../lib/duplicateScope'
+import { useInspectConfig } from '../lib/inspectConfig'
 import GalleryFilterBar from './GalleryFilterBar'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
@@ -389,6 +391,9 @@ export default function DetailModal() {
   const clipScores = useClipStore((s) => s.scores)
   const clipQc = useClipStore((s) => s.qc)
   const clipLimit = useClipStore((s) => s.limit)
+  /** 重复度按哪种口径比：同一张任务卡 / 同产品-方向 */
+  const duplicateScope = useInspectConfig((s) => s.config.duplicateScope)
+  const setInspectConfig = useInspectConfig((s) => s.setConfig)
 
   const clipEngine = useClipStore((s) => s.engine)
   const ensureClip = useClipStore((s) => s.ensure)
@@ -440,11 +445,9 @@ export default function DetailModal() {
 
   useEffect(() => {
     if (!task) return
-    // 同方向的图放一起比才有意义，数量不够就退到全部成品
-    const sameDirection = tasks.filter((item) => item.status === 'done' && item.sopDirectionId === task.sopDirectionId)
-    const scope = sameDirection.length >= 2 ? sameDirection : tasks.filter((item) => item.status === 'done')
-    ensureClip(scope)
-  }, [task?.id, ensureClip, tasks])
+    // 按用户选的口径取范围：同一张卡，或同产品-方向（同方向不够两张时退到全部成品）
+    ensureClip(scopeTasksFor(tasks, task, duplicateScope), duplicateScope)
+  }, [task?.id, ensureClip, tasks, duplicateScope])
 
   if (!task) return null
 
@@ -554,17 +557,20 @@ export default function DetailModal() {
         const dataUrl = await ensureImageCached(id)
         if (dataUrl) entries.push({ imageId: id, dataUrl })
       }
-      // 重复度要有同方向的图一起比，凑不够两张时后端只回质检
-      for (const peer of tasks) {
-        if (peer.id === task.id || peer.status !== 'done') continue
-        if (peer.sopDirectionId !== task.sopDirectionId) continue
+      // 重复度按当前口径挑参照：同一张卡，或同产品-方向
+      for (const peer of peersForTask(tasks, task, duplicateScope, 12)) {
         for (const id of visibleOutputImages(peer).slice(0, 2)) {
           const dataUrl = await ensureImageCached(id)
           if (dataUrl) entries.push({ imageId: id, dataUrl })
         }
         if (entries.length >= 12) break
       }
-      await inspectImages(entries, { expect: expectFromPrompt(task.prompt), manual: true })
+      await inspectImages(entries, {
+        expect: expectFromPrompt(task.prompt),
+        manual: true,
+        scope: duplicateScope,
+        group: duplicateScopeKey(task, duplicateScope),
+      })
     } catch (err) {
       showToast(`检查失败：${err instanceof Error ? err.message : '未知原因'}`, 'error')
     } finally {
@@ -1760,11 +1766,32 @@ export default function DetailModal() {
                             {Math.round(inspectScore * 100)}%
                           </span>
                         ) : (
-                          <span className="text-gray-400 dark:text-gray-500">需要至少两张同方向的图</span>
+                          <span className="text-gray-400 dark:text-gray-500">
+                            {duplicateScope === 'card' ? '这张卡至少要有两张图' : '需要至少两张同方向的图'}
+                          </span>
                         )}
                         {inspectScore != null && (
                           <span className="text-gray-400 dark:text-gray-500">超过 {Math.round(clipLimit * 100)}% 判为重复</span>
                         )}
+                        {/* 比对范围：点一下换口径，已算的重复度会按新口径重算 */}
+                        <span className="ml-auto flex shrink-0 items-center gap-0.5">
+                          <span className="text-gray-400 dark:text-gray-500">比对</span>
+                          {(['card', 'direction'] as const).map((value) => (
+                            <button
+                              key={value}
+                              type="button"
+                              onClick={() => setInspectConfig({ duplicateScope: value })}
+                              title={value === 'card' ? '只和这张卡里的其它图比' : '和同产品-方向下的所有成品比'}
+                              className={`rounded px-1 py-0.5 text-[10px] transition-colors ${
+                                duplicateScope === value
+                                  ? 'bg-blue-500 text-white'
+                                  : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/10'
+                              }`}
+                            >
+                              {value === 'card' ? '卡内' : '同方向'}
+                            </button>
+                          ))}
+                        </span>
                         {inspectScore != null && clipEngine === 'phash' && (
                           <span className="text-gray-400 dark:text-gray-500" title="当前环境没有本地 CLIP 服务，改按画面结构（感知哈希）比对，口径与 CLIP 不同">
                             · 画面近似度

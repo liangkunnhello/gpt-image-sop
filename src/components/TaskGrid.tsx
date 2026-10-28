@@ -10,6 +10,7 @@ import { collectSubtreeIds, UNASSIGNED_FILTER, useSopStore } from '../lib/sopSto
 import { useVirtualGrid } from '../hooks/useVirtualGrid'
 import TaskCard from './TaskCard'
 import { useClipStore } from '../lib/clipSimilarity'
+import { useInspectConfig } from '../lib/inspectConfig'
 
 export default function TaskGrid() {
   const tasks = useStore((s) => s.tasks)
@@ -71,12 +72,14 @@ export default function TaskGrid() {
   // 同一份 SOP 生成的多个任务合并成一张卡，其余任务原样展示
   const displayTasks = useMemo(() => groupSopTasks(filteredTasks), [filteredTasks])
 
-  // 后台算一次当前视图的 CLIP 重复度，算完各自卡片会显示平均重复度
+  // 后台算一次当前视图的 CLIP 重复度，算完各自卡片会显示平均重复度。
+  // 口径（卡内 / 同方向）由设置决定：卡内就按卡分组，方向就把整个方向放一起比
   const ensureClip = useClipStore((s) => s.ensure)
+  const duplicateScope = useInspectConfig((s) => s.config.duplicateScope)
   useEffect(() => {
     if (!filteredTasks.length) return
-    ensureClip(filteredTasks)
-  }, [ensureClip, filteredTasks])
+    ensureClip(filteredTasks, duplicateScope)
+  }, [ensureClip, filteredTasks, duplicateScope])
   // 框选的事件处理只在挂载时注册，通过 ref 读取最新列表
   const filteredTasksRef = useRef(displayTasks)
   filteredTasksRef.current = displayTasks

@@ -3,6 +3,8 @@ import { create } from 'zustand'
 import type { TaskRecord } from '../types'
 import { ensureImageCached } from './imageCache'
 import { computeImageHash, hashScores } from './imageHash'
+import type { DuplicateScope } from './duplicateScope'
+import { duplicateScopeKey, groupTasksByScope } from './duplicateScope'
 import { useInspectConfig } from './inspectConfig'
 import { activeQcRules, qcInBrowser, type QcChecks } from './visionQc'
 import { expectFromPrompt, type ExpectText } from './batchCheck'
@@ -30,6 +32,10 @@ export interface ClipScore {
   /** 与最像的那张的相似度，作为「重复度」展示 */
   max: number
   nearest?: string
+  /** 这份分数是按哪种口径算的（卡内 / 同方向）；换了口径要重算 */
+  scope?: DuplicateScope
+  /** 比对组的 key：卡看 sopJobId，方向看 sopDirectionId */
+  group?: string
 }
 
 interface ClipState {
@@ -45,10 +51,10 @@ interface ClipState {
    * 两种口径不能混着比，所以只记最近一次用的引擎。
    */
   engine: 'clip' | 'phash' | ''
-  ensure: (tasks: TaskRecord[]) => void
+  ensure: (tasks: TaskRecord[], scopeOverride?: DuplicateScope) => void
   scoreOfTask: (task: TaskRecord) => number | null
-  /** 任务出完图后调用：后台串行跑质检 + 重复度；peers 是同方向的历史任务 */
-  enqueueTask: (task: TaskRecord, peers: TaskRecord[]) => void
+  /** 任务出完图后调用：后台串行跑质检 + 重复度；peers 是按当前口径挑出的历史任务 */
+  enqueueTask: (task: TaskRecord, peers: TaskRecord[], scope?: DuplicateScope) => void
   qcOfTask: (task: TaskRecord) => QcResult | null
   queued: number
 }
@@ -100,25 +106,42 @@ export const useClipStore = create<ClipState>()((set, get) => ({
   engine: '',
   queued: 0,
 
-  /** 对还没算过的任务图做一次 CLIP 相似度，结果按图片 id 缓存 */
-  ensure: (tasks: TaskRecord[]) => {
+  /**
+   * 对还没按当前口径算过的任务图做一次相似度，结果按图片 id 缓存。
+   *
+   * 每次只算「一组」（一张卡或一个方向）—— 一组里至少两张没算过才动手。
+   * 缓存的分数带口径与分组标记：换了口径（卡内 ↔ 同方向）旧数字不再算数，会重算。
+   */
+  ensure: (tasks: TaskRecord[], scopeOverride?: DuplicateScope) => {
     if (get().running) return
     const config = useInspectConfig.getState().config
     if (!config.autoDuplicate) return
-    const maxImages = config.maxImages
+    const scope = scopeOverride ?? config.duplicateScope
     const { scores } = get()
-    const candidates: Array<{ imageId: string }> = []
-    for (const task of tasks) {
-      if (task.status !== 'done') continue
-      for (const imageId of task.outputImages) {
-        if (scores[imageId]) continue
-        if (candidates.some((item) => item.imageId === imageId)) continue
-        candidates.push({ imageId })
-        if (candidates.length >= maxImages) break
+
+    let picked: { group: string; ids: string[] } | null = null
+    for (const group of groupTasksByScope(tasks, scope)) {
+      const ids: string[] = []
+      for (const task of group.tasks) {
+        for (const imageId of task.outputImages) {
+          if (!imageId || ids.includes(imageId)) continue
+          const cached = scores[imageId]
+          // 同口径同组算过就跳过；换了口径或范围，旧分数不成立，要重算
+          if (cached && cached.scope === scope && cached.group === group.key) continue
+          ids.push(imageId)
+          if (ids.length >= config.maxImages) break
+        }
+        if (ids.length >= config.maxImages) break
       }
-      if (candidates.length >= maxImages) break
+      if (ids.length >= 2) {
+        picked = { group: group.key, ids }
+        break
+      }
     }
-    if (candidates.length < 2) return
+    if (!picked) return
+
+    const candidates: Array<{ imageId: string }> = picked.ids.map((imageId) => ({ imageId }))
+    const groupKey = picked.group
 
     set({ running: true, error: '' })
     void (async () => {
@@ -158,7 +181,7 @@ export const useClipStore = create<ClipState>()((set, get) => ({
           // 服务端返回的 nearest 是临时文件名（0.png），换回图片 id
           const nearestIndex = score.nearest ? Number(String(score.nearest).replace(/\.[a-z]+$/i, '')) : NaN
           const nearest = payload[nearestIndex] ? candidates[payload[nearestIndex].index].imageId : undefined
-          next[imageId] = { mean: score.mean, max: score.max, nearest }
+          next[imageId] = { mean: score.mean, max: score.max, nearest, scope, group: groupKey }
         }
         set({ scores: next, running: false, limit: json.limit ?? get().limit, engine: 'clip' })
       } catch (err) {
@@ -173,7 +196,11 @@ export const useClipStore = create<ClipState>()((set, get) => ({
         }
         const local = hashScores(hashes)
         if (Object.keys(local).length) {
-          set({ scores: { ...get().scores, ...local }, running: false, engine: 'phash', error: '' })
+          const tagged: Record<string, ClipScore> = { ...get().scores }
+          for (const [imageId, score] of Object.entries(local)) {
+            tagged[imageId] = { ...score, scope, group: groupKey }
+          }
+          set({ scores: tagged, running: false, engine: 'phash', error: '' })
           return
         }
         set({ running: false, error: err instanceof Error ? err.message : 'CLIP 计算失败' })
@@ -182,11 +209,13 @@ export const useClipStore = create<ClipState>()((set, get) => ({
   },
 
   /** 任务出完图就排进后台队列，一张一张串行处理 */
-  enqueueTask: (task: TaskRecord, peers: TaskRecord[]) => {
+  enqueueTask: (task: TaskRecord, peers: TaskRecord[], scopeOverride?: DuplicateScope) => {
     const config = useInspectConfig.getState().config
     if (!config.autoQc && !config.autoDuplicate) return
     const imageIds = task.outputImages.filter(Boolean)
     if (!imageIds.length) return
+    const scope = scopeOverride ?? config.duplicateScope
+    const group = duplicateScopeKey(task, scope)
     // 质检要拿提示词里的「」文案当对照，降级到浏览器直连时同样适用
     const expect = expectFromPrompt(task.prompt || '')
     set((s) => ({ queued: s.queued + imageIds.length }))
@@ -194,7 +223,10 @@ export const useClipStore = create<ClipState>()((set, get) => ({
       for (const imageId of imageIds) {
         try {
           const state = useClipStore.getState()
-          if (!state.qc[imageId] || !state.scores[imageId]) await inspectOne(imageId, peers, expect)
+          // 分数要「同口径同组」才算数，换了口径就重新比
+          const cached = state.scores[imageId]
+          const scoreFresh = cached && cached.scope === scope && cached.group === group
+          if (!state.qc[imageId] || !scoreFresh) await inspectOne(imageId, peers, expect, scope, group)
         } finally {
           set((s) => ({ queued: Math.max(0, s.queued - 1) }))
         }
@@ -245,7 +277,15 @@ useInspectConfig.subscribe((state) => {
  */
 export async function inspectImages(
   entries: Array<{ imageId: string; dataUrl: string }>,
-  options: { limit?: number; expect?: ExpectText; manual?: boolean } = {},
+  options: {
+    limit?: number
+    expect?: ExpectText
+    manual?: boolean
+    /** 这批判定用的重复度口径，写进分数里，换口径后不会拿旧数字冒充 */
+    scope?: DuplicateScope
+    /** 比对组 key（卡 id / 方向 id） */
+    group?: string
+  } = {},
 ): Promise<void> {
   const payload: Array<{ id: string; dataUrl: string }> = []
   const imageIdByIndex: string[] = []
@@ -295,7 +335,7 @@ export async function inspectImages(
       if (!imageId) continue
       const nearestKey = score.nearest ? String(score.nearest).replace(/\.[a-z]+$/i, '') : ''
       const nearest = nearestKey && Number(nearestKey) !== Number(key) ? imageIdAt(nearestKey) : undefined
-      nextScores[imageId] = { mean: score.mean, max: score.max, nearest }
+      nextScores[imageId] = { mean: score.mean, max: score.max, nearest, scope: options.scope, group: options.group }
     }
 
     useClipStore.setState((state) => ({
@@ -409,7 +449,13 @@ async function pruneFailedDelivered(imageIds: string[]) {
  * 一张图连同同方向的历史图一起送检：一次调用同时拿到质检结论和重复度。
  * 没有历史图时也要走，因为质检本身不依赖比对，只是算不出重复度。
  */
-async function inspectOne(imageId: string, peers: TaskRecord[], expect: ExpectText) {
+async function inspectOne(
+  imageId: string,
+  peers: TaskRecord[],
+  expect: ExpectText,
+  scope?: DuplicateScope,
+  group?: string,
+) {
   try {
     const config = useInspectConfig.getState().config
     const selfDataUrl = await ensureImageCached(imageId)
@@ -429,7 +475,7 @@ async function inspectOne(imageId: string, peers: TaskRecord[], expect: ExpectTe
       const dataUrl = await ensureImageCached(id)
       if (dataUrl) entries.push({ imageId: id, dataUrl })
     }
-    await inspectImages(entries, { expect })
+    await inspectImages(entries, { expect, scope, group })
   } catch {
     // 静默失败，下次进详情还会补算
   }

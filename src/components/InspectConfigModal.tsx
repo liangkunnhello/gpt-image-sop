@@ -261,6 +261,35 @@ export default function InspectConfigModal({ onClose }: InspectConfigModalProps)
           <section className="space-y-3">
             <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">重复度</h4>
             <div>
+              <div className="mb-1.5 text-sm text-gray-700 dark:text-gray-200">比对范围</div>
+              <div className="flex gap-2">
+                {(['card', 'direction'] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setConfig({ duplicateScope: value })}
+                    className={`flex-1 rounded-xl border px-3 py-2 text-left transition-colors ${
+                      config.duplicateScope === value
+                        ? 'border-blue-500 bg-blue-50 dark:border-blue-500/60 dark:bg-blue-500/10'
+                        : 'border-gray-200 hover:border-blue-300 dark:border-white/10'
+                    }`}
+                  >
+                    <div className="text-xs font-medium text-gray-800 dark:text-gray-100">
+                      {value === 'card' ? '同一张任务卡' : '同产品-方向'}
+                    </div>
+                    <div className="mt-0.5 text-[11px] leading-snug text-gray-500 dark:text-gray-400">
+                      {value === 'card'
+                        ? '只看这张卡内部有没有撞车'
+                        : '这一批投放的成品放一起比'}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                换范围后已算的重复度会按新口径重算，数字会变。
+              </div>
+            </div>
+            <div>
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-sm text-gray-700 dark:text-gray-200">判定线</span>
                 <span className="text-sm font-medium tabular-nums text-gray-700 dark:text-gray-200">
