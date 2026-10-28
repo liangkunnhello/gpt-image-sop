@@ -78,6 +78,7 @@ import StorageInfoSection from './settings/StorageInfoSection'
 import AboutSettingsTab from './settings/AboutSettingsTab'
 import McpSettingsTab from './settings/McpSettingsTab'
 import MarkdownRenderer from './MarkdownRenderer'
+import { activeQcRules } from '../lib/visionQc'
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
@@ -326,10 +327,12 @@ export default function SettingsModal() {
 
   // 检查配置只存本机，不进备份，所以直接从 inspectConfig 读
   const inspectConfig = useInspectConfig((s) => s.config)
+  const activeCustomRules = activeQcRules(inspectConfig.customRules)
   const inspectChecks = [
     inspectConfig.checkViolation ? '违规' : '',
     inspectConfig.checkText ? '文字' : '',
     inspectConfig.checkOverlap ? '压叠' : '',
+    activeCustomRules.length ? `自定义 ${activeCustomRules.length} 条` : '',
   ].filter(Boolean)
   const inspectAuto = [
     inspectConfig.autoQc ? '自动质检' : '',

@@ -12,6 +12,24 @@ export interface QcChecks {
   violation: boolean
   text: boolean
   overlap: boolean
+  /** 用户自己加的检查项：启用中的才会进提示词 */
+  rules?: QcRule[]
+}
+
+/**
+ * 一条自定义检查项。
+ *
+ * 内置的三项（违规 / 文字 / 压叠）在提示词里是固定文案，用户只能开关；
+ * 想加自己的判据（例如「画面不许出现按钮」「品牌 logo 不许变形」）就用这个：
+ * 模型逐条判断，结论放在 custom_items 里，任何一条不通过整张图就判不合格。
+ */
+export interface QcRule {
+  id: string
+  /** 规则名，展示用，也会出现在模型回答与详情页里 */
+  name: string
+  /** 判定标准：什么样算不通过，模型照着这一句判 */
+  detail: string
+  enabled: boolean
 }
 
 export const DEFAULT_QC_CHECKS: QcChecks = { violation: true, text: true, overlap: true }
@@ -25,12 +43,24 @@ const SYSTEM_PROMPT = [
   '必须输出单个扁平 JSON 对象，字段一个不少，不要嵌套，不要 markdown 代码块，不要任何解释文字。',
 ].join('')
 
-const SCHEMA = '{"violation_pass":true,"violation_items":[],"text_pass":true,"found":[],"missing":[],"wrong":[],"extra":[],"overlap_pass":true,"overlap_spots":[],"verdict":"pass","confidence":0.9,"reason":"一句话"}'
+const SCHEMA = '{"violation_pass":true,"violation_items":[],"text_pass":true,"found":[],"missing":[],"wrong":[],"extra":[],"overlap_pass":true,"overlap_spots":[],"custom_items":[{"id":"规则id","pass":true,"note":""}],"verdict":"pass","confidence":0.9,"reason":"一句话"}'
 
-function buildPrompt(expect: ExpectText, strict: boolean, checks: QcChecks) {
+/** 可用的自定义规则：名字和判定标准都填了才算 */
+export function activeQcRules(rules: QcRule[] | undefined): QcRule[] {
+  return (rules ?? []).filter((rule) => rule.enabled && rule.name.trim() && rule.detail.trim())
+}
+
+/** 导出供单测：验证自定义规则有没有真的写进提示词 */
+export function buildQcPrompt(expect: ExpectText, strict: boolean, checks: QcChecks) {
   const hasText = Boolean(expect.mainTitle || expect.tags.length)
+  const rules = activeQcRules(checks.rules)
   // 关掉的检查项不进提示词，模型只判要查的部分，未开启的项目对应的 *_pass 一律给 true
-  const enabled = [checks.violation ? '违规内容' : '', checks.text ? '文字一致性' : '', checks.overlap ? '文字压叠' : ''].filter(Boolean)
+  const enabled = [
+    checks.violation ? '违规内容' : '',
+    checks.text ? '文字一致性' : '',
+    checks.overlap ? '文字压叠' : '',
+    ...rules.map((rule) => rule.name.trim()),
+  ].filter(Boolean)
   const lines = ['检查这张图。']
   lines.push('', `本次只检查：${enabled.join('、') || '无（全部记为通过）'}。未列出的项目一律视为通过。`)
   if (!checks.text) {
@@ -47,6 +77,13 @@ function buildPrompt(expect: ExpectText, strict: boolean, checks: QcChecks) {
   }
   if (!checks.violation) lines.push('不做违规判断，violation_pass 给 true。')
   if (!checks.overlap) lines.push('不做压叠判断，overlap_pass 给 true，overlap_spots 给空数组。')
+  if (rules.length) {
+    lines.push('', '【额外检查项】逐条判：通过 pass 给 true；不通过 pass 给 false，并在 note 里写清看到什么。id 必须原样带回，一条都不能漏。')
+    rules.forEach((rule, index) => {
+      lines.push(`${index + 1}. id=${rule.id}｜${rule.name.trim()}：${rule.detail.trim()}`)
+    })
+    lines.push('这些额外检查项任意一条不通过，verdict 就是 fail，并在 reason 里点名是哪条没通过。')
+  }
   lines.push('', 'found 填图上实际读到的文字；missing 填应有但没找到的；wrong 填「应为X实为Y」；extra 填规范外多出来的；overlap_spots 填压字位置描述。')
   lines.push('verdict 取 pass / fail / unsure；拿不准一律 unsure，不要硬判 pass。')
   if (strict) lines.push('', '上一次输出不是合法 JSON。这次只输出一行 JSON，不要换行，不要代码块。')
@@ -116,14 +153,27 @@ function parseLoose(text: string) {
   return null
 }
 
-function toOutcome(raw: Record<string, unknown> | null, fallback: string): QcOutcome {
+/** 导出供单测：验证自定义检查项的解析与「任一条不通过就判不合格」 */
+export function qcOutcomeFromRaw(raw: Record<string, unknown> | null, fallback: string): QcOutcome {
   if (!raw) {
     return {
       verdict: 'error', violationPass: false, textPass: false, overlapPass: false,
-      missing: [], wrong: [], extra: [], reason: fallback, confidence: null,
+      missing: [], wrong: [], extra: [], custom: [], reason: fallback, confidence: null,
     }
   }
-  const verdict = raw.verdict === 'pass' || raw.verdict === 'fail' ? raw.verdict : 'unsure'
+  const custom = Array.isArray(raw.custom_items)
+    ? raw.custom_items
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+      .map((item) => ({
+        id: typeof item.id === 'string' ? item.id : String(item.id ?? ''),
+        pass: item.pass !== false,
+        note: typeof item.note === 'string' ? item.note : '',
+      }))
+      .filter((item) => item.id)
+    : []
+  const modelVerdict = raw.verdict === 'pass' || raw.verdict === 'fail' ? raw.verdict : 'unsure'
+  // 自定义规则判否时以规则为准：模型可能 overall 给了 pass，但明确写了某条不通过
+  const verdict = modelVerdict === 'pass' && custom.some((item) => !item.pass) ? 'fail' : modelVerdict
   return {
     verdict,
     violationPass: raw.violation_pass !== false,
@@ -132,6 +182,7 @@ function toOutcome(raw: Record<string, unknown> | null, fallback: string): QcOut
     missing: Array.isArray(raw.missing) ? raw.missing.map(String) : [],
     wrong: Array.isArray(raw.wrong) ? raw.wrong.map(String) : [],
     extra: Array.isArray(raw.extra) ? raw.extra.map(String) : [],
+    custom,
     reason: typeof raw.reason === 'string' ? raw.reason : '',
     confidence: typeof raw.confidence === 'number' ? raw.confidence : null,
   }
@@ -159,7 +210,7 @@ export async function qcInBrowser(
         {
           role: 'user',
           content: [
-            { type: 'text', text: buildPrompt(expect, strict, checks) },
+            { type: 'text', text: buildQcPrompt(expect, strict, checks) },
             { type: 'image_url', image_url: { url: image } },
           ],
         },
@@ -195,16 +246,16 @@ export async function qcInBrowser(
     let result = await send(false, true)
     // 部分模型不认 response_format，去掉再试一次
     if (result.error?.startsWith('HTTP 400')) result = await send(false, false)
-    if (result.error) return toOutcome(null, result.error)
+    if (result.error) return qcOutcomeFromRaw(null, result.error)
     let parsed = parseLoose(result.content || '')
     if (!parsed) {
       const retry = await send(true, false)
-      if (retry.error) return toOutcome(null, retry.error)
+      if (retry.error) return qcOutcomeFromRaw(null, retry.error)
       parsed = parseLoose(retry.content || '')
     }
-    return toOutcome(parsed, '模型没有返回可解析的 JSON')
+    return qcOutcomeFromRaw(parsed, '模型没有返回可解析的 JSON')
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return toOutcome(null, message.includes('abort') ? '请求超时' : message)
+    return qcOutcomeFromRaw(null, message.includes('abort') ? '请求超时' : message)
   }
 }

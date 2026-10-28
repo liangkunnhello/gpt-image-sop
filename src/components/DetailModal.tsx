@@ -401,11 +401,16 @@ export default function DetailModal() {
    * 某张图的最终质检结论：人工改判优先于自动质检。
    * 自动结论只存在内存里，改判跟着任务落库，所以两处都要看。
    */
-  const verdictOf = (imageId: string): { verdict: 'pass' | 'fail' | 'unsure'; reason: string } | null => {
+  const verdictOf = (imageId: string): {
+    verdict: 'pass' | 'fail' | 'unsure'
+    reason: string
+    /** 自定义检查项的结论，只有自动质检才带 */
+    custom?: Array<{ name: string; pass: boolean; note: string }>
+  } | null => {
     const manual = manualQcVerdicts[imageId]
-    if (manual) return { verdict: manual, reason: '人工改判' }
+    if (manual) return { verdict: manual, reason: '人工改判', custom: undefined }
     const auto = clipQc[imageId]
-    return auto ? { verdict: auto.verdict, reason: auto.reason } : null
+    return auto ? { verdict: auto.verdict, reason: auto.reason, custom: auto.custom } : null
   }
   /** 不合格的图（只算还在画廊里的，已回收的不用再清） */
   const failedImageIds = visibleOutputImages(task).filter((id) => verdictOf(id)?.verdict === 'fail')
@@ -413,7 +418,7 @@ export default function DetailModal() {
   // 检查面板用的聚合结果：质检取最差的一张，重复度取最高的一个
   const inspectQcList = visibleOutputImages(task)
     .map((id) => verdictOf(id))
-    .filter((item): item is { verdict: 'pass' | 'fail' | 'unsure'; reason: string } => Boolean(item))
+    .filter((item): item is { verdict: 'pass' | 'fail' | 'unsure'; reason: string; custom?: Array<{ name: string; pass: boolean; note: string }> } => Boolean(item))
   const inspectQc = inspectQcList.find((item) => item.verdict === 'fail')
     ?? inspectQcList.find((item) => item.verdict === 'unsure')
     ?? inspectQcList[0]
@@ -1686,6 +1691,13 @@ export default function DetailModal() {
                           <span className="min-w-0 flex-1 text-gray-500 dark:text-gray-400">{inspectQc.reason}</span>
                         )}
                       </div>
+                      {/* 自定义检查项：只列没过的，过了的不用占版面 */}
+                      {(inspectQc?.custom ?? []).filter((item) => !item.pass).map((item) => (
+                        <div key={item.name} className="flex items-start gap-1.5 pl-8 text-[11px] text-red-600 dark:text-red-400">
+                          <span className="shrink-0">未通过：{item.name}</span>
+                          {item.note && <span className="min-w-0 flex-1 text-red-500/80 dark:text-red-300/80">{item.note}</span>}
+                        </div>
+                      ))}
                       <div className="flex items-center gap-1.5">
                         <span className="shrink-0 text-gray-400 dark:text-gray-500">重复度</span>
                         {inspectScore != null ? (

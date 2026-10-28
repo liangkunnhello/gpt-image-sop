@@ -21,6 +21,13 @@ export function expectFromPrompt(prompt: string): ExpectText {
   return { mainTitle, tags, brand: [], disclaimer: [] }
 }
 
+/** 一条自定义质检项的结论（对应设置里用户自己加的检查项） */
+export interface QcCustomResult {
+  id: string
+  pass: boolean
+  note: string
+}
+
 export interface QcOutcome {
   verdict: 'pass' | 'fail' | 'unsure' | 'error'
   violationPass: boolean
@@ -29,6 +36,8 @@ export interface QcOutcome {
   missing: string[]
   wrong: string[]
   extra: string[]
+  /** 自定义检查项的结论，没配自定义规则时为空数组 */
+  custom: QcCustomResult[]
   reason: string
   confidence: number | null
 }
@@ -66,7 +75,7 @@ export async function qcOne(dataUrl: string, expect: ExpectText): Promise<QcOutc
     if (!json.ok || !json.result) {
       return {
         verdict: 'error', violationPass: false, textPass: false, overlapPass: false,
-        missing: [], wrong: [], extra: [], reason: json.error || '质检失败', confidence: null,
+        missing: [], wrong: [], extra: [], custom: [], reason: json.error || '质检失败', confidence: null,
       }
     }
     const r = json.result
@@ -78,13 +87,15 @@ export async function qcOne(dataUrl: string, expect: ExpectText): Promise<QcOutc
       missing: r.text.missing,
       wrong: r.text.wrong,
       extra: r.text.extra,
+      // 本地验收服务不跑自定义规则，结论留给浏览器端质检
+      custom: [],
       reason: r.reason,
       confidence: r.confidence,
     }
   } catch (err) {
     return {
       verdict: 'error', violationPass: false, textPass: false, overlapPass: false,
-      missing: [], wrong: [], extra: [],
+      missing: [], wrong: [], extra: [], custom: [],
       reason: err instanceof Error ? err.message : '连不上本地验收服务', confidence: null,
     }
   }

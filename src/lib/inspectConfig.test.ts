@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { DEFAULT_INSPECT_CONFIG, normalizeInspectConfig, useInspectConfig } from './inspectConfig'
+import { DEFAULT_INSPECT_CONFIG, MAX_QC_RULES, normalizeInspectConfig, useInspectConfig } from './inspectConfig'
 
 describe('inspectConfig', () => {
   beforeEach(() => {
@@ -47,5 +47,46 @@ describe('inspectConfig', () => {
     useInspectConfig.getState().setConfig({ autoQc: false, maxImages: 10 })
     useInspectConfig.getState().resetConfig()
     expect(useInspectConfig.getState().config).toEqual(DEFAULT_INSPECT_CONFIG)
+  })
+})
+
+describe('自定义检查项配置', () => {
+  it('按顺序保留，名字去空格；还空着的行也留着（界面里正在编辑）', () => {
+    const config = normalizeInspectConfig({
+      customRules: [
+        { id: 'a', name: '  不许出现按钮  ', detail: '有空胶囊即不通过' },
+        { name: '   ' },
+      ],
+    })
+    expect(config.customRules).toEqual([
+      { id: 'a', name: '不许出现按钮', detail: '有空胶囊即不通过', enabled: true },
+      { id: 'qc-rule-2', name: '', detail: '', enabled: true },
+    ])
+  })
+
+  it('没写原因时自动补一个 id，名字过长截断到 24 字', () => {
+    const config = normalizeInspectConfig({
+      customRules: [{ name: '一'.repeat(40) }],
+    })
+    expect(config.customRules[0].id).toBe('qc-rule-1')
+    expect(config.customRules[0].name).toHaveLength(24)
+    expect(config.customRules[0].enabled).toBe(true)
+  })
+
+  it('关掉的规则保留在配置里，但不会生效', () => {
+    const config = normalizeInspectConfig({
+      customRules: [{ id: 'a', name: '不许出现按钮', detail: 'x', enabled: false }],
+    })
+    expect(config.customRules[0].enabled).toBe(false)
+  })
+
+  it(`最多保留 ${MAX_QC_RULES} 条`, () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ id: `r${i}`, name: `规则${i}`, detail: 'x' }))
+    expect(normalizeInspectConfig({ customRules: many }).customRules).toHaveLength(MAX_QC_RULES)
+  })
+
+  it('不是数组时回到空列表', () => {
+    expect(normalizeInspectConfig({ customRules: 'oops' }).customRules).toEqual([])
+    expect(normalizeInspectConfig({}).customRules).toEqual([])
   })
 })

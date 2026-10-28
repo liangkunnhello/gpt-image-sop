@@ -4,7 +4,7 @@ import type { TaskRecord } from '../types'
 import { ensureImageCached } from './imageCache'
 import { computeImageHash, hashScores } from './imageHash'
 import { useInspectConfig } from './inspectConfig'
-import { qcInBrowser, type QcChecks } from './visionQc'
+import { activeQcRules, qcInBrowser, type QcChecks } from './visionQc'
 import { expectFromPrompt, type ExpectText } from './batchCheck'
 
 import { SIDECAR } from './sidecar'
@@ -20,6 +20,8 @@ export interface QcResult {
   verdict: QcVerdict
   reason: string
   confidence?: number
+  /** 自定义检查项的结论（规则名 + 是否通过 + 说明），没配自定义规则时没有这个字段 */
+  custom?: Array<{ name: string; pass: boolean; note: string }>
 }
 
 export interface ClipScore {
@@ -326,11 +328,12 @@ async function inspectLocally(
     violation: config.checkViolation,
     text: config.checkText,
     overlap: config.checkOverlap,
+    rules: config.customRules,
   }
 
   const nextQc: Record<string, QcResult> = { ...useClipStore.getState().qc }
   // 手动检查不看自动开关，自动跑时才按配置跳过不做的项
-  const runQc = manual || (config.autoQc && (checks.violation || checks.text || checks.overlap))
+  const runQc = manual || (config.autoQc && (checks.violation || checks.text || checks.overlap || activeQcRules(checks.rules).length > 0))
   if (profile && runQc) {
     let cursor = 0
     const worker = async () => {
@@ -340,11 +343,20 @@ async function inspectLocally(
         if (index >= entries.length) return
         const entry = entries[index]
         const outcome = await qcInBrowser(profile, entry.dataUrl, expect, { model: config.qcModel, checks })
+        // 自定义规则的结论带上规则名，详情页直接显示「哪条没过」
+        const ruleName = new Map(config.customRules.map((rule) => [rule.id, rule.name.trim()]))
         nextQc[entry.imageId] = {
           // error 不是合法结论，统一记成待定，原因留在 reason 里
           verdict: outcome.verdict === 'pass' || outcome.verdict === 'fail' ? outcome.verdict : 'unsure',
           reason: outcome.reason,
           confidence: outcome.confidence ?? undefined,
+          custom: outcome.custom.length
+            ? outcome.custom.map((item) => ({
+              name: ruleName.get(item.id) || item.id,
+              pass: item.pass,
+              note: item.note,
+            }))
+            : undefined,
         }
       }
     }

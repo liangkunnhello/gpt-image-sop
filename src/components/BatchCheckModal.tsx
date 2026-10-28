@@ -3,7 +3,7 @@ import { useStore } from '../store'
 import { getImage } from '../lib/db'
 import { expectFromPrompt, simBatch, simBatchLocal, sidecarAlive, type QcOutcome, type SimResponse } from '../lib/batchCheck'
 import { useInspectConfig } from '../lib/inspectConfig'
-import { qcInBrowser, type QcChecks } from '../lib/visionQc'
+import { activeQcRules, qcInBrowser, type QcChecks } from '../lib/visionQc'
 import InspectConfigModal from './InspectConfigModal'
 
 const MAX_TASKS = 24
@@ -40,8 +40,9 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) { 
     violation: config.checkViolation,
     text: config.checkText,
     overlap: config.checkOverlap,
+    rules: config.customRules,
   }
-  const qcUsable = checks.violation || checks.text || checks.overlap
+  const qcUsable = checks.violation || checks.text || checks.overlap || activeQcRules(checks.rules).length > 0
 
   const candidates = useMemo(
     () => tasks.filter((t) => t.status === 'done' && t.outputImages.length > 0).slice(0, MAX_TASKS),
@@ -85,7 +86,7 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) { 
         if (image) {
           const outcome = profile && qcUsable
             ? await qcInBrowser(profile, image.dataUrl, expectFromPrompt(task.prompt), { model: config.qcModel, checks })
-            : { verdict: 'error' as const, violationPass: false, textPass: false, overlapPass: false, missing: [], wrong: [], extra: [], reason: qcUsable ? '没有可用的接口配置' : '质检项全部关闭，请先点右上角「设置」勾选', confidence: null }
+            : { verdict: 'error' as const, violationPass: false, textPass: false, overlapPass: false, missing: [], wrong: [], extra: [], custom: [], reason: qcUsable ? '没有可用的接口配置' : '质检项全部关闭，请先点右上角「设置」勾选', confidence: null }
           setQc((prev) => ({ ...prev, [task.id]: outcome }))
         }
         done += 1

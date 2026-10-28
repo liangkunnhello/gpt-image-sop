@@ -4,7 +4,8 @@ import { createPortal } from 'react-dom'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_QC_MODEL } from '../lib/visionQc'
-import { useInspectConfig, DEFAULT_INSPECT_CONFIG, LIMIT_MAX, LIMIT_MIN } from '../lib/inspectConfig'
+import { useInspectConfig, DEFAULT_INSPECT_CONFIG, LIMIT_MAX, LIMIT_MIN, MAX_QC_RULES } from '../lib/inspectConfig'
+import { activeQcRules } from '../lib/visionQc'
 import { Checkbox } from './Checkbox'
 import { CloseIcon } from './icons'
 
@@ -21,8 +22,24 @@ export default function InspectConfigModal({ onClose }: InspectConfigModalProps)
   useCloseOnEscape(true, onClose)
   usePreventBackgroundScroll(true, scrollRef)
 
-  const anyQcCheck = config.checkViolation || config.checkText || config.checkOverlap
+  const activeRules = activeQcRules(config.customRules)
+  const anyQcCheck = config.checkViolation || config.checkText || config.checkOverlap || activeRules.length > 0
   const isDefault = JSON.stringify(config) === JSON.stringify(DEFAULT_INSPECT_CONFIG)
+
+  /** 自定义检查项的增删改：直接写回配置，随其它设置一起存本机 */
+  const addRule = () => {
+    if (config.customRules.length >= MAX_QC_RULES) return
+    const id = `qc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`
+    setConfig({ customRules: [...config.customRules, { id, name: '', detail: '', enabled: true }] })
+  }
+  const updateRule = (id: string, patch: Partial<{ name: string; detail: string; enabled: boolean }>) => {
+    setConfig({
+      customRules: config.customRules.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)),
+    })
+  }
+  const removeRule = (id: string) => {
+    setConfig({ customRules: config.customRules.filter((rule) => rule.id !== id) })
+  }
 
   const numberInput = (value: number, onChange: (next: number) => void, min: number, max: number, step = 1) => (
     <input
@@ -141,6 +158,71 @@ export default function InspectConfigModal({ onClose }: InspectConfigModalProps)
                 三项全关等于不做质检，自动质检也会跳过。
               </div>
             )}
+
+            {/* 自定义检查项：内置三项之外自己想加的判据，可增删改 */}
+            <div className="space-y-2 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm text-gray-700 dark:text-gray-200">自定义检查项</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    写清「什么样算不通过」，模型会照着判；任何一条不通过，这张图就判不合格。
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={addRule}
+                  disabled={config.customRules.length >= MAX_QC_RULES}
+                  className="shrink-0 rounded-lg bg-blue-500 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.08]"
+                >
+                  + 新增
+                </button>
+              </div>
+              {!config.customRules.length && (
+                <div className="rounded-xl bg-black/[0.04] px-3 py-2 text-xs leading-relaxed text-gray-500 dark:bg-white/[0.05] dark:text-gray-400">
+                  例如「画面不许出现按钮、胶囊占位」「品牌 logo 不许变形或被裁切」「必须留出左上角空白」。
+                  点右上「+ 新增」加一条，左边开关控制是否参与质检。
+                </div>
+              )}
+              {config.customRules.map((rule) => (
+                <div key={rule.id} className="space-y-1.5 rounded-xl bg-black/[0.04] p-2.5 dark:bg-white/[0.05]">
+                  <div className="flex items-center gap-2">
+                    {toggle(rule.enabled, (next) => updateRule(rule.id, { enabled: next }))}
+                    <input
+                      type="text"
+                      value={rule.name}
+                      onChange={(e) => updateRule(rule.id, { name: e.target.value })}
+                      placeholder="规则名，如「不许出现按钮」"
+                      maxLength={24}
+                      className="min-w-0 flex-1 rounded-lg border border-transparent bg-white px-2 py-1 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeRule(rule.id)}
+                      className="shrink-0 rounded-lg px-2 py-1 text-[11px] text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-500/10"
+                    >
+                      删除
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={rule.detail}
+                    onChange={(e) => updateRule(rule.id, { detail: e.target.value })}
+                    placeholder="判定标准，如「画面里出现按钮、空胶囊、圆角长条占位即不通过」"
+                    maxLength={200}
+                    className="w-full rounded-lg border border-transparent bg-white px-2 py-1 text-xs text-gray-600 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-300 dark:focus:border-blue-500/50"
+                  />
+                  {rule.enabled && !rule.detail.trim() && (
+                    <div className="text-[11px] text-amber-600 dark:text-amber-400">判定标准为空，这条不会生效。</div>
+                  )}
+                </div>
+              ))}
+              {config.customRules.length > 0 && activeRules.length < config.customRules.length && (
+                <div className="text-[11px] text-gray-400">
+                  {config.customRules.length - activeRules.length} 条未生效（关掉或没写判定标准）。
+                </div>
+              )}
+            </div>
+
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-sm text-gray-700 dark:text-gray-200">质检并发</div>
