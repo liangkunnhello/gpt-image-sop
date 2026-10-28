@@ -5,7 +5,7 @@ import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devP
 import { getApiErrorMessage } from './imageApiShared'
 import { apiFetch } from './platform'
 import { resolvePostTemplates } from './applyPostTemplate'
-import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
+import { avoidZoneSummary, buildAvoidHint, pickAvoidTemplate } from './postReserve'
 import { dedupePrompts } from './copyDedupe'
 import { checkPromptCopy } from './copyCheck'
 import { describeBlocks, keepIndexes, proofreadPrompts } from './promptProofread'
@@ -121,7 +121,7 @@ export function splitEven<T>(items: T[], groups: number): T[][] {
 }
 
 /** 反推 SOP 的公共规则；有图/无图两种来源共用，避免两份规则写岔 */
-function sopRuleLines(ignoreCompliance: boolean, useImageSellingPoints: boolean, avoidCta = false) {
+function sopRuleLines(ignoreCompliance: boolean, useImageSellingPoints: boolean, avoidCta = false, avoidZones = '') {
   return [
     ignoreCompliance
       ? '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要写进 SOP，也不要要求在生成的图上出现。'
@@ -131,6 +131,12 @@ function sopRuleLines(ignoreCompliance: boolean, useImageSellingPoints: boolean,
       : '不要从参考图上提取或复用卖点文案。SOP 的文字规范只描述文字的层级、字号与排布方式，具体文案以用户提供的卖点为准。',
     avoidCta
       ? '参考图里的按钮、悬浮球、进度条、返回箭头、开关、卡片跳转等「仿系统界面 / 可点击」的设计元素，一律不要写进 SOP；SOP 里要明确列为禁忌：不画按钮、不画手指点击示意、不加指向性的箭头或手势，也不写「立即领取」「点击查看」「滑动解锁」「下载App」这类引导点击的文案。'
+      : '',
+    avoidCta
+      ? '也不要写「留出按钮位置」「按钮槽位」「CTA 区」「空按钮」这类要求：按钮位不是版面元素，画面上出现空白胶囊、空白长条、带描边的空白圆角块，就等于画了一只没有文字的按钮。卖点列表下面直接收尾，用留白或装饰图形结束，不要给按钮留坑。'
+      : '',
+    avoidZones
+      ? `版式结构里必须给后期预留区留出干净背景，把这些位置让出来、不安排主体、标题文字、图标或装饰块：${avoidZones}。注意是让版式自然避开，不是画一个空白边框或空块去「占位」。`
       : '',
     '文字规范要按卖点条数定义槽位：有几条卖点就排几个文字位，不要设计固定数量的装饰性文字位；卖点少于槽位时删掉多余槽位或改用图形、留白，不能靠重复同一句卖点把版面填满。',
     '必须写「变量池」：按场景、机位、主体、色调四个维度，列出这份 SOP 允许使用的具体取值，每个维度至少 4 个。优先从用户给的候选里挑，删掉与参考图冲突的，再补上参考图里体现的行业特有取景；不要照抄候选全表。',
@@ -220,12 +226,14 @@ export function buildSopSystemPrompt(
   avoidCta = false,
   /** 输出小节，来自系统提示词；不传时用默认 7 节 */
   sections: string[] = DEFAULT_SOP_SECTIONS,
+  /** 后期预留区摘要（如「左上角（后期叠Logo）」）：反推时就让版式避开 */
+  avoidZones = '',
 ) {
   return [
     '你是广告设计团队的资深生图指导。用户会给你若干张参考图，你要从这些图里反推出一套可复用的「生图 SOP」。',
     'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
     '只描述你从参考图里真实观察到的规律，不要编造参考图里没有的品牌、价格或功效。',
-    ...sopRuleLines(ignoreCompliance, useImageSellingPoints, avoidCta),
+    ...sopRuleLines(ignoreCompliance, useImageSellingPoints, avoidCta, avoidZones),
     ...sopFormatLines(sections),
   ].filter(Boolean).join('\n')
 }
@@ -240,12 +248,13 @@ export function buildTextSopSystemPrompt(
   avoidCta = false,
   /** 输出小节，来自系统提示词；不传时用默认 7 节 */
   sections: string[] = DEFAULT_SOP_SECTIONS,
+  avoidZones = '',
 ) {
   return [
     '你是广告设计团队的资深生图指导。本次用户没有提供参考图，只给了卖点文案与风格要求，你要仅凭这些文字设计出一套可复用的「生图 SOP」。',
     'SOP 要能被另一个模型直接照着写出多条提示词，所以必须具体、可执行：写清版式结构、画面元素、文字层级、配色倾向、镜头与光线、必须出现和必须避免的东西。',
     '所有画面设定都必须能用用户给的卖点与风格要求推出来，不要编造用户没提到的品牌、价格、功效、认证或数据。',
-    ...sopRuleLines(ignoreCompliance, useImageSellingPoints, avoidCta),
+    ...sopRuleLines(ignoreCompliance, useImageSellingPoints, avoidCta, avoidZones),
     ...sopFormatLines(sections),
   ].filter(Boolean).join('\n')
 }
@@ -348,6 +357,8 @@ export async function generateSop(
   copyText = '',
   /** 避免按钮等引导点击的仿系统界面设计 */
   avoidCta = false,
+  /** 后期预留区摘要：反推 SOP 时就让版式避开，避免写完提示词再强行避让 */
+  avoidZones = '',
 ): Promise<string> {
   const maxSide = imageDataUrls.length > MANY_IMAGE_THRESHOLD ? 768 : MODEL_MAX_SIDE
   const images = await Promise.all(imageDataUrls.map((url) => shrinkToDataUrl(url, maxSide)))
@@ -357,7 +368,7 @@ export async function generateSop(
   // 没有参考图：仅凭系统提示词与卖点反推文字版 SOP，规则与有图版一致
   if (!images.length) {
     return chat(profile, [
-      { role: 'system', content: buildTextSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta, sections) },
+      { role: 'system', content: buildTextSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta, sections, avoidZones) },
       {
         role: 'user',
         content: [
@@ -390,7 +401,7 @@ export async function generateSop(
   for (const url of images) content.push({ type: 'image_url', image_url: { url } })
 
   return chat(profile, [
-    { role: 'system', content: buildSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta, sections) },
+    { role: 'system', content: buildSopSystemPrompt(ignoreCompliance, useImageSellingPoints, avoidCta, sections, avoidZones) },
     { role: 'user', content },
   ])
 }
@@ -424,6 +435,10 @@ function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false
     avoidCta
       ? '画面里不要出现按钮、悬浮球、进度条、返回箭头、开关等仿系统界面的可点击控件，也不要写「立即领取」「点击查看」「滑动解锁」「下载App」这类引导点击的文案，不要画手指点击示意或指向性箭头。'
       : '',
+    avoidCta
+      ? '不要留「按钮位置」：空白胶囊、空白长条、带描边的空白圆角块都算按钮。SOP 里如果写了「留出按钮位置 / 按钮槽位 / 按钮文案 / CTA 区」，一律不执行——那种「预留位」在成图里就是一只没有文字的按钮，是废图。'
+      : '',
+    '画面文字必须单层、实心、清晰：不要重影、错位复制、描边偏移、描边叠影这类「叠字」效果，同一个字不要画两遍。',
     '多条之间要在场景、机位、人物、色调上做出区分，不能只是换几个词。',
     '只输出编号列表，一行一条，不要任何解释、不要小标题、不要代码块。',
   ].filter(Boolean).join('\n')
@@ -447,6 +462,22 @@ export interface PromptMessagesInput {
 }
 
 /** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
+/**
+ * 去掉 SOP 里「给按钮留位置」这类要求。
+ *
+ * 反推出来的 SOP 常写成「必须留出底部按钮位置（但不生成按钮）」「按钮文案放在卡片底部」，
+ * 模型会照着画一只没有文字的空白胶囊/长条 —— 那在成图里就是一只废按钮。
+ * 只删同时提到「按钮/CTA/胶囊」和「留、位置、槽位、占位」的句子，
+ * 「不画按钮」这类禁忌不受影响。
+ */
+export function stripButtonPlaceholders(sopText: string): string {
+  const pattern = /(按钮|CTA|胶囊)[^。\n]*(留出|留白|位置|槽位|占位)|(预留|留出)[^。\n]*(按钮|CTA)/
+  return sopText
+    .split('\n')
+    .filter((line) => !pattern.test(line))
+    .join('\n')
+}
+
 export function buildPromptMessages({
   sopText,
   count,
@@ -469,9 +500,12 @@ export function buildPromptMessages({
   const previous = existing.length
     ? `\n\n【已经写好的提示词（这一批不得与之重复：场景、机位、主体、色调至少两项要不一样，也不许换个说法重写）】\n${existing.map((item) => `- ${item.slice(0, 80)}`).join('\n')}`
     : ''
+  const ctaBlock = avoidCta
+    ? '\n\n【禁止按钮形占位】SOP 里凡是「留出按钮位置 / 按钮槽位 / 按钮文案 / CTA 区」的要求，一律不执行。画面里不要出现空白胶囊、空白长条、带描边的空白圆角块 —— 这种「预留位」在成图里就是一只没有文字的按钮，是废图。'
+    : ''
   return {
     system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta),
-    user: `【生图 SOP】\n${sopText.trim()}${copyBlock}${previous}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${reserve}`,
+    user: `【生图 SOP】\n${(avoidCta ? stripButtonPlaceholders(sopText) : sopText).trim()}${copyBlock}${previous}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${ctaBlock}${reserve}`,
   }
 }
 
@@ -671,13 +705,16 @@ async function runJob(job: SopJobRequest) {
   // 后处理预留区：出图后要在固定位置叠 Logo / 警示语，写提示词时就让模型避开
   // 关掉后处理就不用留位了，画面可以画满
   const sopState = useSopStore.getState()
-  const avoidHint = sopState.avoidOverlay === false || state.params.post_process === false
-    ? ''
-    : buildAvoidHint(pickAvoidTemplate(
+  const avoidTemplate = sopState.avoidOverlay === false || state.params.post_process === false
+    ? null
+    : pickAvoidTemplate(
       resolvePostTemplates(sopState.postTemplates, sopState.directions, job.directionId).templates,
       state.params.size,
       job.imageDataUrls,
-    ))
+    )
+  const avoidHint = buildAvoidHint(avoidTemplate)
+  // 反推 SOP 时也把预留区告诉模型：版式一开始就避开，比写完提示词再强行避让稳
+  const avoidZones = avoidZoneSummary(avoidTemplate)
 
   const sopJobId = `sop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
   // 先占位，用户点完发送立刻能看到这张卡
@@ -695,6 +732,7 @@ async function runJob(job: SopJobRequest) {
         job.useImageSellingPoints === true,
         job.copyText ?? '',
         job.avoidCta !== false,
+        avoidZones,
       )
     const copyText = (job.copyText ?? '').trim()
     // 直接用存档 SOP 时把卖点并进 SOP 文本：卡上、详情页看到的 SOP 就带着卖点，

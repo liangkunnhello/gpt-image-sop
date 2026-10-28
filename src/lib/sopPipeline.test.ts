@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiProfile } from '../types'
-import { appendCopySection, buildPromptMessages, generatePrompts, rewriteSopText, sopTitleOf } from './sopPipeline'
+import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, generatePrompts, rewriteSopText, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from './promptLimits'
 
 const profile = {
@@ -219,5 +219,64 @@ describe('appendCopySection 卖点并入存档 SOP', () => {
   it('没有卖点时不出现冲突规则', () => {
     const { system } = buildPromptMessages({ sopText: SOP, count: 1 })
     expect(system).not.toContain('以卖点为准')
+  })
+})
+
+describe('按钮形占位与叠字约束', () => {
+  const SOP_WITH_BUTTON = [
+    '## 版式结构',
+    '卡片内包含标题、卖点列表和底部按钮（注：SOP 不生成按钮，仅留出按钮位置）。',
+    '',
+    '## 必守与禁忌',
+    '1. **必守**：必须留出底部按钮位置（但不生成按钮）。',
+    '2. **禁忌**：不画按钮、不画手指点击示意。',
+  ].join('\n')
+
+  it('去掉「留出按钮位置」这类要求，保留「不画按钮」的禁忌', () => {
+    const cleaned = stripButtonPlaceholders(SOP_WITH_BUTTON)
+    expect(cleaned).not.toContain('留出按钮位置')
+    expect(cleaned).not.toContain('留出按钮位置（但不生成按钮）')
+    expect(cleaned).toContain('不画按钮、不画手指点击示意')
+  })
+
+  it('写提示词时带一段明确的禁止占位说明，并已把 SOP 里的按钮位要求剔掉', () => {
+    const { user } = buildPromptMessages({
+      sopText: SOP_WITH_BUTTON,
+      count: 1,
+      copyText: '赔付总限额600万',
+      avoidCta: true,
+    })
+    expect(user).toContain('禁止按钮形占位')
+    expect(user).toContain('空白胶囊')
+    // SOP 正文里那句「必须留出底部按钮位置」已被剔掉（禁止说明里会提到这个词，所以按原句判断）
+    expect(user).not.toContain('必须留出底部按钮位置')
+    expect(user).not.toContain('仅留出按钮位置')
+  })
+
+  it('关掉「不要按钮」时不加这段说明', () => {
+    const { user } = buildPromptMessages({ sopText: SOP_WITH_BUTTON, count: 1, avoidCta: false })
+    expect(user).not.toContain('禁止按钮形占位')
+    expect(user).toContain('留出按钮位置')
+  })
+
+  it('system 里禁止空白胶囊占位，并要求文字单层不叠字', () => {
+    const { system } = buildPromptMessages({ sopText: SOP_WITH_BUTTON, count: 1, avoidCta: true })
+    expect(system).toContain('空白胶囊')
+    expect(system).toContain('叠字')
+  })
+})
+
+describe('反推 SOP 时一并注入后期预留区与按钮规则', () => {
+  it('版式要给预留区让位，且禁写「留出按钮位置」', () => {
+    const prompt = buildSopSystemPrompt(true, false, true, undefined, '左上角（后期叠Logo）、底部居中（后期叠警示语）')
+    expect(prompt).toContain('左上角（后期叠Logo）')
+    expect(prompt).toContain('不是画一个空白边框或空块去「占位」')
+    expect(prompt).toContain('不要给按钮留坑')
+  })
+
+  it('关掉按钮避让、没有预留区时两条规则都不出现', () => {
+    const prompt = buildSopSystemPrompt(false, false, false)
+    expect(prompt).not.toContain('不要给按钮留坑')
+    expect(prompt).not.toContain('后期预留区')
   })
 })

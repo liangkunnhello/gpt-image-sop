@@ -65,7 +65,19 @@ export function buildAvoidHint(template: PostTemplate | null): string {
     + '不要安排主体人物、产品、标题文字、图标或任何重要细节：',
     items.join('；'),
     '主体、主要文字和关键视觉请全部安排在上述预留区之外；画面里也不要自己生成 Logo、水印、二维码或免责声明文字。',
+    '这些区域也不要画占位形状（空胶囊、空长条、色块、边框）来「预留」——空白形状在成图里就是一块没有内容的装饰块。',
   ].join('\n')
+}
+
+/**
+ * 预留区的短摘要，给「反推 SOP」用：让 SOP 的版式结构一开始就把这些位置让出来，
+ * 而不是等写提示词时再强行避让（两头打架时模型很容易画个空块占位）。
+ * 例如「左上角（后期叠Logo）、底部居中（后期叠警示语）」。
+ */
+export function avoidZoneSummary(template: PostTemplate | null): string {
+  return collectAvoidZones(template)
+    .map((zone) => `${zone.region}（后期叠${zone.label}）`)
+    .join('、')
 }
 
 /** 提示词末尾追加避让说明，已经在里面就不重复加 */

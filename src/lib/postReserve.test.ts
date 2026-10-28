@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createPostTemplate, newPostElement, type PostTemplate } from './postTemplate'
 import {
+  avoidZoneSummary,
   buildAvoidHint,
   buildAvoidHintForTask,
   collectAvoidZones,
@@ -76,6 +77,9 @@ describe('buildAvoidHint', () => {
     expect(hint).toContain('「Logo」')
     expect(hint).toContain('「警示语」')
     expect(hint).toContain('横向约')
+    // 不能只让它「留白」：模型会理解成画个空胶囊/空条占位
+    expect(hint).toContain('不要画占位形状')
+    expect(hint).toContain('空胶囊')
   })
 
   it('没有模板时返回空串', () => {
@@ -137,5 +141,23 @@ describe('buildAvoidHintForTask', () => {
     expect(buildAvoidHintForTask({ sopDirectionId: 'dir', params: { size: '1440x2560' } as never }, [template]))
       .toContain('画面预留区')
     expect(buildAvoidHintForTask({ sopDirectionId: 'dir', params: { size: 'auto' } as never }, [])).toBe('')
+  })
+})
+
+describe('avoidZoneSummary', () => {
+  it('给出「方位（后期叠什么）」的短摘要，供反推 SOP 用', () => {
+    const template = make(1440, 2560, {
+      elements: [
+        { ...newPostElement('logo', 1), text: 'data:image/png;base64,xx', x: 0.06, y: 0.06, width: 0.14, aspect: 0.4, label: 'Logo' },
+        { ...text({ text: '免赔额请见保险条款', x: 0.06, y: 0.93, fontSize: 28 }), label: '警示语' },
+      ],
+    })
+    const summary = avoidZoneSummary(template)
+    expect(summary).toContain('左上角（后期叠Logo）')
+    expect(summary).toContain('（后期叠警示语）')
+  })
+
+  it('没有预留区时返回空串', () => {
+    expect(avoidZoneSummary(null)).toBe('')
   })
 })
