@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  POST_LINE_HEIGHT,
   POST_RATIO_TOLERANCE,
   commitNumberInput,
   createPostTemplate,
   defaultPostTemplate,
+  elementBox,
+  elementLineHeight,
+  newPostElement,
   pickTemplateForImage,
   postTemplateRatioKey,
 } from './postTemplate'
@@ -130,5 +134,43 @@ describe('commitNumberInput（尺寸输入框的提交值）', () => {
   it('字号这类下限为 1 的输入框不会被写成 1 之外的值', () => {
     expect(commitNumberInput('32', 24, { min: 1 })).toBe(32)
     expect(commitNumberInput('0', 24, { min: 1 })).toBe(1)
+  })
+})
+
+describe('文字对齐、行距与字间距', () => {
+  const base = () => newPostElement('text', 1)
+
+  it('行距没设过用默认值，设了会被夹到可用区间', () => {
+    expect(elementLineHeight(base())).toBe(POST_LINE_HEIGHT)
+    expect(elementLineHeight({ lineHeight: 2 })).toBe(2)
+    expect(elementLineHeight({ lineHeight: 0.1 })).toBe(0.9)
+    expect(elementLineHeight({ lineHeight: 99 })).toBe(2.5)
+  })
+
+  it('行距变大，占位框跟着变高', () => {
+    const el = { ...base(), text: '第一行\n第二行', fontSize: 100 }
+    const normal = elementBox({ ...el, lineHeight: 1 }, 1000, 1000)
+    const loose = elementBox({ ...el, lineHeight: 2 }, 1000, 1000)
+    expect(loose.y1 - loose.y0).toBeGreaterThan(normal.y1 - normal.y0)
+    // 高度 = 行数 × 字号 × 行距
+    expect(loose.y1 - loose.y0).toBeCloseTo(0.4, 5)
+  })
+
+  it('字间距变大，占位框跟着变宽（最后一个字后面不留间距）', () => {
+    const el = { ...base(), text: '四个字符', fontSize: 100 }
+    const tight = elementBox({ ...el, letterSpacing: 0 }, 1000, 1000)
+    const loose = elementBox({ ...el, letterSpacing: 20 }, 1000, 1000)
+    const delta = (loose.x1 - loose.x0) - (tight.x1 - tight.x0)
+    expect(delta).toBeCloseTo((3 * 20) / 1000, 5)
+  })
+
+  it('居中对齐以 x 为中心往两边展开，右对齐以 x 为右边界', () => {
+    const el = { ...base(), text: '四个字', fontSize: 100, x: 0.5, letterSpacing: 0 }
+    const center = elementBox({ ...el, align: 'center' }, 1000, 1000)
+    expect((center.x0 + center.x1) / 2).toBeCloseTo(0.5, 5)
+    const right = elementBox({ ...el, align: 'right' }, 1000, 1000)
+    expect(right.x1).toBeCloseTo(0.5, 5)
+    const left = elementBox({ ...el, align: 'left' }, 1000, 1000)
+    expect(left.x0).toBeCloseTo(0.5, 5)
   })
 })

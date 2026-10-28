@@ -17,6 +17,10 @@ export interface PostElement {
   strokeWidth: number
   fontWeight: number
   align: 'left' | 'center' | 'right'
+  /** 行距倍数，默认 1.35；多行文字之间拉开的距离 */
+  lineHeight?: number
+  /** 字间距（px），默认 0；想让字排得松一点就调大 */
+  letterSpacing?: number
   /** 文字内容 */
   text: string
   /** logo：相对画布宽度的宽度；文字不用 */
@@ -216,8 +220,19 @@ export function clamp01(value: number) {
   return Math.min(1, Math.max(0, value))
 }
 
-/** 文字行高，跟 applyPostTemplate 里的 1.35 保持一致 */
+/** 文字行高默认值，没单独设过 lineHeight 的元素用它 */
 export const POST_LINE_HEIGHT = 1.35
+
+/** 行距 / 字间距的可调范围，界面滑杆与校验共用 */
+export const POST_LINE_HEIGHT_RANGE = { min: 0.9, max: 2.5, step: 0.05 }
+export const POST_LETTER_SPACING_RANGE = { min: 0, max: 40, step: 1 }
+
+/** 取元素实际用的行高：没设过就用默认值 */
+export function elementLineHeight(el: Pick<PostElement, 'lineHeight'>): number {
+  const value = el.lineHeight
+  if (typeof value !== 'number' || !Number.isFinite(value)) return POST_LINE_HEIGHT
+  return Math.min(POST_LINE_HEIGHT_RANGE.max, Math.max(POST_LINE_HEIGHT_RANGE.min, value))
+}
 
 /** 估算一段文字的宽度（单位 em）：中日韩字符按 1 个汉字算，其余按 0.55 */
 export function estimateTextEm(text: string): number {
@@ -249,8 +264,13 @@ export function elementBox(el: PostElement, width: number, height: number): Post
   } else {
     const lines = el.text.split('\n')
     const size = Math.max(8, el.fontSize)
-    boxWidth = Math.max(...lines.map((line) => estimateTextEm(line)), 0) * size
-    boxHeight = Math.max(lines.length, 1) * size * POST_LINE_HEIGHT
+    const spacing = Math.max(0, el.letterSpacing ?? 0)
+    // 字间距是加在字与字之间的，一行 n 个字只多出 n-1 个间隙
+    boxWidth = Math.max(
+      ...lines.map((line) => estimateTextEm(line) * size + Math.max(0, [...line].length - 1) * spacing),
+      0,
+    )
+    boxHeight = Math.max(lines.length, 1) * size * elementLineHeight(el)
   }
 
   const left = el.x * width

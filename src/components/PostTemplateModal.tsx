@@ -7,11 +7,14 @@ import { ensureImageCached, ensureImageThumbnailCached, subscribeImageThumbnail 
 import { storeImage } from '../lib/db'
 import {
   POST_FONT_STACK,
+  POST_LETTER_SPACING_RANGE,
+  POST_LINE_HEIGHT_RANGE,
   POST_RATIO_FILTERS,
   POST_SIZE_PRESETS,
   clamp01,
   commitNumberInput,
   createPostTemplate,
+  elementLineHeight,
   newPostElement,
   postTemplateRatioKey,
   type PostElement,
@@ -794,7 +797,8 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                                 fontWeight: element.fontWeight,
                                 color: element.strokeColor,
                                 WebkitTextStroke: `${Math.max(0.4, element.strokeWidth * 2 * scale)}px ${element.strokeColor}`,
-                                lineHeight: 1.35,
+                                lineHeight: elementLineHeight(element),
+                                letterSpacing: `${(element.letterSpacing ?? 0) * scale}px`,
                                 whiteSpace: 'pre',
                                 pointerEvents: 'none',
                               }}
@@ -829,9 +833,16 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                               fontWeight: element.fontWeight,
                               color: element.color,
                               textAlign: element.align,
-                              lineHeight: 1.35,
+                              lineHeight: elementLineHeight(element),
+                              letterSpacing: `${(element.letterSpacing ?? 0) * scale}px`,
                               whiteSpace: 'pre',
                               cursor: isEditing ? 'text' : 'inherit',
+                              // 画布上 x 是锚点：居中/右对齐时文字往左展开，预览要跟绘制一致
+                              transform: element.align === 'center'
+                                ? 'translateX(-50%)'
+                                : element.align === 'right'
+                                  ? 'translateX(-100%)'
+                                  : undefined,
                             }}
                           >
                             {element.text}
@@ -1276,6 +1287,72 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                             px
                           </span>
                         </label>
+                        {/* 对齐：画布上 x 是锚点，居中/右对齐时文字往左展开 */}
+                        <div className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
+                          对齐
+                          <div className="flex overflow-hidden rounded border border-gray-200 dark:border-white/10">
+                            {([
+                              ['left', '左'],
+                              ['center', '中'],
+                              ['right', '右'],
+                            ] as Array<[PostElement['align'], string]>).map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => patchElement(selected.id, { align: value })}
+                                className={`px-2 py-0.5 text-[11px] transition-colors ${
+                                  selected.align === value
+                                    ? 'bg-blue-500 text-white'
+                                    : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => patchElement(selected.id, { align: 'center', x: 0.5 })}
+                            title="把这一行文字摆到画面正中（x=50%，居中对齐）"
+                            className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 transition-colors hover:border-blue-300 hover:text-blue-600 dark:border-white/10 dark:text-gray-300"
+                          >
+                            居中到画布
+                          </button>
+                        </div>
+                        <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                          行距
+                          <input
+                            type="range"
+                            min={POST_LINE_HEIGHT_RANGE.min}
+                            max={POST_LINE_HEIGHT_RANGE.max}
+                            step={POST_LINE_HEIGHT_RANGE.step}
+                            value={elementLineHeight(selected)}
+                            onChange={(e) => patchElement(selected.id, { lineHeight: Number(e.target.value) }, { coalesceKey: `lineHeight:${selected.id}` })}
+                            className="flex-1 accent-blue-500"
+                          />
+                          <span className="w-10 text-right tabular-nums">{elementLineHeight(selected).toFixed(2)}</span>
+                        </label>
+                        <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                          字间距
+                          <input
+                            type="range"
+                            min={POST_LETTER_SPACING_RANGE.min}
+                            max={POST_LETTER_SPACING_RANGE.max}
+                            step={POST_LETTER_SPACING_RANGE.step}
+                            value={selected.letterSpacing ?? 0}
+                            onChange={(e) => patchElement(selected.id, { letterSpacing: Number(e.target.value) }, { coalesceKey: `letterSpacing:${selected.id}` })}
+                            className="flex-1 accent-blue-500"
+                          />
+                          <span className="flex items-center gap-0.5">
+                            <NumberInput
+                              value={selected.letterSpacing ?? 0}
+                              min={POST_LETTER_SPACING_RANGE.min}
+                              onCommit={(letterSpacing) => patchElement(selected.id, { letterSpacing }, { coalesceKey: `letterSpacing:${selected.id}` })}
+                              className="w-11 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                            />
+                            px
+                          </span>
+                        </label>
                         <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
                           颜色
                           <input
@@ -1358,6 +1435,34 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                         <span className="w-8 tabular-nums">{Math.round(selected.width * 100)}%</span>
                       </label>
                     )}
+
+                    <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                      位置
+                      <span className="flex items-center gap-0.5">
+                        X
+                        <NumberInput
+                          value={Math.round(selected.x * 1000) / 10}
+                          min={0}
+                          step={0.1}
+                          allowDecimal
+                          onCommit={(percent) => patchElement(selected.id, { x: clamp01(percent / 100) }, { coalesceKey: `x:${selected.id}` })}
+                          className="w-12 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                        />
+                        %
+                      </span>
+                      <span className="flex items-center gap-0.5">
+                        Y
+                        <NumberInput
+                          value={Math.round(selected.y * 1000) / 10}
+                          min={0}
+                          step={0.1}
+                          allowDecimal
+                          onCommit={(percent) => patchElement(selected.id, { y: clamp01(percent / 100) }, { coalesceKey: `y:${selected.id}` })}
+                          className="w-12 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                        />
+                        %
+                      </span>
+                    </div>
 
                     <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
                       透明度

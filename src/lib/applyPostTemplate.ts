@@ -1,5 +1,5 @@
 import type { SopDirectionNode } from '../types'
-import { POST_FONT_STACK, coverRect, type PostElement, type PostTemplate } from './postTemplate'
+import { POST_FONT_STACK, coverRect, elementLineHeight, type PostElement, type PostTemplate } from './postTemplate'
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -70,9 +70,16 @@ function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: numb
     ctx.textAlign = el.align === 'center' ? 'center' : el.align === 'right' ? 'right' : 'left'
     ctx.lineJoin = 'round'
     ctx.miterLimit = 2
+    // 字间距：Chromium 支持，老内核没这个属性就跳过，不影响其它绘制
+    const spacing = Math.max(0, el.letterSpacing ?? 0)
+    if (spacing > 0) {
+      const ctxWithSpacing = ctx as CanvasRenderingContext2D & { letterSpacing?: string }
+      if ('letterSpacing' in ctxWithSpacing) ctxWithSpacing.letterSpacing = `${spacing}px`
+    }
     const lines = el.text.split('\n')
+    const lineStep = size * elementLineHeight(el)
     lines.forEach((line, index) => {
-      const lineY = y + index * size * 1.35
+      const lineY = y + index * lineStep
       if (el.strokeWidth > 0) {
         // canvas 的描边是居中的：线宽加倍后填充盖掉内侧一半，留在外面的正好是 strokeWidth
         ctx.lineWidth = el.strokeWidth * 2
