@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, retryTask, updateSopText, trashTask, trashOutputImage, trashOutputImages, deliverTaskNow, openDeliveryFolderForTask, resolveTaskDeliveryTarget } from '../store'
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
@@ -25,6 +25,8 @@ import { getApiProviderLabel } from '../lib/apiProfiles'
 import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
 import { inspectImages, useClipStore } from '../lib/clipSimilarity'
 import { expectFromPrompt } from '../lib/batchCheck'
+import { filterGalleryIndexes, galleryFilterCounts, type GalleryFilter } from '../lib/galleryFilter'
+import GalleryFilterBar from './GalleryFilterBar'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
@@ -48,6 +50,11 @@ export default function DetailModal() {
   const streamPreviewSlots = useStore((s) => detailTaskId ? s.streamPreviewSlots[detailTaskId] : undefined)
 
   const [imageIndex, setImageIndex] = useState(0)
+  /**
+   * 画廊筛选：按质检标签（合格 / 待定 / 不合格）或重复度快速只看某一类。
+   * 图多的时候翻一遍找坏图太慢，尤其一版 50 张。
+   */
+  const [galleryFilter, setGalleryFilter] = useState<GalleryFilter>('all')
   const [imageSrcs, setImageSrcs] = useState<Record<string, string>>({})
   const [outputPreviewSrcs, setOutputPreviewSrcs] = useState<Record<string, string>>({})
   const [imageRatios, setImageRatios] = useState<Record<string, string>>({})
@@ -382,8 +389,54 @@ export default function DetailModal() {
   const clipScores = useClipStore((s) => s.scores)
   const clipQc = useClipStore((s) => s.qc)
   const clipLimit = useClipStore((s) => s.limit)
+
   const clipEngine = useClipStore((s) => s.engine)
   const ensureClip = useClipStore((s) => s.ensure)
+
+  /**
+   * 某张图的最终质检结论：人工改判优先于自动质检。
+   * 自动结论只存在内存里，改判跟着任务落库，所以两处都要看。
+   */
+  const verdictOf = useCallback((imageId: string): {
+    verdict: 'pass' | 'fail' | 'unsure'
+    reason: string
+    /** 自定义检查项的结论，只有自动质检才带 */
+    custom?: Array<{ name: string; pass: boolean; note: string }>
+  } | null => {
+    const manual = manualQcVerdicts[imageId]
+    if (manual) return { verdict: manual, reason: '人工改判', custom: undefined }
+    const auto = clipQc[imageId]
+    return auto ? { verdict: auto.verdict, reason: auto.reason, custom: auto.custom } : null
+  }, [manualQcVerdicts, clipQc])
+
+  /** 每张图的重复度，筛选用 */
+  const duplicateOf = useCallback(
+    (imageId: string) => clipScores[imageId]?.max ?? 0,
+    [clipScores],
+  )
+  /** 每类有多少张，给筛选条上的数字用；没有质检结论的图不计入任何标签 */
+  const filterCounts = useMemo(
+    () => galleryFilterCounts(visibleOutputSlots.map((slot) => slot.imageId), verdictOf, duplicateOf, clipLimit),
+    [visibleOutputSlots, verdictOf, duplicateOf, clipLimit],
+  )
+
+  /**
+   * 实际渲染的槽位：筛选时带上它在 visibleOutputSlots 里的原始下标，
+   * 选中态、图片编号、灯箱翻页都还按原来的顺序走，筛完不会错位。
+   */
+  const filteredOutputSlots = useMemo(
+    () => filterGalleryIndexes(visibleOutputSlots.map((slot) => slot.imageId), galleryFilter, verdictOf, duplicateOf, clipLimit)
+      .map((index) => ({ slot: visibleOutputSlots[index]!, index })),
+    [visibleOutputSlots, galleryFilter, verdictOf, duplicateOf, clipLimit],
+  )
+
+  // 换了筛选条件后，当前选中的那张可能已经不在列表里，自动跳到第一张
+  useEffect(() => {
+    if (galleryFilter === 'all') return
+    if (filteredOutputSlots.some((item) => item.index === imageIndex)) return
+    const first = filteredOutputSlots[0]
+    if (first) setImageIndex(first.index)
+  }, [galleryFilter, filteredOutputSlots, imageIndex])
 
   useEffect(() => {
     if (!task) return
@@ -397,21 +450,7 @@ export default function DetailModal() {
 
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
 
-  /**
-   * 某张图的最终质检结论：人工改判优先于自动质检。
-   * 自动结论只存在内存里，改判跟着任务落库，所以两处都要看。
-   */
-  const verdictOf = (imageId: string): {
-    verdict: 'pass' | 'fail' | 'unsure'
-    reason: string
-    /** 自定义检查项的结论，只有自动质检才带 */
-    custom?: Array<{ name: string; pass: boolean; note: string }>
-  } | null => {
-    const manual = manualQcVerdicts[imageId]
-    if (manual) return { verdict: manual, reason: '人工改判', custom: undefined }
-    const auto = clipQc[imageId]
-    return auto ? { verdict: auto.verdict, reason: auto.reason, custom: auto.custom } : null
-  }
+
   /** 不合格的图（只算还在画廊里的，已回收的不用再清） */
   const failedImageIds = visibleOutputImages(task).filter((id) => verdictOf(id)?.verdict === 'fail')
 
@@ -894,7 +933,7 @@ export default function DetailModal() {
             <>
               <div className="absolute inset-0 overflow-y-auto px-3 pb-12 pt-12">
                 <div style={{ columnWidth: `${galleryTileSize}px`, columnCount: 8, columnGap: '8px' }}>
-                  {visibleOutputSlots.map((slot, index) => {
+                  {filteredOutputSlots.map(({ slot, index }) => {
                     if (slot.error) {
                       return (
                         <div
@@ -917,8 +956,11 @@ export default function DetailModal() {
                           setImageIndex(index)
                         }}
                         onDoubleClick={() => {
-                          // 双击才是看大图
-                          setLightboxImageId(slot.imageId, visibleOutputImages(task))
+                          // 双击才是看大图；筛选中时只在这类图里翻页
+                          const ids = galleryFilter === 'all'
+                            ? visibleOutputImages(task)
+                            : filteredOutputSlots.map((item) => item.slot.imageId).filter(Boolean)
+                          setLightboxImageId(slot.imageId, ids)
                         }}
                         onTouchEnd={(e) => {
                           // 触屏没有 dblclick：两次点击间隔 < 300ms 当双击处理
@@ -928,7 +970,10 @@ export default function DetailModal() {
                           if (last && last.id === slot.imageId && now - last.at < 300) {
                             e.preventDefault()
                             lastThumbTapRef.current = null
-                            setLightboxImageId(slot.imageId, visibleOutputImages(task))
+                            const ids = galleryFilter === 'all'
+                              ? visibleOutputImages(task)
+                              : filteredOutputSlots.map((item) => item.slot.imageId).filter(Boolean)
+                            setLightboxImageId(slot.imageId, ids)
                           }
                         }}
                         title="单击选中 · 双击看大图"
@@ -1001,9 +1046,19 @@ export default function DetailModal() {
               <div className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex flex-wrap items-center justify-center gap-2 px-20">
                 {outputLen > 1 && (
                   <span className="rounded-full bg-black/50 px-2 py-1 text-xs text-white shadow-sm backdrop-blur-sm">
-                    共 {outputLen} 张
+                    {galleryFilter === 'all'
+                      ? `共 ${outputLen} 张`
+                      : `筛出 ${filteredOutputSlots.length} / ${outputLen} 张`}
                   </span>
                 )}
+                {/* 按质检标签筛：图多时不用一张张翻着找坏图 */}
+                <GalleryFilterBar
+                  filter={galleryFilter}
+                  onChange={setGalleryFilter}
+                  counts={filterCounts}
+                  total={outputLen}
+                  limit={clipLimit}
+                />
                 <div className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-white shadow-sm backdrop-blur-sm">
                   <button
                     type="button"
