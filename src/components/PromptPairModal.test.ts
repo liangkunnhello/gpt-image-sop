@@ -120,3 +120,21 @@ describe('buildPairRows（图片与提示词对照）', () => {
     expect(rows.map((row) => row.variableMode)).toEqual([true, false])
   })
 })
+
+describe('对照表里不进回收站的图', () => {
+  it('移入图片回收站的那张不出现在对照表里，其余照常', () => {
+    const rows = buildPairRows([
+      makeTask({ id: 'a', sopPromptIndex: 1, prompt: '甲', outputImages: ['img-a1', 'img-a2'], trashedOutputImages: ['img-a2'] }),
+      makeTask({ id: 'b', sopPromptIndex: 2, prompt: '乙', outputImages: ['img-b'] }),
+    ])
+    expect(rows.map((row) => row.images)).toEqual([['img-a1'], ['img-b']])
+  })
+
+  it('一张都进回收站的那条提示词，图列表为空但条目还在', () => {
+    const rows = buildPairRows([
+      makeTask({ id: 'a', sopPromptIndex: 1, prompt: '甲', outputImages: ['img-a'], trashedOutputImages: ['img-a'] }),
+    ])
+    expect(rows).toHaveLength(1)
+    expect(rows[0].images).toEqual([])
+  })
+})

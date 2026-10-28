@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import type { TaskRecord } from '../types'
 import { useSopStore } from '../lib/sopStore'
 import { useStore } from '../store'
+import { visibleOutputImages } from '../lib/taskState'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
@@ -46,7 +47,8 @@ export function buildPairRows(tasks: TaskRecord[], directions: Array<{ id: strin
       key: task.id,
       index: task.sopPromptIndex ?? position + 1,
       prompt: task.prompt,
-      images: task.outputImages,
+      // 进了图片回收站的图不该还在对照表里出现（和画廊、交付一个口径）
+      images: visibleOutputImages(task),
       status: task.status,
       error: task.error,
       assignments: task.variableAssignments,

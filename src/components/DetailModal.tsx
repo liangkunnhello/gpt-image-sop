@@ -27,6 +27,7 @@ import { inspectImages, useClipStore } from '../lib/clipSimilarity'
 import { expectFromPrompt } from '../lib/batchCheck'
 import { filterGalleryIndexes, galleryFilterCounts, type GalleryFilter } from '../lib/galleryFilter'
 import { mergePromptText } from '../lib/sopGroup'
+import { mergeCardTasks } from '../lib/cardTasks'
 import { usePostReapplyProgress } from '../lib/postProgress'
 import ReapplyProgressBar from './ReapplyProgressBar'
 import { DUPLICATE_SCOPE_LABEL, duplicateScopeKey, peersForTask, scopeTasksFor } from '../lib/duplicateScope'
@@ -138,27 +139,9 @@ export default function DetailModal() {
   const task = useMemo(() => {
     if (!rawTask) return null
     if (!rawTask.sopJobId) return rawTask
-    const group = groupTasks
-    if (group.length <= 1) return rawTask
-    const leader = group[0]
-    const anyRunning = group.some((item) => item.status === 'running')
-    const allError = group.every((item) => item.status === 'error')
-    // 输入内容显示真正提交的提示词，不要拿「N 张图」这种概况顶替。
-    // 同一条提示词跑 N 张是常态，去重后再拼，否则会重复 N 遍（见 mergePromptText）
-    const merged = mergePromptText(group.map((item) => item.prompt))
-    return {
-      ...leader,
-      prompt: merged.text || leader.prompt,
-      outputImages: group.flatMap((item) => item.outputImages),
-      // 原图也按同顺序摊平：否则「下载原图」永远只指向第一条提示词那张，
-      // 后面的图会拿错源。老任务没有这个字段时补空串占位，保持下标对齐。
-      sourceImages: group.flatMap((item) => item.outputImages.map((_, index) => item.sourceImages?.[index] || '')),
-      transparentOriginalImages: group.flatMap((item) => (
-        item.outputImages.map((_, index) => item.transparentOriginalImages?.[index] || '')
-      )),
-      status: anyRunning ? 'running' : allError ? 'error' : 'done',
-      elapsed: group.reduce((sum, item) => sum + (item.elapsed ?? 0), 0),
-    } as TaskRecord
+    if (groupTasks.length <= 1) return rawTask
+    // 摊平逻辑集中在 mergeCardTasks：回收站标记、人工改判这些「按图的字段」必须一起合并
+    return mergeCardTasks(groupTasks)
   }, [rawTask, groupTasks])
 
   /**
