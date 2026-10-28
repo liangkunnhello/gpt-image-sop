@@ -1762,6 +1762,9 @@ export async function initStore() {
   useStore.getState().setTrashedTasks(tasks.filter((task) => Boolean(task.deletedAt)))
   useStore.getState().setTasks(tasks.filter((task) => !task.deletedAt))
   showSupportPromptForExistingLocalData(tasks)
+  // 人工改判成不合格的图（结论落库），如果之前已经交付过，启动时把交付目录里那份撤掉。
+  // 自动质检结论只在内存里，重启后拿不到，只能靠下一次质检触发。
+  void pruneFailedDeliveredImages().catch((err) => console.warn('启动清理不合格交付文件失败：', err))
   // 客户端关闭确认用同样的判断跳过这些任务，它们重启后会继续查询结果
   for (const task of tasks) {
     if (isFalRecoverableTask(task)) scheduleFalRecovery(task.id, 0)
@@ -6048,6 +6051,57 @@ async function removeDeliveredFiles(task: TaskRecord, imageIds: string[]): Promi
 }
 
 /**
+ * 质检判不合格、但已经交付出去的图：按任务分组列出来。
+ *
+ * 人工改判优先于自动结论（和 failedOutputImages 一个口径）。
+ * 纯函数，方便单测；真正删文件的是下面的 pruneFailedDeliveredImages。
+ */
+export function collectFailedOutputImages(
+  tasks: TaskRecord[],
+  qc: Record<string, { verdict?: string } | undefined>,
+  imageIds?: string[],
+): Array<{ task: TaskRecord; ids: string[] }> {
+  const filter = imageIds?.length ? new Set(imageIds) : null
+  const out: Array<{ task: TaskRecord; ids: string[] }> = []
+  for (const task of tasks) {
+    if (task.deletedAt) continue
+    const ids: string[] = []
+    for (const id of task.outputImages ?? []) {
+      if (!id) continue
+      if (filter && !filter.has(id)) continue
+      const manual = task.qcVerdicts?.[id]
+      const verdict = manual ?? qc[id]?.verdict
+      if (verdict === 'fail') ids.push(id)
+    }
+    if (ids.length) out.push({ task, ids })
+  }
+  return out
+}
+
+/**
+ * 质检出「不合格」之后，把已经交付到文件夹的那几张删掉。
+ *
+ * 生图一完成就自动交付，质检是排队异步跑的 —— 等质检出结果，文件早就写进交付目录了。
+ * 之前只有「重新交付」时才跳过坏图，已经写出去的那份一直留在文件夹里。
+ * 这里补上追溯：判 fail 就删文件（图片本体还在库里，可以还原/人工改判）。
+ */
+export async function pruneFailedDeliveredImages(imageIds?: string[]): Promise<number> {
+  if (!isTauri) return 0
+  const state = useStore.getState()
+  const groups = collectFailedOutputImages(state.tasks, useClipStore.getState().qc, imageIds)
+  let removed = 0
+  for (const { task, ids } of groups) {
+    // 没交付过的卡不用去碰交付目录
+    if (!task.deliverFolder && !task.deliveredFileNames) continue
+    removed += await removeDeliveredFiles(task, ids)
+  }
+  if (removed) {
+    state.showToast(`已把 ${removed} 张质检不合格的图从交付文件夹删掉`, 'info')
+  }
+  return removed
+}
+
+/**
  * 把「这次交付实际写了哪些文件」记到对应任务上，供进回收站时精确删除。
  *
  * 文件名里带序号和尺寸，事后重算容易跟当时的实际写法错开，
@@ -6088,6 +6142,8 @@ export async function setImageQcVerdict(taskId: string, imageId: string, verdict
     tasks: state.tasks.map((item) => (item.id === owner.id ? next : item)),
   }))
   await putTask(next)
+  // 改判成不合格：已经交付出去的那份也要撤回来
+  if (verdict === 'fail') await pruneFailedDeliveredImages([imageId])
   useStore.getState().showToast(
     verdict === 'fail' ? '已标为不合格，交付时会跳过这张' : verdict === 'pass' ? '已标为合格' : '已恢复按自动质检结论',
     'success',

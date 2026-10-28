@@ -304,6 +304,8 @@ export async function inspectImages(
       limit: json?.limit ?? state.limit,
       engine: 'clip',
     }))
+    // 交付在生图完成时就跑了，质检这时才出结论：判不合格的那几张要从交付文件夹里撤掉
+    await pruneFailedDelivered(Object.keys(nextQc))
   } catch {
     await inspectLocally(entries, options.expect ?? EMPTY_EXPECT, Boolean(options.manual))
   }
@@ -384,6 +386,23 @@ async function inspectLocally(
     engine: 'phash',
     limit: useInspectConfig.getState().config.limit,
   }))
+  // 交付在生图完成时就跑了，质检这时才出结论：判不合格的那几张要从交付文件夹里撤掉
+  await pruneFailedDelivered(Object.keys(nextQc))
+}
+
+/**
+ * 质检出结论后追溯交付目录。
+ *
+ * 动态导入 store：store 反过来依赖本模块，静态引会成环。
+ * 失败不影响质检本身，最多是文件没删掉，用户还能在回收站/交付文件夹里处理。
+ */
+async function pruneFailedDelivered(imageIds: string[]) {
+  try {
+    const { pruneFailedDeliveredImages } = await import('../store')
+    await pruneFailedDeliveredImages(imageIds)
+  } catch (err) {
+    console.warn('追溯清理交付文件失败：', err)
+  }
 }
 
 /**

@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { addImagesFromFiles, claimCardDeliverFolder, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashOutputImage, trashOutputImages, useStore } from './store'
+import { addImagesFromFiles, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -6530,3 +6530,46 @@ describe('batch input image import', () => {
   })
 })
 
+
+describe('质检不合格的图要能从交付文件夹追溯删掉', () => {
+  const qc = (entries: Record<string, { verdict: string }>) => entries
+
+  it('自动质检判不合格的图按任务分组列出来，人工改判优先', () => {
+    const auto = task({ id: 'a', outputImages: ['img-1', 'img-2'], deliverFolder: '卡-a' })
+    const manual = task({
+      id: 'b',
+      outputImages: ['img-3', 'img-4'],
+      deliverFolder: '卡-b',
+      qcVerdicts: { 'img-3': 'fail', 'img-4': 'pass' },
+    })
+    const groups = collectFailedOutputImages([auto, manual], qc({
+      'img-1': { verdict: 'fail' },
+      'img-2': { verdict: 'pass' },
+      // 自动判了 fail，但人工改判成 pass，就不该再删
+      'img-4': { verdict: 'fail' },
+    }))
+    expect(groups.map((item) => [item.task.id, item.ids])).toEqual([
+      ['a', ['img-1']],
+      ['b', ['img-3']],
+    ])
+  })
+
+  it('只看传进来的那几张，别的卡不动', () => {
+    const a = task({ id: 'a', outputImages: ['img-1'] })
+    const b = task({ id: 'b', outputImages: ['img-2'] })
+    const groups = collectFailedOutputImages([a, b], qc({
+      'img-1': { verdict: 'fail' },
+      'img-2': { verdict: 'fail' },
+    }), ['img-2'])
+    expect(groups.map((item) => [item.task.id, item.ids])).toEqual([['b', ['img-2']]])
+  })
+
+  it('已进回收站的任务不算；待定与合格都不算', () => {
+    const trashed = task({ id: 'a', outputImages: ['img-1'], deletedAt: 1 })
+    const unsure = task({ id: 'b', outputImages: ['img-2'] })
+    expect(collectFailedOutputImages([trashed, unsure], qc({
+      'img-1': { verdict: 'fail' },
+      'img-2': { verdict: 'unsure' },
+    }))).toEqual([])
+  })
+})
