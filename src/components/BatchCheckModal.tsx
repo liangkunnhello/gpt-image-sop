@@ -86,7 +86,7 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) { 
         if (image) {
           const outcome = profile && qcUsable
             ? await qcInBrowser(profile, image.dataUrl, expectFromPrompt(task.prompt), { model: config.qcModel, checks })
-            : { verdict: 'error' as const, violationPass: false, textPass: false, overlapPass: false, missing: [], wrong: [], extra: [], custom: [], reason: qcUsable ? '没有可用的接口配置' : '质检项全部关闭，请先点右上角「设置」勾选', confidence: null }
+            : { verdict: 'error' as const, violationPass: false, textPass: false, overlapPass: false, spots: [], missing: [], wrong: [], extra: [], custom: [], reason: qcUsable ? '没有可用的接口配置' : '质检项全部关闭，请先点右上角「设置」勾选', confidence: null }
           setQc((prev) => ({ ...prev, [task.id]: outcome }))
         }
         done += 1

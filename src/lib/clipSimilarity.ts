@@ -24,6 +24,8 @@ export interface QcResult {
   confidence?: number
   /** 自定义检查项的结论（规则名 + 是否通过 + 说明），没配自定义规则时没有这个字段 */
   custom?: Array<{ name: string; pass: boolean; note: string }>
+  /** 压叠/遮挡位置：哪个字被什么盖住，模型说得出时才有 */
+  spots?: string[]
 }
 
 export interface ClipScore {
@@ -399,6 +401,7 @@ async function inspectLocally(
               note: item.note,
             }))
             : undefined,
+          spots: outcome.spots.length ? outcome.spots : undefined,
         }
       }
     }

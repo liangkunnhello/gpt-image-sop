@@ -33,6 +33,8 @@ export interface QcOutcome {
   violationPass: boolean
   textPass: boolean
   overlapPass: boolean
+  /** 压叠/遮挡位置，形如「顶部大标题第 2、3 字被左上角 Logo 盖住下半部」 */
+  spots: string[]
   missing: string[]
   wrong: string[]
   extra: string[]
@@ -75,7 +77,7 @@ export async function qcOne(dataUrl: string, expect: ExpectText): Promise<QcOutc
     if (!json.ok || !json.result) {
       return {
         verdict: 'error', violationPass: false, textPass: false, overlapPass: false,
-        missing: [], wrong: [], extra: [], custom: [], reason: json.error || '质检失败', confidence: null,
+        spots: [], missing: [], wrong: [], extra: [], custom: [], reason: json.error || '质检失败', confidence: null,
       }
     }
     const r = json.result
@@ -84,6 +86,7 @@ export async function qcOne(dataUrl: string, expect: ExpectText): Promise<QcOutc
       violationPass: r.violation.pass,
       textPass: r.text.pass,
       overlapPass: r.overlap.pass,
+      spots: r.overlap?.spots ?? [],
       missing: r.text.missing,
       wrong: r.text.wrong,
       extra: r.text.extra,
@@ -95,7 +98,7 @@ export async function qcOne(dataUrl: string, expect: ExpectText): Promise<QcOutc
   } catch (err) {
     return {
       verdict: 'error', violationPass: false, textPass: false, overlapPass: false,
-      missing: [], wrong: [], extra: [], custom: [],
+      spots: [], missing: [], wrong: [], extra: [], custom: [],
       reason: err instanceof Error ? err.message : '连不上本地验收服务', confidence: null,
     }
   }

@@ -38,7 +38,11 @@ const SYSTEM_PROMPT = [
   '你是广告投放前的图片质检员，只做判断，不改图。',
   '判断三件事：一，画面是否含违规内容（色情暴露、暴力血腥、政治敏感、未成年人不良形象、医疗功效夸大或承诺治愈）；',
   '二，图上文字与「应出现的文案」是否一致，抓出错字、多字、少字、整条缺失；',
-  '三，文字之间、文字与人物主体之间是否压叠到读不清。',
+  '三，画面上是否存在压叠与遮挡：文字与文字重叠、文字被任何元素遮住（人物、产品、Logo、水印、角标、'
+  + '装饰图形、色块都算）、文字被裁出画面边缘。',
+  '注意：图上的 Logo、水印、角标、装饰条、色块通常是后期用模板叠上去的，它们浮在画面之上；'
+  + '这类元素只要压到文字（哪怕只盖住一部分笔画、哪怕那些字还能读出来），一律算压叠，'
+  + '不要因为它们看起来「自然」「像设计的一部分」就放过。',
   '只依据图上实际可见的内容作答，不推测、不补全。看不清写进 reason，不要当成「没有」。',
   '必须输出单个扁平 JSON 对象，字段一个不少，不要嵌套，不要 markdown 代码块，不要任何解释文字。',
 ].join('')
@@ -72,11 +76,32 @@ export function buildQcPrompt(expect: ExpectText, strict: boolean, checks: QcChe
     if (expect.brand.length) lines.push(`品牌标识：${expect.brand.join(' / ')}`)
     if (expect.disclaimer.length) lines.push(`免责小字：${expect.disclaimer.join(' / ')}`)
     lines.push('', '主标题和标签必须逐字一致。免责小字字号很小，读不出时在 reason 里注明「小字不可辨」，不算错字。')
+    // 被遮挡导致的读不清，属于压叠问题：记成「缺失/错字」会掩盖真正原因，还会把好图误判成文案错
+    lines.push('若某个字是被其它元素盖住才看不清，不要记成 missing 或 wrong，按遮挡处理并在 reason 里写清楚。')
   } else {
     lines.push('本图不要求出现任何文字。若图上有文字，记入 extra。')
   }
   if (!checks.violation) lines.push('不做违规判断，violation_pass 给 true。')
-  if (!checks.overlap) lines.push('不做压叠判断，overlap_pass 给 true，overlap_spots 给空数组。')
+  if (!checks.overlap) {
+    lines.push('不做压叠判断，overlap_pass 给 true，overlap_spots 给空数组。')
+  } else {
+    lines.push(
+      '',
+      '【压叠与遮挡怎么判】',
+      '1. 文字与文字重叠、同一句出现两层（描边重影、错位复制）算不合格。',
+      '2. 文字被任何图形元素遮住都算不合格：Logo、水印、角标、按钮形色块、装饰条、贴纸、'
+      + '色块蒙版、人物或产品轮廓都算，遮住多少都算 —— 只要压到笔画就不通过。',
+      '   检查顺序照这个走，别只看画面中间：先看四个角和上下边缘（Logo、角标、水印、警示语最常叠在那儿），'
+      + '逐个确认它们有没有压到文字；再看标题、卖点这些大字有没有被任何图形盖住；最后看文字之间有没有重叠。',
+      '3. 标题、卖点这类主要文字被遮住任何一部分，即使整句仍然读得出来，也判 overlap_pass=false：'
+      + '在投放素材里它就是「字被盖住了」，不能因为「还认得出」放行。',
+      '4. 文字贴到画面边缘被裁掉一部分，同样算不合格。',
+      '5. 不算压叠的情况只有一种：文字与其它元素没有遮挡关系（文字在纯色底上、挨得近但没被盖住、'
+      + '有意的压字排版）。除此之外一律按遮挡算。',
+      'overlap_spots 要写清「哪个字被什么盖住、盖在哪」，'
+      + '例如「顶部大标题『为爱续航』左起第 2、3 字被左上角 Logo 盖住下半部」。',
+    )
+  }
   if (rules.length) {
     lines.push('', '【额外检查项】逐条判：通过 pass 给 true；不通过 pass 给 false，并在 note 里写清看到什么。id 必须原样带回，一条都不能漏。')
     rules.forEach((rule, index) => {
@@ -158,7 +183,7 @@ export function qcOutcomeFromRaw(raw: Record<string, unknown> | null, fallback: 
   if (!raw) {
     return {
       verdict: 'error', violationPass: false, textPass: false, overlapPass: false,
-      missing: [], wrong: [], extra: [], custom: [], reason: fallback, confidence: null,
+      spots: [], missing: [], wrong: [], extra: [], custom: [], reason: fallback, confidence: null,
     }
   }
   const custom = Array.isArray(raw.custom_items)
@@ -172,13 +197,18 @@ export function qcOutcomeFromRaw(raw: Record<string, unknown> | null, fallback: 
       .filter((item) => item.id)
     : []
   const modelVerdict = raw.verdict === 'pass' || raw.verdict === 'fail' ? raw.verdict : 'unsure'
-  // 自定义规则判否时以规则为准：模型可能 overall 给了 pass，但明确写了某条不通过
-  const verdict = modelVerdict === 'pass' && custom.some((item) => !item.pass) ? 'fail' : modelVerdict
+  const overlapPass = raw.overlap_pass !== false
+  // 判否必须体现在结论上：文字被盖住、被规则点名不合格，都是废图。
+  // 模型有时会写出 overlap_pass=false 却 overall 给 pass（"整体还行"），以判定项为准。
+  const verdict = modelVerdict === 'pass' && (!overlapPass || custom.some((item) => !item.pass))
+    ? 'fail'
+    : modelVerdict
   return {
     verdict,
     violationPass: raw.violation_pass !== false,
     textPass: raw.text_pass !== false,
-    overlapPass: raw.overlap_pass !== false,
+    overlapPass,
+    spots: Array.isArray(raw.overlap_spots) ? raw.overlap_spots.map(String).filter(Boolean) : [],
     missing: Array.isArray(raw.missing) ? raw.missing.map(String) : [],
     wrong: Array.isArray(raw.wrong) ? raw.wrong.map(String) : [],
     extra: Array.isArray(raw.extra) ? raw.extra.map(String) : [],

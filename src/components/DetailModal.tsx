@@ -406,11 +406,13 @@ export default function DetailModal() {
     reason: string
     /** 自定义检查项的结论，只有自动质检才带 */
     custom?: Array<{ name: string; pass: boolean; note: string }>
+    /** 压叠/遮挡位置：哪个字被什么盖住 */
+    spots?: string[]
   } | null => {
     const manual = manualQcVerdicts[imageId]
-    if (manual) return { verdict: manual, reason: '人工改判', custom: undefined }
+    if (manual) return { verdict: manual, reason: '人工改判', custom: undefined, spots: undefined }
     const auto = clipQc[imageId]
-    return auto ? { verdict: auto.verdict, reason: auto.reason, custom: auto.custom } : null
+    return auto ? { verdict: auto.verdict, reason: auto.reason, custom: auto.custom, spots: auto.spots } : null
   }, [manualQcVerdicts, clipQc])
 
   /** 每张图的重复度，筛选用 */
@@ -459,7 +461,12 @@ export default function DetailModal() {
   // 检查面板用的聚合结果：质检取最差的一张，重复度取最高的一个
   const inspectQcList = visibleOutputImages(task)
     .map((id) => verdictOf(id))
-    .filter((item): item is { verdict: 'pass' | 'fail' | 'unsure'; reason: string; custom?: Array<{ name: string; pass: boolean; note: string }> } => Boolean(item))
+    .filter((item): item is {
+      verdict: 'pass' | 'fail' | 'unsure'
+      reason: string
+      custom?: Array<{ name: string; pass: boolean; note: string }>
+      spots?: string[]
+    } => Boolean(item))
   const inspectQc = inspectQcList.find((item) => item.verdict === 'fail')
     ?? inspectQcList.find((item) => item.verdict === 'unsure')
     ?? inspectQcList[0]
@@ -1771,6 +1778,13 @@ export default function DetailModal() {
                         <div key={item.name} className="flex items-start gap-1.5 pl-8 text-[11px] text-red-600 dark:text-red-400">
                           <span className="shrink-0">未通过：{item.name}</span>
                           {item.note && <span className="min-w-0 flex-1 text-red-500/80 dark:text-red-300/80">{item.note}</span>}
+                        </div>
+                      ))}
+                      {/* 压叠/遮挡位置：模型指出「哪个字被什么盖住」，只列位置不给结论就没法排查 */}
+                      {(inspectQc?.spots ?? []).map((spot) => (
+                        <div key={spot} className="flex items-start gap-1.5 pl-8 text-[11px] text-red-600 dark:text-red-400">
+                          <span className="shrink-0">遮挡</span>
+                          <span className="min-w-0 flex-1">{spot}</span>
                         </div>
                       ))}
                       <div className="flex items-center gap-1.5">
