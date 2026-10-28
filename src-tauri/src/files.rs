@@ -472,6 +472,46 @@ pub async fn save_dir_folder(
     })
 }
 
+/// 删掉交付文件夹里的某个成品文件（图片进回收站时用）。
+///
+/// 前端只能给「交付地址 + 文件夹名/文件名」这种相对路径，不能给绝对路径：
+/// `dir` 必须是用户配置过的交付目录（越界到数据目录直接拒绝），
+/// `relative` 只允许普通路径段，`..`、盘符、绝对路径一律拒绝。
+/// 目标已经不在时返回 false（重复点回收站、用户手动删过都不算错）。
+#[tauri::command]
+pub async fn save_remove(
+    state: State<'_, StorageState>,
+    dir: String,
+    relative: String,
+) -> Result<bool, String> {
+    let dir = PathBuf::from(dir.trim());
+    if dir.as_os_str().is_empty() {
+        return Err("交付地址为空。".to_string());
+    }
+    let rel = Path::new(relative.trim());
+    if relative.trim().is_empty() {
+        return Err("文件名不能为空。".to_string());
+    }
+    for part in rel.components() {
+        match part {
+            Component::Normal(_) => {}
+            _ => return Err("文件路径不合法。".to_string()),
+        }
+    }
+    let data_dir = data_root(&state);
+    check_outside(&dir, data_dir.as_deref())?;
+    let target = dir.join(rel);
+    tokio::task::block_in_place(|| match fs::symlink_metadata(&target) {
+        Ok(meta) if meta.is_file() => fs::remove_file(&target)
+            .map(|_| true)
+            .map_err(|err| format!("删除 {} 失败：{err}", target.display())),
+        Ok(_) => Err("目标不是文件。".to_string()),
+        // 已经不在了：当成删成功，不弹错；其他错误（占用、没权限）如实报
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(format!("删除 {} 失败：{err}", target.display())),
+    })
+}
+
 /// 把请求体追加到写入序号（x-id 头）对应的临时文件
 #[tauri::command]
 pub async fn save_write(writes: State<'_, Writes>, request: Request<'_>) -> Result<(), String> {

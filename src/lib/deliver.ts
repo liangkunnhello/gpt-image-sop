@@ -47,6 +47,13 @@ export interface DeliverResult {
   noTarget?: boolean
   /** 该卡全部图都在回收站里，没有可交付的内容 */
   nothingToDeliver?: boolean
+  /**
+   * 这次实际写出的文件（imageId → 文件名）。
+   *
+   * 记到任务上之后，图片进回收站时就能精确删掉交付文件夹里的那一份，
+   * 不用事后按命名规则去猜序号。
+   */
+  files?: Array<{ imageId: string; name: string }>
 }
 
 /**
@@ -333,20 +340,27 @@ export async function deliverTaskCard(
     const claim = resolveCardFolderName(task, context, firstSize)
     const folder = options?.folderOverride ?? claim.folder
     if (!options?.folderOverride && claim.isNew) context.claimCardFolder?.(cardKeyOf(task), folder)
-    const files: Array<{ name: string; blob: Blob }> = []
+    const files: Array<{ imageId: string; name: string; blob: Blob }> = []
     let read = 0
     for (const imageId of images) {
       const entry = await readImageBytes(imageId)
       if (!entry) continue
       const size = realSizeOf(entry.bytes, task)
       const blob = new Blob([new Uint8Array(entry.bytes)] as BlobPart[], { type: MIME_BY_EXT[entry.ext] ?? 'image/png' })
-      files.push({ name: deliverImageFileName(seqBase + read + 1, task, context, size, entry.ext, folder), blob })
+      const name = deliverImageFileName(seqBase + read + 1, task, context, size, entry.ext, folder)
+      files.push({ imageId, name, blob })
       read += 1
     }
     if (!files.length) return { ok: false, written: 0, error: '没有可交付的图片文件' }
     try {
       const actual = await writeFilesToWebFolder(root, folder, files)
-      return { ok: true, written: files.length, folder: actual, location: `${root.name}/${actual}` }
+      return {
+        ok: true,
+        written: files.length,
+        folder: actual,
+        location: `${root.name}/${actual}`,
+        files: files.map(({ imageId, name }) => ({ imageId, name })),
+      }
     } catch (err) {
       return { ok: false, written: 0, error: err instanceof Error ? err.message : '写入文件夹失败' }
     }
@@ -382,26 +396,29 @@ export async function deliverTaskCard(
   }
 
   let written = 0
+  const files: Array<{ imageId: string; name: string }> = []
   for (const imageId of images) {
     const entry = await readImageBytes(imageId)
     if (!entry) continue
+    const name = deliverImageFileName(seqBase + written + 1, task, context, realSizeOf(entry.bytes, task), entry.ext, folder)
     try {
       // overwrite=true：重跑时覆盖同名成品，不留「名称 (2)」
       await saveFileToDir(
         dir,
         entry.bytes,
-        deliverImageFileName(seqBase + written + 1, task, context, realSizeOf(entry.bytes, task), entry.ext, folder),
+        name,
         undefined,
         folderInfo.name,
         true,
       )
       written += 1
+      files.push({ imageId, name })
     } catch (err) {
       console.error('交付写入失败：', err)
     }
   }
   if (!written) return { ok: false, written: 0, folder: folderInfo.name, error: '图片写入失败' }
-  return { ok: true, written, folder: folderInfo.name, location: folderInfo.path }
+  return { ok: true, written, folder: folderInfo.name, location: folderInfo.path, files }
 }
 
 /**
@@ -423,6 +440,7 @@ export async function deliverCardGroup(
   const expected = group.reduce((sum, item) => sum + deliverableOutputImages(item, options?.excludeImageIds).length, 0)
   let last: DeliverResult = { ok: false, written: 0 }
   let folderOverride: string | undefined
+  const files: Array<{ imageId: string; name: string }> = []
   for (const item of group) {
     // 提示词序号自带唯一编号的走自己的，普通任务用累计游标接着排
     const result = await deliverTaskCard(item, context, {
@@ -433,11 +451,12 @@ export async function deliverCardGroup(
     // 同卡各任务共用一个文件夹：第一张定下来后直接传下去，
     // 否则刚占到的名字在 context.tasks 快照里还没有，后面的任务会重新算出另一个
     if (result.folder) folderOverride = result.folder
+    if (result.files?.length) files.push(...result.files)
     written += result.written
     cursor += result.written
     last = result
   }
-  return { ...last, written, expected, ok: written > 0 }
+  return { ...last, written, expected, ok: written > 0, files: files.length ? files : undefined }
 }
 
 /** 供 UI 显示：这张卡的交付地址解析结果（含继承来源） */
@@ -446,4 +465,64 @@ export function resolveCardDeliveryDir(task: TaskRecord, context: DeliverContext
   if (resolved) return resolved
   const fallback = context.fallbackDir?.trim()
   return fallback ? { ownerId: '', path: fallback } : null
+}
+
+/** 交付地址下的一个成品文件：删回收站图时按这两个值去删 */
+export interface DeliveredFileRef {
+  /** 交付地址（绝对路径） */
+  dir: string
+  /** 相对交付地址的「卡文件夹/文件名」 */
+  relative: string
+}
+
+/**
+ * 这张图在交付文件夹里对应哪个文件。
+ *
+ * 交付当时记过文件名就直接用（唯一准确的口径）；老数据没记过，按卡的交付顺序
+ * 重放一遍推出它的序号，扩展名取图片本体，取不到就把常见几种都列出来
+ * （删除时文件不存在会被当成「本来就没有」，不会误删）。
+ *
+ * 必须在把它标记进回收站**之前**调用：重放序号用的是「当时会交付的那批图」，
+ * 已经进回收站的图不参与交付，标记之后再算会少一位。
+ */
+export async function deliveredFileRefsOf(
+  task: TaskRecord,
+  imageId: string,
+  context: DeliverContext,
+): Promise<DeliveredFileRef[]> {
+  const dir = resolveDeliveryDir(context.deliveryDirs, context.directions, task.sopDirectionId)?.path
+    ?? context.fallbackDir?.trim()
+  const folder = (task.deliverFolder ?? cardFolderName(task, context)).trim()
+  if (!dir || !folder) return []
+
+  const recorded = task.deliveredFileNames?.[imageId]
+  if (recorded) return [{ dir, relative: `${folder}/${recorded}` }]
+
+  const group = tasksOfCard(context.tasks, task)
+  let cursor = 0
+  let seq = 0
+  for (const item of group) {
+    // 重放用的是「交付时的可交付列表」：回收站不参与，人工改判不合格的也不交
+    const images = deliverableOutputImages({ ...item, trashedOutputImages: undefined })
+    const index = images.indexOf(imageId)
+    if (index >= 0) {
+      seq = sequenceBase(item, cursor) + index + 1
+      break
+    }
+    cursor += images.length
+  }
+  if (!seq) return []
+
+  // 扩展名从图片本体取；取不到（网页版没缓存、图已被删）就把常见几种都列出来
+  let ext = ''
+  try {
+    ext = (await readImageBytes(imageId))?.ext ?? ''
+  } catch {
+    ext = ''
+  }
+  const exts = ext ? [ext] : ['jpg', 'jpeg', 'png', 'webp']
+  return exts.map((ext) => ({
+    dir,
+    relative: `${folder}/${deliverImageFileName(seq, task, context, '', ext, folder)}`,
+  }))
 }

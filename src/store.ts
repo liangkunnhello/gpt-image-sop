@@ -92,13 +92,13 @@ import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage, type PostTemplate } from './lib/postTemplate'
 import { dataUrlByteSize, dataUrlFormat, limitDataUrlSize, resolveSizeLimitPlan } from './lib/outputFileSize'
 import { finishedFileName, finishedFolderName, writeFinishedImage } from './lib/postFinished'
-import { cardKeyOf, deliverCardGroup, deliverImageFileName, deliverTaskCard, resolveCardDeliveryLocation, resolveCardFolderName, tasksOfCard, type DeliverResult } from './lib/deliver'
+import { cardKeyOf, deliverCardGroup, deliverImageFileName, deliverTaskCard, deliveredFileRefsOf, resolveCardDeliveryLocation, resolveCardFolderName, tasksOfCard, type DeliverResult } from './lib/deliver'
 import { dispatchSkipNote, pickDispatchTemplate } from './lib/dispatch'
 import { openDirectoryPath } from './lib/deliveryDirPicker'
 import { resolveDeliveryDir } from './lib/deliveryDir'
 import { useClipStore } from './lib/clipSimilarity'
 import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
-import { pickSaveDir, saveFile, saveFileToDir, getDefaultSaveDir, createSaveFolder, useSaveDir, type SaveOptions } from './lib/saveFile'
+import { pickSaveDir, saveFile, saveFileToDir, getDefaultSaveDir, createSaveFolder, removeDeliveredFile, useSaveDir, type SaveOptions } from './lib/saveFile'
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
 import { throwIfAborted } from './lib/serverSentEvents'
 import { safeJsonStorage, tauriStorage } from './lib/tauriStorage'
@@ -2830,6 +2830,7 @@ function scheduleAutoDeliver(task: TaskRecord) {
     try {
       const context = await buildDeliverContext()
       const result = await deliverTaskCard(latest, context)
+      recordDeliveredFiles(result.files)
       reportDeliverResult(result)
     } catch (err) {
       console.error('自动交付失败：', err)
@@ -2877,6 +2878,7 @@ export async function deliverTaskNow(taskId: string): Promise<DeliverResult> {
     }
   }
   const result = await deliverCardGroup(task, context, { excludeImageIds })
+  recordDeliveredFiles(result.files)
   reportDeliverResult(result)
   if (excludeImageIds.size && result.ok) {
     useStore.getState().showToast(`已跳过 ${excludeImageIds.size} 张质检不合格的图`, 'info')
@@ -5966,7 +5968,13 @@ export async function trashOutputImage(taskId: string, imageId: string) {
     tasks: state.tasks.map((item) => (item.id === owner.id ? next : item)),
   }))
   await putTask(next)
-  useStore.getState().showToast('已移入图片回收站，可在回收站里还原', 'success')
+  const removed = await removeDeliveredFiles(owner, [imageId])
+  useStore.getState().showToast(
+    removed
+      ? '已移入图片回收站，交付文件夹里的那一份也删掉了'
+      : '已移入图片回收站，可在回收站里还原',
+    'success',
+  )
 }
 
 /**
@@ -6001,10 +6009,64 @@ export async function trashOutputImages(taskId: string, imageIds: string[]): Pro
       tasks: state.tasks.map((item) => (item.id === ownerId ? next : item)),
     }))
     await putTask(next)
+    await removeDeliveredFiles(owner, adding)
     total += adding.length
   }
   if (total) useStore.getState().showToast(`已把 ${total} 张移入图片回收站，可在回收站里还原`, 'success')
   return total
+}
+
+/**
+ * 把图从交付文件夹里删掉。
+ *
+ * 进回收站的意思是「这张图对外下架」：库里留着可以还原，但交付文件夹是对外成品目录，
+ * 不能还把这张图摆在那里。只删交付当时写出的那个文件——文件名交付时记过就直接用，
+ * 老数据按卡的交付顺序推算；删不到（没交付过、交付地址改过、用户手动删过）不算失败。
+ */
+async function removeDeliveredFiles(task: TaskRecord, imageIds: string[]): Promise<number> {
+  if (!isTauri || !imageIds.length) return 0
+  let removed = 0
+  try {
+    const context = await buildDeliverContext()
+    for (const imageId of imageIds) {
+      const refs = await deliveredFileRefsOf(task, imageId, context)
+      for (const ref of refs) {
+        try {
+          if (await removeDeliveredFile(ref.dir, ref.relative)) {
+            removed += 1
+            break
+          }
+        } catch (err) {
+          console.warn('删除交付文件失败：', err)
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('删除交付文件失败：', err)
+  }
+  return removed
+}
+
+/**
+ * 把「这次交付实际写了哪些文件」记到对应任务上，供进回收站时精确删除。
+ *
+ * 文件名里带序号和尺寸，事后重算容易跟当时的实际写法错开，
+ * 由交付结果直接回写最准确；图可能是兄弟任务持有的，按真正持有它的任务分组写。
+ */
+function recordDeliveredFiles(files?: Array<{ imageId: string; name: string }>) {
+  if (!files?.length) return
+  const tasks = useStore.getState().tasks
+  const byTask = new Map<string, Record<string, string>>()
+  for (const file of files) {
+    const owner = tasks.find((item) => item.outputImages?.includes(file.imageId))
+    if (!owner) continue
+    const map = byTask.get(owner.id) ?? { ...(owner.deliveredFileNames ?? {}) }
+    map[file.imageId] = file.name
+    byTask.set(owner.id, map)
+  }
+  for (const [taskId, names] of byTask) {
+    updateTaskInStore(taskId, { deliveredFileNames: names })
+  }
 }
 
 /**
@@ -6065,6 +6127,16 @@ export async function restoreOutputImages(taskId: string, imageIds: string[]) {
     tasks: state.tasks.map((item) => (item.id === taskId ? next : item)),
   }))
   await putTask(next)
+  // 还原 = 重新上架：这张卡交付过就把文件补回去（没交付过的不用凭空建文件夹）
+  if (isTauri && next.deliverFolder) {
+    try {
+      const context = await buildDeliverContext()
+      const result = await deliverTaskCard(next, context)
+      recordDeliveredFiles(result.files)
+    } catch (err) {
+      console.warn('还原后补写交付文件失败：', err)
+    }
+  }
   useStore.getState().showToast(`已还原 ${imageIds.length} 张图片`, 'success')
 }
 

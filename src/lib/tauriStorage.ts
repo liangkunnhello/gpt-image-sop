@@ -121,19 +121,21 @@ export async function installTauriStorageFlush() {
  * 写不进去只能放弃持久化（本次改动重启会丢），比卡死整个操作流程好得多。
  */
 export function safeJsonStorage(): StateStorage {
+  // 单测跑在 node 环境里没有 window，这里当成「没有本地存储」，不刷一堆告警
+  const local = () => (typeof window === 'undefined' ? null : window.localStorage)
   return {
     getItem: (key) => {
-      try { return window.localStorage.getItem(key) } catch { return null }
+      try { return local()?.getItem(key) ?? null } catch { return null }
     },
     setItem: (key, value) => {
       try {
-        window.localStorage.setItem(key, value)
+        local()?.setItem(key, value)
       } catch (err) {
         console.warn(`本地设置写不下（${key}），本次改动只在内存里生效：`, err)
       }
     },
     removeItem: (key) => {
-      try { window.localStorage.removeItem(key) } catch { /* 忽略 */ }
+      try { local()?.removeItem(key) } catch { /* 忽略 */ }
     },
   }
 }

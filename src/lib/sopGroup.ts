@@ -32,6 +32,16 @@ export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
     const anyRunning = sorted.some((task) => task.status === 'running')
     const allError = sorted.every((task) => task.status === 'error')
     /**
+     * 图片回收站的标记也要按整组拼起来。
+     *
+     * 卡片展示的是全组的 outputImages，但「哪些图进了回收站」只记在真正持有它的那条任务上；
+     * 只带代表任务自己那份数组的话，兄弟任务里的图即使进了回收站也照样显示（还会被交付）。
+     */
+    const trashed = sorted.flatMap((task) => task.trashedOutputImages ?? [])
+    /** 人工改判同理：改判跟着持有图的任务走，展示层要按整组合并 */
+    const qcVerdicts: Record<string, 'pass' | 'fail'> = {}
+    for (const task of sorted) Object.assign(qcVerdicts, task.qcVerdicts ?? {})
+    /**
      * 未读按整组算：组里任意一条没看过，这张卡就该提示未读。
      * 代表任务的 detailViewedAt 只属于它自己，所以这里按组重写一遍——
      * 组内全看过时取最晚的完成时间，保证后面再单独完成某条也能正确判定。
@@ -50,6 +60,8 @@ export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
         : `${rep.sopName || 'SOP'} · ${sorted.length} 条提示词`,
       outputImages: sorted.flatMap((task) => task.outputImages),
       outputErrors: sorted.flatMap((task) => task.outputErrors ?? []),
+      trashedOutputImages: trashed.length ? trashed : undefined,
+      qcVerdicts: Object.keys(qcVerdicts).length ? qcVerdicts : undefined,
       status: anyRunning ? 'running' : allError ? 'error' : 'done',
       elapsed: sorted.reduce((sum, task) => sum + (task.elapsed ?? 0), 0),
       detailViewedAt: cardUnread ? undefined : Math.max(rep.detailViewedAt ?? 0, latestFinishedAt),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskRecord } from '../types'
 import { DEFAULT_PARAMS } from '../types'
-import { deliverableOutputImages, resolveCardFolderName, type DeliverContext } from './deliver'
+import { deliverableOutputImages, deliveredFileRefsOf, resolveCardFolderName, type DeliverContext } from './deliver'
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -138,5 +138,60 @@ describe('两张同名卡不互相覆盖文件夹', () => {
     const t2 = card('t2', { sopJobId: 'job-shared', deliverFolder: base })
     expect(resolveCardFolderName(t1, context([t1, t2])).folder).toBe(base)
     expect(resolveCardFolderName(t2, context([t1, t2])).folder).toBe(base)
+  })
+})
+
+describe('进回收站时删哪个交付文件', () => {
+  const directions = [
+    { id: 'cat', parentId: null, name: '保险', kind: 'category' as const },
+    { id: 'prod', parentId: 'cat', name: '百万医疗险', kind: 'product' as const },
+    { id: 'dir', parentId: 'prod', name: '月亮', kind: 'direction' as const },
+  ]
+  const context = (tasks: TaskRecord[]): DeliverContext => ({
+    tasks,
+    directions,
+    deliveryDirs: { cat: 'D:/交付' },
+    template: '{date}-{sop}',
+    custom: '',
+  })
+  const card = (id: string, extra: Partial<TaskRecord> = {}) => task({
+    id,
+    sopJobId: 'job-1',
+    sopName: '大字报',
+    sopDirectionId: 'dir',
+    params: { ...DEFAULT_PARAMS, size: '1080x1920' },
+    createdAt: new Date('2026-10-27T10:00:00').getTime(),
+    deliverFolder: '20261027-大字报',
+    ...extra,
+  })
+
+  it('交付时记过文件名就精确删那一个', async () => {
+    const t = card('t1', { outputImages: ['img-a'], deliveredFileNames: { 'img-a': '20261027-大字报-01.jpg' } })
+    const refs = await deliveredFileRefsOf(t, 'img-a', context([t]))
+    expect(refs).toEqual([{ dir: 'D:/交付', relative: '20261027-大字报/20261027-大字报-01.jpg' }])
+  })
+
+  it('老数据没记录时按卡片顺序推算序号，扩展名全部列出来（删的时候不存在的会跳过）', async () => {
+    const t1 = card('t1', { outputImages: ['img-a'], sopPromptIndex: 3 })
+    const refs = await deliveredFileRefsOf(t1, 'img-a', context([t1]))
+    expect(refs.map((item) => item.relative)).toEqual([
+      '20261027-大字报/20261027-大字报-03.jpg',
+      '20261027-大字报/20261027-大字报-03.jpeg',
+      '20261027-大字报/20261027-大字报-03.png',
+      '20261027-大字报/20261027-大字报-03.webp',
+    ])
+    expect(refs.every((item) => item.dir === 'D:/交付')).toBe(true)
+  })
+
+  it('同卡多条任务时序号接着前一条往下排', async () => {
+    const t1 = card('t1', { outputImages: ['img-a'], sopPromptIndex: undefined })
+    const t2 = card('t2', { outputImages: ['img-b'], sopPromptIndex: undefined })
+    const refs = await deliveredFileRefsOf(t2, 'img-b', context([t1, t2]))
+    expect(refs[0].relative).toBe('20261027-大字报/20261027-大字报-02.jpg')
+  })
+
+  it('没有交付地址时返回空，不会乱删', async () => {
+    const t = card('t1', { outputImages: ['img-a'], sopDirectionId: undefined })
+    expect(await deliveredFileRefsOf(t, 'img-a', { ...context([t]), deliveryDirs: {} })).toEqual([])
   })
 })

@@ -223,7 +223,7 @@ export default function TrashModal() {
                     <div className="truncate text-[11px] font-medium text-gray-700 dark:text-gray-200">
                       {task.sopName || task.prompt?.slice(0, 30) || '(无提示词)'}
                     </div>
-                    <div className="mt-0.5 text-[10px] text-gray-400">{imageIds.length} 张图已筛出，不再展示与交付</div>
+                    <div className="mt-0.5 text-[10px] text-gray-400">{imageIds.length} 张图已从画廊、详情与交付文件夹里移除，图片本体还在库里</div>
                     <TrashImageThumbs ids={imageIds} />
                   </div>
                   <button
@@ -331,7 +331,7 @@ export default function TrashModal() {
         </div>
 
         <div className="shrink-0 border-t border-gray-100 px-4 py-2 text-[11px] text-gray-400 dark:border-white/[0.06]">
-          删除方向会把它下面的任务卡一起放进来，恢复时也一起回去；图片在回收站期间不会被清理，点「彻底删除」或「清空回收站」才真正删掉图片本体。
+          删除方向会把它下面的任务卡一起放进来，恢复时也一起回去；图片进回收站时，交付文件夹里的那一份会一起删掉（还原时再补写回去）；图片本体在库里保留，点「彻底删除」或「清空回收站」才真正删掉。
         </div>
       </div>
     </div>

@@ -77,6 +77,7 @@ pub fn run() {
             files::open_directory,
             files::save_dir_begin,
             files::save_dir_folder,
+            files::save_remove,
             files::save_write,
             files::save_commit,
             files::save_abort,

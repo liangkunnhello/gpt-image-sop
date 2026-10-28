@@ -131,6 +131,18 @@ export async function useSaveDir(path: string): Promise<SaveDir> {
   return await invoke<SaveDir>('save_dir_use', { path })
 }
 
+/**
+ * 仅客户端：删掉交付文件夹里的某个成品文件（图片进回收站时用）。
+ *
+ * `relative` 是相对交付地址的「卡文件夹/文件名」，只能往下走一层：
+ * 绝对路径、`..`、盘符一律由 Rust 侧拒绝，也不会删到交付地址以外。
+ * 文件已经不在了返回 false，不算失败。
+ */
+export async function removeDeliveredFile(dirPath: string, relative: string): Promise<boolean> {
+  if (!isTauri) return false
+  return await invoke<boolean>('save_remove', { dir: dirPath, relative })
+}
+
 /** 仅客户端：默认保存地址，用于在设置中显示 */
 export function getDefaultSaveDir() {
   return invoke<string>('download_dir_get')
