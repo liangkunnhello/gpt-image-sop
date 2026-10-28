@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_QC_MODEL } from '../lib/visionQc'
-import { useInspectConfig, DEFAULT_INSPECT_CONFIG, LIMIT_MAX, LIMIT_MIN, MAX_QC_RULES } from '../lib/inspectConfig'
+import { useInspectConfig, DEFAULT_INSPECT_CONFIG, LIMIT_MAX, LIMIT_MIN, MAX_QC_RULES, QC_RULE_PRESETS } from '../lib/inspectConfig'
 import { activeQcRules } from '../lib/visionQc'
 import { Checkbox } from './Checkbox'
 import { CloseIcon } from './icons'
@@ -27,11 +27,20 @@ export default function InspectConfigModal({ onClose }: InspectConfigModalProps)
   const isDefault = JSON.stringify(config) === JSON.stringify(DEFAULT_INSPECT_CONFIG)
 
   /** 自定义检查项的增删改：直接写回配置，随其它设置一起存本机 */
-  const addRule = () => {
+  const addRule = (preset?: { name: string; detail: string }) => {
     if (config.customRules.length >= MAX_QC_RULES) return
     const id = `qc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`
-    setConfig({ customRules: [...config.customRules, { id, name: '', detail: '', enabled: true }] })
+    setConfig({
+      customRules: [
+        ...config.customRules,
+        { id, name: preset?.name ?? '', detail: preset?.detail ?? '', enabled: true },
+      ],
+    })
   }
+  /** 还没加过的常用规则，加过的就不再显示，避免点两次出现两条一样的 */
+  const sparePresets = QC_RULE_PRESETS.filter(
+    (preset) => !config.customRules.some((rule) => rule.name.trim() === preset.name),
+  )
   const updateRule = (id: string, patch: Partial<{ name: string; detail: string; enabled: boolean }>) => {
     setConfig({
       customRules: config.customRules.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)),
@@ -170,13 +179,30 @@ export default function InspectConfigModal({ onClose }: InspectConfigModalProps)
                 </div>
                 <button
                   type="button"
-                  onClick={addRule}
+                  onClick={() => addRule()}
                   disabled={config.customRules.length >= MAX_QC_RULES}
                   className="shrink-0 rounded-lg bg-blue-500 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.08]"
                 >
                   + 新增
                 </button>
               </div>
+              {/* 常用规则：点一下带名字和判定标准加进来，不用手敲 */}
+              {sparePresets.length > 0 && config.customRules.length < MAX_QC_RULES && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-gray-400 dark:text-gray-500">常用规则：</span>
+                  {sparePresets.map((preset) => (
+                    <button
+                      key={preset.name}
+                      type="button"
+                      title={preset.detail}
+                      onClick={() => addRule(preset)}
+                      className="rounded-full border border-dashed border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 transition-colors hover:border-blue-400 hover:bg-blue-50 hover:text-blue-600 dark:border-white/20 dark:text-gray-300 dark:hover:border-blue-500/50 dark:hover:bg-blue-500/10 dark:hover:text-blue-300"
+                    >
+                      + {preset.name}
+                    </button>
+                  ))}
+                </div>
+              )}
               {!config.customRules.length && (
                 <div className="rounded-xl bg-black/[0.04] px-3 py-2 text-xs leading-relaxed text-gray-500 dark:bg-white/[0.05] dark:text-gray-400">
                   例如「画面不许出现按钮、胶囊占位」「品牌 logo 不许变形或被裁切」「必须留出左上角空白」。

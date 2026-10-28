@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { DEFAULT_INSPECT_CONFIG, MAX_QC_RULES, normalizeInspectConfig, useInspectConfig } from './inspectConfig'
+import { DEFAULT_INSPECT_CONFIG, MAX_QC_RULES, QC_RULE_PRESETS, normalizeInspectConfig, useInspectConfig } from './inspectConfig'
 
 describe('inspectConfig', () => {
   beforeEach(() => {
@@ -88,5 +88,24 @@ describe('自定义检查项配置', () => {
   it('不是数组时回到空列表', () => {
     expect(normalizeInspectConfig({ customRules: 'oops' }).customRules).toEqual([])
     expect(normalizeInspectConfig({}).customRules).toEqual([])
+  })
+})
+
+describe('常用检查项预设', () => {
+  it('每条预设都有名字和判定标准，且名字不重复', () => {
+    expect(QC_RULE_PRESETS.length).toBeGreaterThan(0)
+    for (const preset of QC_RULE_PRESETS) {
+      expect(preset.name.trim()).not.toBe('')
+      expect(preset.detail.trim()).not.toBe('')
+    }
+    expect(new Set(QC_RULE_PRESETS.map((item) => item.name)).size).toBe(QC_RULE_PRESETS.length)
+  })
+
+  it('预设能通过配置校验（名字、判定标准、默认开启）', () => {
+    const config = normalizeInspectConfig({
+      customRules: QC_RULE_PRESETS.map((preset, index) => ({ id: `p${index}`, ...preset })),
+    })
+    expect(config.customRules).toHaveLength(QC_RULE_PRESETS.length)
+    expect(config.customRules.every((rule) => rule.enabled && rule.detail)).toBe(true)
   })
 })

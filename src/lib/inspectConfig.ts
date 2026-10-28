@@ -56,6 +56,31 @@ export const LIMIT_MAX = 0.99
 /** 自定义检查项上限：条数太多模型会漏判，也把提示词撑长 */
 export const MAX_QC_RULES = 12
 
+/**
+ * 常用检查项：一键加进配置，省得每次手敲。
+ *
+ * 这几条对应的都是实际踩过的坑（空白胶囊按钮、文字叠影、logo 变形、预留区被占），
+ * 名字也刻意写得短 —— 它会出现在详情页的「未通过：xxx」里。
+ */
+export const QC_RULE_PRESETS: ReadonlyArray<{ name: string; detail: string }> = [
+  {
+    name: '不许出现按钮',
+    detail: '画面里出现按钮、空胶囊、空白圆角长条、带描边的空块占位，任何一处都算不通过；卖点列表后面直接收尾是可以的。',
+  },
+  {
+    name: '文字不许叠影',
+    detail: '出现描边重影、错位复制、同一个字叠两次、用叠字伪造立体感，任一处算不通过；文字必须单层实心清晰。',
+  },
+  {
+    name: 'logo 不许变形',
+    detail: '品牌 logo 被拉伸、压扁、裁切、改色或换字体，算不通过；logo 缺失但画面其它部分正常时在 note 里说明，不判不通过。',
+  },
+  {
+    name: '预留区必须留白',
+    detail: '左上角 logo 区、底部合规小字区被人物、文字、色块或装饰占住，算不通过；这两个区域应为干净背景或纯色。',
+  },
+]
+
 const STORAGE_KEY = 'gpt-image-playground.inspect-config'
 
 function toBool(value: unknown, fallback: boolean) {

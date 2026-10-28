@@ -79,6 +79,19 @@ describe('质检设置里的自定义检查项', () => {
     expect(rules()[0].enabled).toBe(false)
   })
 
+  it('点常用规则直接带名字和判定标准加进来，不会重复加', async () => {
+    const el = render()
+    const chip = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('不许出现按钮'))!
+    await act(async () => { chip.click() })
+    expect(rules()).toHaveLength(1)
+    expect(rules()[0].name).toBe('不许出现按钮')
+    expect(rules()[0].detail).toContain('空胶囊')
+    expect(rules()[0].enabled).toBe(true)
+
+    // 加过之后这个快捷入口就不该再出现，避免点两次出现两条一样的
+    expect([...el.querySelectorAll('button')].some((b) => b.textContent?.includes('不许出现按钮'))).toBe(false)
+  })
+
   it('点「删除」把规则删掉', async () => {
     useInspectConfig.setState({
       config: { ...DEFAULT_INSPECT_CONFIG, customRules: [{ id: 'r1', name: '规则', detail: 'x', enabled: true }] },
