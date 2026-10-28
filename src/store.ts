@@ -87,6 +87,7 @@ import { sizeOverridesForMixedRatios } from './lib/referenceSize'
 import { planGenerationSize } from './lib/sizeCapability'
 import { parsePixelSize, resizeDataUrlToSize } from './lib/imageResize'
 import { applyPostTemplate, productIdForDirection, resolvePostTemplates } from './lib/applyPostTemplate'
+import { removeClipVectors } from './lib/clipVectors'
 import { buildAvoidHintForTask, withAvoidHint } from './lib/postReserve'
 import { imageSizeFromDataUrl } from './lib/imageDimensions'
 import { pickTemplateForImage, type PostTemplate } from './lib/postTemplate'
@@ -589,6 +590,8 @@ async function deleteStoredImageIfUnreferenced(imageId: string) {
   await deleteImage(imageId)
   if (!isImageReferencedByState(useStore.getState(), imageId)) {
     deleteImageCacheEntry(imageId)
+    // 图彻底删掉了，向量库里的指纹也一起清掉，否则全库比对会拿已经不存在的图当参照
+    removeClipVectors([imageId])
     return
   }
 

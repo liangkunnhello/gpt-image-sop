@@ -5,20 +5,29 @@ import type { TaskRecord } from '../types'
  *
  * - card：只和同一张任务卡里的其它图比（看这张卡内部有没有撞车）
  * - direction：和同一「产品-方向」下的所有成品比（看这一批投放素材有没有重复）
+ * - library：和本地向量库里的**全部历史图**比（跨批次、跨方向，看有没有跟老素材撞）
  *
  * 口径不同，同一张图算出来的重复度会不一样，所以算过的分数要带上口径标记，
  * 换了口径就重算，不能拿旧口径的数字冒充。
  */
-export type DuplicateScope = 'card' | 'direction'
+export type DuplicateScope = 'card' | 'direction' | 'library'
 
 export const DUPLICATE_SCOPE_LABEL: Record<DuplicateScope, string> = {
   card: '同一张任务卡',
   direction: '同产品-方向',
+  library: '全部历史图',
 }
 
 /** 归一化：认不出来的值退回默认口径 */
 export function toDuplicateScope(value: unknown): DuplicateScope {
-  return value === 'card' ? 'card' : 'direction'
+  if (value === 'card') return 'card'
+  if (value === 'library') return 'library'
+  return 'direction'
+}
+
+/** 全库比对不靠 task 分组，走向量库；这两种口径需要挑 peers 任务 */
+export function needsPeers(scope: DuplicateScope): boolean {
+  return scope !== 'library'
 }
 
 /** 这张图属于哪个比对组：卡就看 sopJobId（没有就自己一组），方向看 sopDirectionId */

@@ -30,7 +30,7 @@ import { resolveCardInputText } from '../lib/sopGroup'
 import { mergeCardTasks } from '../lib/cardTasks'
 import { usePostReapplyProgress } from '../lib/postProgress'
 import ReapplyProgressBar from './ReapplyProgressBar'
-import { DUPLICATE_SCOPE_LABEL, duplicateScopeKey, peersForTask, scopeTasksFor } from '../lib/duplicateScope'
+import { DUPLICATE_SCOPE_LABEL, duplicateScopeKey, needsPeers, peersForTask, scopeTasksFor } from '../lib/duplicateScope'
 import { useInspectConfig } from '../lib/inspectConfig'
 import GalleryFilterBar from './GalleryFilterBar'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
@@ -441,8 +441,10 @@ export default function DetailModal() {
 
   useEffect(() => {
     if (!task) return
-    // 按用户选的口径取范围：同一张卡，或同产品-方向（同方向不够两张时退到全部成品）
-    ensureClip(scopeTasksFor(tasks, task, duplicateScope), duplicateScope)
+    // 按用户选的口径取范围：同一张卡 / 同产品-方向 / 全部历史图。
+    // 全库口径不看任务分组，只把「这张卡的图」交给 ensure —— 它会跟向量库比
+    const scopeTasks = duplicateScope === 'library' ? groupTasks : scopeTasksFor(tasks, task, duplicateScope)
+    ensureClip(scopeTasks, duplicateScope)
   }, [task?.id, ensureClip, tasks, duplicateScope])
 
   if (!task) return null
@@ -468,6 +470,10 @@ export default function DetailModal() {
     ?? null
   const inspectScoreValues = visibleOutputImages(task).map((id) => clipScores[id]?.max).filter((v): v is number => typeof v === 'number')
   const inspectScore = inspectScoreValues.length ? Math.max(...inspectScoreValues) : null
+  /** 全库比对时，当前这张图是跟多少张历史图比的（来自分数的 libraryCount） */
+  const currentScoreLibraryCount = currentOutputImageId
+    ? (clipScores[currentOutputImageId]?.scope === 'library' ? clipScores[currentOutputImageId]?.libraryCount : undefined)
+    : undefined
   const showPendingPrompt = isAgentTaskPromptPending(task)
   const isAgentEditTool = task.status === 'done' && String(task.agentToolAction ?? '').toLowerCase() === 'edit'
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
@@ -575,8 +581,8 @@ export default function DetailModal() {
         const dataUrl = await ensureImageCached(id)
         if (dataUrl) entries.push({ imageId: id, dataUrl })
       }
-      // 重复度按当前口径挑参照：同一张卡，或同产品-方向
-      for (const peer of peersForTask(tasks, task, duplicateScope, 12)) {
+      // 重复度按当前口径挑参照：同一张卡 / 同产品-方向；全库比对不需要带 peers（参照来自向量库）
+      for (const peer of needsPeers(duplicateScope) ? peersForTask(tasks, task, duplicateScope, 12) : []) {
         for (const id of visibleOutputImages(peer).slice(0, 2)) {
           const dataUrl = await ensureImageCached(id)
           if (dataUrl) entries.push({ imageId: id, dataUrl })
@@ -957,14 +963,15 @@ export default function DetailModal() {
           {task.status === 'done' && outputLen > 0 && (
             <>
               <div className="absolute inset-0 overflow-y-auto px-3 pb-12 pt-12">
-                <div style={{ columnWidth: `${galleryTileSize}px`, columnCount: 8, columnGap: '8px' }}>
+                {/* 行优先：先从左到右排满一行再换行。CSS 多列是列优先，读起来是纵向跳的 */}
+                <div className="flex flex-wrap items-start gap-2">
                   {filteredOutputSlots.map(({ slot, index }) => {
                     if (slot.error) {
                       return (
                         <div
                           key={`slot-error-${slot.requestIndex}`}
-                          style={{ breakInside: 'avoid', marginBottom: '8px' }}
-                          className="flex h-20 items-center justify-center rounded-lg bg-black/5 text-xs text-red-500 dark:bg-white/[0.04]"
+                          style={{ width: galleryTileSize }}
+                          className="flex h-20 shrink-0 items-center justify-center rounded-lg bg-black/5 text-xs text-red-500 dark:bg-white/[0.04]"
                         >
                           第 {index + 1} 张失败
                         </div>
@@ -1002,8 +1009,8 @@ export default function DetailModal() {
                           }
                         }}
                         title="单击选中 · 双击看大图"
-                        style={{ breakInside: 'avoid', marginBottom: '8px' }}
-                        className={`group relative block w-full overflow-hidden rounded-lg transition-shadow ${index === imageIndex ? 'ring-2 ring-blue-500' : ''}`}
+                        style={{ width: galleryTileSize }}
+                        className={`group relative block shrink-0 overflow-hidden rounded-lg transition-shadow ${index === imageIndex ? 'ring-2 ring-blue-500' : ''}`}
                       >
                         <img
                           src={src}
@@ -1813,28 +1820,39 @@ export default function DetailModal() {
                           </span>
                         ) : (
                           <span className="text-gray-400 dark:text-gray-500">
-                            {duplicateScope === 'card' ? '这张卡至少要有两张图' : '需要至少两张同方向的图'}
+                            {duplicateScope === 'card'
+                              ? '这张卡至少要有两张图'
+                              : duplicateScope === 'library'
+                                ? '向量库里还没有这批图的向量，稍后自动补算'
+                                : '需要至少两张同方向的图'}
                           </span>
                         )}
                         {inspectScore != null && (
                           <span className="text-gray-400 dark:text-gray-500">超过 {Math.round(clipLimit * 100)}% 判为重复</span>
                         )}
+                        {duplicateScope === 'library' && currentScoreLibraryCount != null && (
+                          <span className="text-gray-400 dark:text-gray-500">· 和 {currentScoreLibraryCount} 张历史图比</span>
+                        )}
                         {/* 比对范围：点一下换口径，已算的重复度会按新口径重算 */}
                         <span className="ml-auto flex shrink-0 items-center gap-0.5">
                           <span className="text-gray-400 dark:text-gray-500">比对</span>
-                          {(['card', 'direction'] as const).map((value) => (
+                          {(['card', 'direction', 'library'] as const).map((value) => (
                             <button
                               key={value}
                               type="button"
                               onClick={() => setInspectConfig({ duplicateScope: value })}
-                              title={value === 'card' ? '只和这张卡里的其它图比' : '和同产品-方向下的所有成品比'}
+                              title={value === 'card'
+                                ? '只和这张卡里的其它图比'
+                                : value === 'direction'
+                                  ? '和同产品-方向下的所有成品比'
+                                  : '和本机向量库里的全部历史图比（跨批次、跨方向）'}
                               className={`rounded px-1 py-0.5 text-[10px] transition-colors ${
                                 duplicateScope === value
                                   ? 'bg-blue-500 text-white'
                                   : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/10'
                               }`}
                             >
-                              {value === 'card' ? '卡内' : '同方向'}
+                              {value === 'card' ? '卡内' : value === 'direction' ? '同方向' : '全库'}
                             </button>
                           ))}
                         </span>

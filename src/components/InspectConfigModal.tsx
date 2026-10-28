@@ -1,10 +1,12 @@
-import { useRef } from 'react'
+import { useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_QC_MODEL } from '../lib/visionQc'
 import { useInspectConfig, DEFAULT_INSPECT_CONFIG, LIMIT_MAX, LIMIT_MIN, MAX_QC_RULES, QC_RULE_PRESETS } from '../lib/inspectConfig'
+import { DUPLICATE_SCOPE_LABEL } from '../lib/duplicateScope'
+import { clipVectorCount } from '../lib/clipVectors'
 import { activeQcRules } from '../lib/visionQc'
 import { Checkbox } from './Checkbox'
 import { CloseIcon } from './icons'
@@ -15,6 +17,8 @@ interface InspectConfigModalProps {
 
 export default function InspectConfigModal({ onClose }: InspectConfigModalProps) {
   const config = useInspectConfig((s) => s.config)
+  /** 向量库现有张数：全库比对的规模，给用户一个参考（打开时算一次就够） */
+  const vectorCount = useMemo(() => clipVectorCount(), [])
   const setConfig = useInspectConfig((s) => s.setConfig)
   const resetConfig = useInspectConfig((s) => s.resetConfig)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -262,31 +266,39 @@ export default function InspectConfigModal({ onClose }: InspectConfigModalProps)
             <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">重复度</h4>
             <div>
               <div className="mb-1.5 text-sm text-gray-700 dark:text-gray-200">比对范围</div>
-              <div className="flex gap-2">
-                {(['card', 'direction'] as const).map((value) => (
+              <div className="flex flex-wrap gap-2">
+                {(['card', 'direction', 'library'] as const).map((value) => (
                   <button
                     key={value}
                     type="button"
                     onClick={() => setConfig({ duplicateScope: value })}
-                    className={`flex-1 rounded-xl border px-3 py-2 text-left transition-colors ${
+                    className={`min-w-[9rem] flex-1 rounded-xl border px-3 py-2 text-left transition-colors ${
                       config.duplicateScope === value
                         ? 'border-blue-500 bg-blue-50 dark:border-blue-500/60 dark:bg-blue-500/10'
                         : 'border-gray-200 hover:border-blue-300 dark:border-white/10'
                     }`}
                   >
                     <div className="text-xs font-medium text-gray-800 dark:text-gray-100">
-                      {value === 'card' ? '同一张任务卡' : '同产品-方向'}
+                      {DUPLICATE_SCOPE_LABEL[value]}
                     </div>
                     <div className="mt-0.5 text-[11px] leading-snug text-gray-500 dark:text-gray-400">
                       {value === 'card'
                         ? '只看这张卡内部有没有撞车'
-                        : '这一批投放的成品放一起比'}
+                        : value === 'direction'
+                          ? '这一批投放的成品放一起比'
+                          : `和本机 ${vectorCount} 张历史图比`}
                     </div>
                   </button>
                 ))}
               </div>
               <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 换范围后已算的重复度会按新口径重算，数字会变。
+                {config.duplicateScope === 'library' && (
+                  <span className="mt-1 block text-[11px] text-amber-600 dark:text-amber-400">
+                    全库比对靠本机向量库：新图会自动入库，历史图在第一次比对时补算。
+                    {vectorCount === 0 && ' 目前库里还没有向量，第一次会比较慢。'}
+                  </span>
+                )}
               </div>
             </div>
             <div>

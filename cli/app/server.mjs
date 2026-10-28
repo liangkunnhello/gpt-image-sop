@@ -437,7 +437,7 @@ const server = http.createServer(async (req, res) => {
         const limit = Number(body?.limit) || 0.92;
         const r = spawnSync(
           'python',
-          [path.join(ROOT, 'tools', 'clip_similarity.py'), dir, '--json', '--hi', String(limit)],
+          [path.join(ROOT, 'tools', 'clip_similarity.py'), dir, '--json', '--hi', String(limit), '--vectors'],
           { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 180000 },
         );
         if (r.status !== 0) {
@@ -449,7 +449,13 @@ const server = http.createServer(async (req, res) => {
           const index = Number(String(row.file).replace(/\.[a-z]+$/i, ''));
           if (Number.isFinite(index)) perImage[index] = { mean: row.mean, max: row.max, nearest: row.nearest };
         }
-        return json(res, 200, { ok: true, model: parsed.model, limit: parsed.limit, stats: parsed.stats, perImage });
+        // vectors：临时文件名 → int8 base64 向量。客户端拿它入本地指纹库做全库比对
+        const vectorByIndex = {};
+        for (const [name, vec] of Object.entries(parsed.vectors || {})) {
+          const index = Number(String(name).replace(/\.[a-z]+$/i, ''));
+          if (Number.isFinite(index)) vectorByIndex[index] = vec;
+        }
+        return json(res, 200, { ok: true, model: parsed.model, limit: parsed.limit, stats: parsed.stats, perImage, vectors: vectorByIndex });
       } catch (e) {
         return json(res, 500, { ok: false, error: e.message });
       } finally {

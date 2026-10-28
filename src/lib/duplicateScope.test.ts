@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskRecord } from '../types'
 import { DEFAULT_PARAMS } from '../types'
-import { DUPLICATE_SCOPE_LABEL, duplicateScopeKey, groupTasksByScope, peersForTask, scopeTasksFor, toDuplicateScope } from './duplicateScope'
+import { DUPLICATE_SCOPE_LABEL, duplicateScopeKey, groupTasksByScope, peersForTask, scopeTasksFor, toDuplicateScope, needsPeers } from './duplicateScope'
 
 /**
  * 重复度的比对范围：同一张卡 / 同产品-方向。
@@ -87,5 +87,23 @@ describe('重复度比对范围', () => {
   it('peers 数量受上限约束', () => {
     const many = Array.from({ length: 20 }, (_, i) => task({ id: `m${i}`, sopJobId: 'job-a', outputImages: [`m${i}-1`] }))
     expect(peersForTask([cardA1, ...many], cardA1, 'card', 5)).toHaveLength(5)
+  })
+})
+
+describe('全库比对口径', () => {
+  it('toDuplicateScope 认得 library，认不出的仍退回 direction', () => {
+    expect(toDuplicateScope('library')).toBe('library')
+    expect(toDuplicateScope('card')).toBe('card')
+    expect(toDuplicateScope('whatever')).toBe('direction')
+  })
+
+  it('needsPeers：只有全库比对不需要挑 peers 任务', () => {
+    expect(needsPeers('card')).toBe(true)
+    expect(needsPeers('direction')).toBe(true)
+    expect(needsPeers('library')).toBe(false)
+  })
+
+  it('label 三种口径都有中文说明', () => {
+    expect(DUPLICATE_SCOPE_LABEL.library).toBe('全部历史图')
   })
 })

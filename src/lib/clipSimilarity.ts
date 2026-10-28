@@ -5,6 +5,7 @@ import { ensureImageCached } from './imageCache'
 import { computeImageHash, hashScores } from './imageHash'
 import type { DuplicateScope } from './duplicateScope'
 import { duplicateScopeKey, groupTasksByScope } from './duplicateScope'
+import { flushClipVectors, hasClipVector, matchAgainstLibrary, putClipVector } from './clipVectors'
 import { useInspectConfig } from './inspectConfig'
 import { activeQcRules, qcInBrowser, type QcChecks } from './visionQc'
 import { expectFromPrompt, type ExpectText } from './batchCheck'
@@ -36,8 +37,10 @@ export interface ClipScore {
   nearest?: string
   /** 这份分数是按哪种口径算的（卡内 / 同方向）；换了口径要重算 */
   scope?: DuplicateScope
-  /** 比对组的 key：卡看 sopJobId，方向看 sopDirectionId */
+  /** 比对组的 key：卡看 sopJobId，方向看 sopDirectionId；全库比对是 'library' */
   group?: string
+  /** 全库比对时参与比对的张数（不含自己） */
+  libraryCount?: number
 }
 
 interface ClipState {
@@ -59,6 +62,32 @@ interface ClipState {
   enqueueTask: (task: TaskRecord, peers: TaskRecord[], scope?: DuplicateScope) => void
   qcOfTask: (task: TaskRecord) => QcResult | null
   queued: number
+}
+
+/**
+ * 让本地服务把这几张图算成向量并写进库。
+ *
+ * 复用 /api/clip-similar 接口：它本来就会跑一次 CLIP，带上 --vectors 后顺便返回向量。
+ * 图不够两张时（单张入库）本地服务会拒，直接忽略 —— 下次凑够两张再一起索引。
+ */
+async function indexVectors(entries: Array<{ imageId: string; dataUrl: string }>): Promise<void> {
+  if (!entries.length) return
+  try {
+    const res = await fetch(`${SIDECAR}/api/clip-similar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 0.92, items: entries.map((item) => ({ dataUrl: item.dataUrl })) }),
+      signal: AbortSignal.timeout(180000),
+    })
+    const json = await res.json() as { ok?: boolean; vectors?: Record<string, string> }
+    if (!json?.ok || !json.vectors) return
+    for (const [indexText, base64] of Object.entries(json.vectors)) {
+      const entry = entries[Number(indexText)]
+      if (entry && base64) putClipVector(entry.imageId, base64)
+    }
+  } catch (err) {
+    console.warn('图像向量入库失败（下次会再试）：', err)
+  }
 }
 
 /** 后台任务串行执行，避免同时开一堆模型请求 */
@@ -121,6 +150,63 @@ export const useClipStore = create<ClipState>()((set, get) => ({
     const scope = scopeOverride ?? config.duplicateScope
     const { scores } = get()
 
+    // 全库比对：不挑 peers 任务，直接和本地向量库比。库里还没索引过这批图时
+    // 至少要先把它们索引进去（拿 CLIP 算一次），再算分数。
+    if (scope === 'library') {
+      const needs = tasks
+        .filter((task) => task.status === 'done' && !task.deletedAt)
+        .flatMap((task) => task.outputImages ?? [])
+        .filter((imageId) => imageId && !hasClipVector(imageId))
+      const unevaluated = tasks
+        .filter((task) => task.status === 'done' && !task.deletedAt)
+        .flatMap((task) => task.outputImages ?? [])
+        .filter((imageId) => {
+          if (!imageId) return false
+          const cached = scores[imageId]
+          return !(cached && cached.scope === 'library')
+        })
+      if (!unevaluated.length) return
+
+      set({ running: true, error: '' })
+      void (async () => {
+        try {
+          // 先把没索引的图算进库：一批最多 maxImages 张，积压时分多次进来补齐
+          if (needs.length) {
+            const batch = needs.slice(0, config.maxImages)
+            const payload: Array<{ index: number; dataUrl: string }> = []
+            for (let i = 0; i < batch.length; i += 1) {
+              const dataUrl = await ensureImageCached(batch[i])
+              if (!dataUrl) continue
+              const thumb = await toThumb(dataUrl)
+              if (thumb) payload.push({ index: i, dataUrl: thumb })
+            }
+            if (payload.length) {
+              await indexVectors(payload.map((item) => ({ imageId: batch[item.index], dataUrl: item.dataUrl })))
+            }
+            flushClipVectors()
+          }
+          // 再逐张和全库比
+          const next: Record<string, ClipScore> = { ...get().scores }
+          for (const imageId of unevaluated.slice(0, config.maxImages)) {
+            const match = matchAgainstLibrary(imageId)
+            if (!match) continue
+            next[imageId] = {
+              mean: match.mean,
+              max: match.max,
+              nearest: match.nearest,
+              scope: 'library',
+              group: 'library',
+              libraryCount: match.count,
+            }
+          }
+          set({ scores: next, running: false, engine: 'clip', error: '' })
+        } catch (err) {
+          set({ running: false, error: err instanceof Error ? err.message : '全库比对失败' })
+        }
+      })()
+      return
+    }
+
     let picked: { group: string; ids: string[] } | null = null
     for (const group of groupTasksByScope(tasks, scope)) {
       const ids: string[] = []
@@ -172,6 +258,7 @@ export const useClipStore = create<ClipState>()((set, get) => ({
           error?: string
           limit?: number
           perImage?: Record<string, { mean: number; max: number; nearest?: string }>
+          vectors?: Record<string, string>
         }
         if (!json?.ok || !json.perImage) throw new Error(json?.error || 'CLIP 没有返回结果')
 
@@ -184,6 +271,14 @@ export const useClipStore = create<ClipState>()((set, get) => ({
           const nearestIndex = score.nearest ? Number(String(score.nearest).replace(/\.[a-z]+$/i, '')) : NaN
           const nearest = payload[nearestIndex] ? candidates[payload[nearestIndex].index].imageId : undefined
           next[imageId] = { mean: score.mean, max: score.max, nearest, scope, group: groupKey }
+        }
+        // 顺手把向量收进本地库：下次切「全部历史图」就不用重算了
+        if (json.vectors) {
+          for (const [indexText, base64] of Object.entries(json.vectors)) {
+            const entry = payload[Number(indexText)]
+            const imageId = entry ? candidates[entry.index].imageId : ''
+            if (imageId && base64) putClipVector(imageId, base64)
+          }
         }
         set({ scores: next, running: false, limit: json.limit ?? get().limit, engine: 'clip' })
       } catch (err) {

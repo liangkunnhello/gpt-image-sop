@@ -10,6 +10,7 @@
 输出：每对相似度、每张图的平均相似度、越界对清单。
 """
 import argparse
+import base64
 import glob as globmod
 import json
 import os
@@ -88,11 +89,19 @@ def main():
     ap.add_argument("--hi", type=float, default=0.92)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--top", type=int, default=8, help="报告里展示最像的若干对")
+    ap.add_argument(
+        "--vectors",
+        action="store_true",
+        help="同时输出每张图的图像向量（int8 量化 + base64），供客户端攒成本地指纹库做全库比对",
+    )
     args = ap.parse_args()
 
     files = collect(args.paths, args.glob)
-    if len(files) < 2:
+    # 只取向量时单张也要能跑：客户端拿它入库，不需要两两比对
+    if len(files) < 2 and not args.vectors:
         raise SystemExit(f"需要至少两张图，实际找到 {len(files)} 张")
+    if not files:
+        raise SystemExit("没有找到图片")
 
     sess = load_session()
     vecs, out_name = embed(sess, files)
@@ -140,6 +149,14 @@ def main():
         regen.append({"regen": drop, "keep": keep, "sim": round(s, 4)})
         touched.add(drop)
 
+    vectors = {}
+    if args.vectors:
+        # 归一化后的分量落在 [-1, 1]，×127 量化成 int8：512 维只要 512 字节，
+        # 客户端算相似度时点积再除以 127² 即可，误差远小于判定线
+        for i, f in enumerate(files):
+            q = np.clip(np.round(vecs[i] * 127.0), -127, 127).astype(np.int8)
+            vectors[os.path.basename(f)] = base64.b64encode(q.tobytes()).decode("ascii")
+
     result = {
         "model": "clip-vit-b32-quantized",
         "limit": args.hi,
@@ -161,6 +178,7 @@ def main():
             {"a": a, "b": b, "sim": round(s, 4)} for a, b, s in sorted(pairs, key=lambda x: x[2])[:3]
         ],
         "per_image": per,
+        **({"vectors": vectors} if vectors else {}),
     }
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
