@@ -7,6 +7,29 @@ import { isTaskUnread } from './unread'
  * 输出图按提示词序号合并，状态取最"差"的那个。
  */
 /**
+ * 「输入内容」该显示什么。
+ *
+ * 规则只有一条：显示**发送瞬间输入框里的原文**。
+ * - 有快照：直接用 snapshot.prompt（普通模式就是用户写的提示词；SOP / 变量模式多半是空的）
+ * - 没有快照的老任务：靠 variableMode / sopText 认 SOP / 变量卡，也给空；
+ *   普通卡退回各条提示词拼接（内容相同会去重）
+ *
+ * 为什么不显示 task.prompt：SOP / 变量模式下它是模型写出来的最终提示词（几十条、每条几千字），
+ * 堆进「输入内容」既不是用户填的东西，也把面板撑成一片文字墙。那些内容在
+ * 「每条提示词与它产出的图」入口里逐条看。
+ */
+export function resolveCardInputText(group: TaskRecord[]): { text: string; fromInputBox: boolean } {
+  const withSnapshot = group.find((item) => item.inputSnapshot)
+  if (withSnapshot?.inputSnapshot) {
+    return { text: (withSnapshot.inputSnapshot.prompt ?? '').trim(), fromInputBox: true }
+  }
+  if (group.some((item) => item.variableMode || item.sopText)) {
+    return { text: '', fromInputBox: true }
+  }
+  return { text: mergePromptText(group.map((item) => item.prompt)).text, fromInputBox: false }
+}
+
+/**
  * 把同一张卡里多条任务的提示词合并成「输入内容」显示。
  *
  * 批量生图常见「同一条提示词跑 N 张」，直接拼会得到同一段话重复 N 遍；

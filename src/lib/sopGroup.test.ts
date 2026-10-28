@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskRecord } from '../types'
 import { DEFAULT_PARAMS } from '../types'
-import { groupSopTasks, mergePromptText } from './sopGroup'
+import { groupSopTasks, mergePromptText, resolveCardInputText } from './sopGroup'
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -104,5 +104,52 @@ describe('mergePromptText 同一条提示词不重复', () => {
     expect(card.prompt).toBe(same)
     // 8 张图仍在，只有提示词去重
     expect(card.outputImages).toHaveLength(8)
+  })
+})
+
+describe('resolveCardInputText「输入内容」显示什么', () => {
+  it('普通模式：用快照里的输入框原文，不是拼了卖点/风格的那条', () => {
+    const t = task({
+      id: 'a',
+      prompt: '卖点：600万\n用户写的原文',
+      inputSnapshot: { mode: 'plain', prompt: '用户写的原文' },
+    })
+    expect(resolveCardInputText([t])).toEqual({ text: '用户写的原文', fromInputBox: true })
+  })
+
+  it('SOP / 变量模式：快照里没有原文就给空，不拿生成的几十条提示词顶替', () => {
+    const group = [
+      task({ id: 'a', sopPromptIndex: 1, prompt: '模型写的第一条（几千字）', sopText: '## SOP', inputSnapshot: { mode: 'sop' } }),
+      task({ id: 'b', sopPromptIndex: 2, prompt: '模型写的第二条（几千字）', sopText: '## SOP', inputSnapshot: { mode: 'sop' } }),
+    ]
+    expect(resolveCardInputText(group)).toEqual({ text: '', fromInputBox: true })
+  })
+
+  it('SOP / 变量模式：当时输入框写了补充要求就还原它', () => {
+    const t = task({
+      id: 'a',
+      prompt: '模型生成的提示词',
+      sopText: '## SOP',
+      inputSnapshot: { mode: 'sop', prompt: '  别出现正面人脸  ' },
+    })
+    expect(resolveCardInputText([t])).toEqual({ text: '别出现正面人脸', fromInputBox: true })
+  })
+
+  it('老任务没有快照：SOP 卡给空，普通卡退回提示词拼接（去重）', () => {
+    expect(resolveCardInputText([
+      task({ id: 'a', prompt: '生成的提示词', sopText: '## SOP' }),
+    ])).toEqual({ text: '', fromInputBox: true })
+
+    expect(resolveCardInputText([
+      task({ id: 'a', prompt: '一只猫' }),
+      task({ id: 'b', prompt: '一只猫' }),
+      task({ id: 'c', prompt: '一只狗' }),
+    ])).toEqual({ text: '一只猫\n\n一只狗', fromInputBox: false })
+  })
+
+  it('变量的老任务同样给空', () => {
+    expect(resolveCardInputText([
+      task({ id: 'a', prompt: '填词结果', variableMode: true }),
+    ])).toEqual({ text: '', fromInputBox: true })
   })
 })

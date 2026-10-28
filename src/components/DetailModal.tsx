@@ -26,7 +26,7 @@ import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
 import { inspectImages, useClipStore } from '../lib/clipSimilarity'
 import { expectFromPrompt } from '../lib/batchCheck'
 import { filterGalleryIndexes, galleryFilterCounts, type GalleryFilter } from '../lib/galleryFilter'
-import { mergePromptText } from '../lib/sopGroup'
+import { resolveCardInputText } from '../lib/sopGroup'
 import { mergeCardTasks } from '../lib/cardTasks'
 import { usePostReapplyProgress } from '../lib/postProgress'
 import ReapplyProgressBar from './ReapplyProgressBar'
@@ -119,11 +119,14 @@ export default function DetailModal() {
       .filter((item) => item.sopJobId === rawTask.sopJobId && !item.sopPlaceholder)
       .sort((a, b) => (a.sopPromptIndex ?? 0) - (b.sopPromptIndex ?? 0))
   }, [rawTask, tasks])
-  /** 内容不同的提示词有几条：同一条跑 N 张时是 1，不用标「N 条提示词」 */
-  const promptVariantCount = useMemo(
-    () => mergePromptText(groupTasks.map((item) => item.prompt)).count,
-    [groupTasks],
-  )
+  /**
+   * 「输入内容」显示输入框原文，不是模型生成的提示词。
+   * SOP / 变量模式那条生成出来的长提示词（几十条）收进「每条提示词与它产出的图」入口。
+   */
+  const cardInputText = useMemo(() => {
+    const group = groupTasks.length ? groupTasks : (rawTask ? [rawTask] : [])
+    return resolveCardInputText(group)
+  }, [groupTasks, rawTask])
   /**
    * 人工改判的质检结论。改判存在「真正持有这张图」的那条任务上，
    * 而详情页是把同一张卡的多条任务拼起来展示的，所以先摊平成一张 图id → 结论 的表。
@@ -725,9 +728,9 @@ export default function DetailModal() {
   }
 
   const handleCopyPrompt = async () => {
-    if (!task.prompt) return
+    if (!cardInputText.text) return
     try {
-      await copyTextToClipboard(getTaskPromptText(task.prompt, task.inputImageIds.length))
+      await copyTextToClipboard(getTaskPromptText(cardInputText.text, task.inputImageIds.length))
       showToast('提示词已复制', 'success')
     } catch (err) {
       showToast(getClipboardFailureMessage('复制提示词失败', err), 'error')
@@ -1477,13 +1480,18 @@ export default function DetailModal() {
               <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider">
                 输入内容
               </h3>
-              {/* 只有内容真的不同的提示词才标条数；同一条跑 N 张去重后只剩一条，标了反而让人以为有差异 */}
-              {promptVariantCount > 1 && (
-                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-400">
-                  {promptVariantCount} 条提示词
-                </span>
+              {/* 生成出来的提示词与对应图收进一个入口：详情页只显示「输入内容」，不再铺一片文字墙 */}
+              {groupTasks.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setPairOpen(true)}
+                  title="查看每条提示词与它产出的图"
+                  className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600 transition-colors hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.12]"
+                >
+                  {groupTasks.length} 条提示词 · 看图
+                </button>
               )}
-              {task.prompt && !showPendingPrompt && (
+              {cardInputText.text && !showPendingPrompt && (
                 <button
                   onClick={handleCopyPrompt}
                   className="p-1 rounded text-gray-400 hover:bg-gray-100 dark:text-gray-500 dark:hover:bg-white/[0.06] transition"
@@ -1512,9 +1520,18 @@ export default function DetailModal() {
                 <p className="text-sm text-gray-700 dark:text-gray-300">正在生成……</p>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
               </div>
-            ) : (
+            ) : cardInputText.text ? (
               <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap mb-4">
-                {getTaskPromptText(task.prompt, task.inputImageIds.length) || '(无提示词)'}
+                {getTaskPromptText(cardInputText.text, task.inputImageIds.length)}
+              </p>
+            ) : (
+              <p className="mb-4 text-sm leading-relaxed text-gray-400 dark:text-gray-500">
+                输入框没有填写内容
+                {groupTasks.length > 1 && (
+                  <span className="ml-1 text-xs">
+                    （这 {groupTasks.length} 条提示词由 SOP / 变量提示词生成，点上方「{groupTasks.length} 条提示词 · 看图」逐条看）
+                  </span>
+                )}
               </p>
             )}
             {/* 渠道独立展示：不依赖有没有 SOP 正文，普通任务也要能看到 */}
