@@ -3151,7 +3151,31 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
  * 一张卡（同 sopJobId）里的多个任务一起处理：详情页本来就是按卡展示的，
  * 只重做第一条提示词那几张，用户会以为「点了没反应」。
  */
-export async function reapplyPostTemplate(taskId: string): Promise<void> {
+/** 再次后处理每处理这么多张任务提交一次，兼顾「崩溃不白干」与「别把主线程占满」 */
+const REAPPLY_COMMIT_BATCH = 20
+
+/**
+ * 一张卡里哪些图会被「再次后处理」重做。
+ *
+ * 跳过两类：已进图片回收站的（重做不该把它复活）、没有对应 AI 原图的（老任务没存 sourceImages）。
+ * 抽成纯函数是为了让进度条的总数可测 —— 总数一旦算多了或算少了，进度条就会停在中途或提前满。
+ */
+export function reapplyTargetIndexes(task: TaskRecord): number[] {
+  const trashed = new Set(task.trashedOutputImages ?? [])
+  const indexes: number[] = []
+  task.outputImages.forEach((imageId, index) => {
+    if (!imageId || trashed.has(imageId)) return
+    if (index >= (task.sourceImages?.length ?? 0)) return
+    indexes.push(index)
+  })
+  return indexes
+}
+
+export async function reapplyPostTemplate(
+  taskId: string,
+  /** 进度回调：一张张串行套模板，几十张要跑几十秒，界面得能看到走到哪了 */
+  onProgress?: (progress: { done: number; total: number }) => void,
+): Promise<void> {
   const task = useStore.getState().tasks.find((item) => item.id === taskId)
   if (!task) throw new Error('找不到任务卡')
   if (task.transparentOutput) {
@@ -3172,30 +3196,69 @@ export async function reapplyPostTemplate(taskId: string): Promise<void> {
   }
 
   const sopState = useSopStore.getState()
-  const oldIds: string[] = []
-  let applied = 0
-  let total = 0
 
+  // 先把「这一卡到底要重做哪几张」算清楚：进度条一开始就得知道总数，
+  // 否则第一张做完之前只能显示「后处理中…」，等于没进度。
+  const plan: Array<{ item: TaskRecord; templates: PostTemplate[]; indexes: number[] }> = []
+  let planned = 0
   for (const item of ready) {
     const templates = item.params.post_process === false
       ? []
       : resolvePostTemplates(sopState.postTemplates, sopState.directions, item.sopDirectionId).templates
     if (!templates.some((entry) => entry.enabled)) continue
+    const indexes = reapplyTargetIndexes(item)
+    if (!indexes.length) continue
+    plan.push({ item, templates, indexes })
+    planned += indexes.length
+  }
 
-    const sourceUrls: string[] = []
-    for (const id of item.sourceImages ?? []) {
-      const image = await getImage(id)
-      if (!image?.dataUrl) throw new Error('AI 原图已被清理，无法再次后处理')
-      sourceUrls.push(image.dataUrl)
+  const oldIds: string[] = []
+  let applied = 0
+  let written = 0
+  let done = 0
+
+  let lastProgressAt = 0
+  const emitProgress = (force = false) => {
+    if (!onProgress) return
+    const now = Date.now()
+    // 进度条虽然只刷新自己，但一张一报也没意义；首帧和收尾必须报，中间按 300ms 节流
+    if (!force && now - lastProgressAt < 300) return
+    lastProgressAt = now
+    onProgress({ done, total: planned })
+  }
+  // 一进来就报 0/总数：点了按钮立刻能看到进度，而不是干等
+  emitProgress(true)
+
+  // 攒着一起提交：几百张的卡逐张 setState，等于把「整个任务列表序列化 + 重新渲染」
+  // 做几百次，主线程会被占满（实测几百张时直接「页面未响应」）
+  const pendingUpdates: Array<{ id: string; nextIds: string[] }> = []
+  const flushUpdates = () => {
+    if (!pendingUpdates.length) return
+    const patches = new Map(pendingUpdates.map((entry) => [entry.id, entry.nextIds]))
+    useStore.setState((state) => ({
+      tasks: state.tasks.map((entry) => (
+        patches.has(entry.id)
+          ? { ...entry, outputImages: patches.get(entry.id)!, trashedOutputImages: undefined }
+          : entry
+      )),
+    }))
+    for (const entry of pendingUpdates) {
+      const next = useStore.getState().tasks.find((item) => item.id === entry.id)
+      if (next) void putTask(next)
     }
+    pendingUpdates.length = 0
+  }
 
+  for (const { item, templates, indexes } of plan) {
     const folder = finishedFolderFor(item)
-    const trashedBefore = new Set(item.trashedOutputImages ?? [])
     const nextIds: string[] = []
-    for (let index = 0; index < sourceUrls.length; index += 1) {
-      // 已进图片回收站的图不重做，也不该被这次重做「复活」
-      if (trashedBefore.has(item.outputImages[index])) continue
-      let dataUrl = sourceUrls[index]
+    for (const index of indexes) {
+      // 逐张取原图：一次只把一张读进内存，几百张的卡不会一次性堆满
+      const sourceId = item.sourceImages?.[index]
+      if (!sourceId) continue
+      const source = await getImage(sourceId)
+      if (!source?.dataUrl) throw new Error('AI 原图已被清理，无法再次后处理')
+      let dataUrl = source.dataUrl
       const size = imageSizeFromDataUrl(dataUrl)
       const template = size ? pickTemplateForImage(templates, size.width, size.height, item.channel) : null
       let appliedTemplate: PostTemplate | null = null
@@ -3220,8 +3283,9 @@ export async function reapplyPostTemplate(taskId: string): Promise<void> {
       const stored = await storeImageWithSize(dataUrl, 'generated')
       cacheImage(stored.id, dataUrl)
       nextIds.push(stored.id)
-      // 序号沿用提示词序号，同卡的多条任务不会互相覆盖同一批文件
-      void writeFinishedImage(
+      // 序号沿用提示词序号，同卡的多条任务不会互相覆盖同一批文件。
+      // 串行写：几百个并发 IPC 会把前端桥和 Rust 侧一起压住，这里是兜底不是快路径
+      await writeFinishedImage(
         folder,
         finishedFileName(
           (item.sopPromptIndex ? item.sopPromptIndex - 1 : 0) + index,
@@ -3230,18 +3294,27 @@ export async function reapplyPostTemplate(taskId: string): Promise<void> {
         ),
         dataUrl,
       )
+      done += 1
+      emitProgress()
     }
 
     if (!nextIds.length) continue
     oldIds.push(...item.outputImages, ...(item.transparentOriginalImages ?? []))
     // 回收的旧图这次被跳过、随 oldIds 一起清掉，标记也没有意义了
-    updateTaskInStore(item.id, { outputImages: nextIds, trashedOutputImages: undefined })
-    total += nextIds.length
+    pendingUpdates.push({ id: item.id, nextIds })
+    written += nextIds.length
+    if (pendingUpdates.length >= REAPPLY_COMMIT_BATCH) {
+      flushUpdates()
+      // 让出主线程：不然几百张连着算 canvas，窗口会被系统判成「页面未响应」
+      await new Promise((resolve) => { setTimeout(resolve, 0) })
+    }
   }
+  flushUpdates()
+  emitProgress(true)
 
   await deleteUnreferencedImageIds(oldIds)
   useStore.getState().showToast(
-    applied ? `已用原图重新后处理 ${total} 张` : '没有匹配的模板，画面与之前一致',
+    applied ? `已用原图重新后处理 ${written} 张` : '没有匹配的模板，画面与之前一致',
     applied ? 'success' : 'info',
   )
 }

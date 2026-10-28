@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { addImagesFromFiles, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashOutputImage, trashOutputImages, useStore } from './store'
+import { addImagesFromFiles, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -6575,5 +6575,44 @@ describe('质检不合格的图要能从交付文件夹追溯删掉', () => {
       'img-1': { verdict: 'fail' },
       'img-2': { verdict: 'unsure' },
     }))).toEqual([])
+  })
+})
+
+describe('再次后处理的重做范围（进度条总数）', () => {
+  it('每张都有 AI 原图时全部重做', () => {
+    const t = task({
+      outputImages: ['out-1', 'out-2', 'out-3'],
+      sourceImages: ['src-1', 'src-2', 'src-3'],
+    })
+    expect(reapplyTargetIndexes(t)).toEqual([0, 1, 2])
+  })
+
+  it('回收站里的图跳过，不算进进度总数', () => {
+    const t = task({
+      outputImages: ['out-1', 'out-2', 'out-3'],
+      sourceImages: ['src-1', 'src-2', 'src-3'],
+      trashedOutputImages: ['out-2'],
+    })
+    expect(reapplyTargetIndexes(t)).toEqual([0, 2])
+  })
+
+  it('没有对应 AI 原图的下标跳过（老任务只存了一部分原图）', () => {
+    const t = task({
+      outputImages: ['out-1', 'out-2', 'out-3'],
+      sourceImages: ['src-1', 'src-2'],
+    })
+    expect(reapplyTargetIndexes(t)).toEqual([0, 1])
+  })
+
+  it('老任务完全没有 sourceImages 时什么都不重做', () => {
+    expect(reapplyTargetIndexes(task({ outputImages: ['out-1'] }))).toEqual([])
+  })
+
+  it('空的图片位不算一张', () => {
+    const t = task({
+      outputImages: ['out-1', '', 'out-3'],
+      sourceImages: ['src-1', 'src-2', 'src-3'],
+    })
+    expect(reapplyTargetIndexes(t)).toEqual([0, 2])
   })
 })

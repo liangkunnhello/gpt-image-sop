@@ -27,6 +27,8 @@ import { inspectImages, useClipStore } from '../lib/clipSimilarity'
 import { expectFromPrompt } from '../lib/batchCheck'
 import { filterGalleryIndexes, galleryFilterCounts, type GalleryFilter } from '../lib/galleryFilter'
 import { mergePromptText } from '../lib/sopGroup'
+import { usePostReapplyProgress } from '../lib/postProgress'
+import ReapplyProgressBar from './ReapplyProgressBar'
 import { DUPLICATE_SCOPE_LABEL, duplicateScopeKey, peersForTask, scopeTasksFor } from '../lib/duplicateScope'
 import { useInspectConfig } from '../lib/inspectConfig'
 import GalleryFilterBar from './GalleryFilterBar'
@@ -496,12 +498,21 @@ export default function DetailModal() {
   )
   const handleReapplyPost = async () => {
     if (!task) return
+    const taskId = task.id
     setReapplying(true)
+    // 进度放在独立 store：详情页可能有几百张缩略图，跟着刷新几百次会卡
+    usePostReapplyProgress.getState().begin(taskId)
+    // 先让出一帧再干重活：套模板是同步的 CPU 密集操作，不让出这一帧的话
+    // 点下去会先卡住一段，看起来就是「点了没反应」
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
     try {
-      await reapplyPostTemplate(task.id)
+      await reapplyPostTemplate(taskId, (progress) => {
+        usePostReapplyProgress.getState().update(taskId, progress)
+      })
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err), 'error')
     } finally {
+      usePostReapplyProgress.getState().finish(taskId)
       setReapplying(false)
     }
   }
@@ -2067,6 +2078,8 @@ export default function DetailModal() {
                 {delivering ? '交付中…' : '立即交付'}
               </button>
             )}
+            {/* 进度条自己订阅进度 store，详情页不会因为进度变化而重渲染 */}
+            <ReapplyProgressBar />
           </div>
         </div>
       </div>
