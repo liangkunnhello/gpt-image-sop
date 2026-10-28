@@ -135,12 +135,11 @@ export default function DetailModal() {
     const leader = group[0]
     const anyRunning = group.some((item) => item.status === 'running')
     const allError = group.every((item) => item.status === 'error')
+    // 输入内容显示真正提交的提示词（多条按空行拼起来），不要拿「N 张图」这种概况顶替
+    const prompts = group.map((item) => (item.prompt ?? '').trim()).filter(Boolean)
     return {
       ...leader,
-      // 普通模式的批量 / 融图没有 SOP 正文，标题按「张图」算
-      prompt: leader.sopText
-        ? `${leader.sopName || 'SOP'} · ${group.length} 条提示词`
-        : `${leader.sopName || '批量'} · ${group.length} 张图`,
+      prompt: prompts.length ? prompts.join('\n\n') : leader.prompt,
       outputImages: group.flatMap((item) => item.outputImages),
       // 原图也按同顺序摊平：否则「下载原图」永远只指向第一条提示词那张，
       // 后面的图会拿错源。老任务没有这个字段时补空串占位，保持下标对齐。
@@ -512,7 +511,15 @@ export default function DetailModal() {
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
   const taskProvider = task.apiProvider
   const isOpenAiTask = (taskProvider ?? 'openai') === 'openai'
-  const showPromptWarning = Boolean(isOpenAiTask && task.apiMode === 'responses' && currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
+  // 整卡（多条提示词拼起来的）没法拿一段文字跟单张图的 revised_prompt 比，别误报「已被改写」
+  const showPromptWarning = Boolean(
+    groupTasks.length <= 1
+    && isOpenAiTask
+    && task.apiMode === 'responses'
+    && currentOutputImageId
+    && (!currentRevisedPrompt || showRevisedPrompt)
+    && !hasHandledPromptWarning,
+  )
   const taskProviderName = taskProvider ? getApiProviderLabel(settings, taskProvider) : '未知'
   const taskProfileName = task.apiProfileName || '未知'
   const taskModel = task.apiModel || '未知'
@@ -566,7 +573,8 @@ export default function DetailModal() {
         if (entries.length >= 12) break
       }
       await inspectImages(entries, {
-        expect: expectFromPrompt(task.prompt),
+        // 整卡检查时图来自多条提示词，没法用一份「应出现文案」对照，交给模型只判违规与压叠
+        expect: expectFromPrompt(groupTasks.length > 1 ? '' : task.prompt),
         manual: true,
         scope: duplicateScope,
         group: duplicateScopeKey(task, duplicateScope),
@@ -1461,6 +1469,12 @@ export default function DetailModal() {
               <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider">
                 输入内容
               </h3>
+              {/* 多条提示词按空行拼在一起显示，这里标一下共几条，别让人以为是同一段文字 */}
+              {groupTasks.length > 1 && (
+                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-400">
+                  {groupTasks.length} 条提示词
+                </span>
+              )}
               {task.prompt && !showPendingPrompt && (
                 <button
                   onClick={handleCopyPrompt}

@@ -626,8 +626,9 @@ describe('plain mode batch grouping', () => {
     // 10 个请求共享同一个分组 id，画廊据此聚合成一张卡
     expect(new Set(tasks.map((item) => item.sopJobId)).size).toBe(1)
     expect(groupSopTasks(tasks)).toHaveLength(1)
-    // 没有 SOP 正文时标题按张图算
-    expect(groupSopTasks(tasks)[0].prompt).toBe('批量 · 10 张图')
+    // 输入内容是真正提交的提示词，不是「批量 · N 张图」这种概况
+    expect(groupSopTasks(tasks)[0].prompt).toContain('一只猫')
+    expect(groupSopTasks(tasks)[0].prompt).not.toContain('张图')
     expect(groupSopTasks(tasks)[0].sopText).toBeUndefined()
   })
 
@@ -643,7 +644,8 @@ describe('plain mode batch grouping', () => {
 
     const tasks = useStore.getState().tasks
     expect(groupSopTasks(tasks)).toHaveLength(1)
-    expect(groupSopTasks(tasks)[0].prompt).toBe('融图 · 2 张图')
+    expect(groupSopTasks(tasks)[0].prompt).toContain('一只猫')
+    expect(groupSopTasks(tasks)[0].prompt).not.toContain('张图')
   })
 
   it('尺寸 auto 且参考图比例一致时不改写尺寸', async () => {
@@ -671,7 +673,9 @@ describe('plain mode batch grouping', () => {
     const tasks = useStore.getState().tasks
     // 拆出来每个请求只出 1 张，数量只是「跑几次」
     expect(tasks.every((item) => item.params.n === 1)).toBe(true)
-    expect(groupSopTasks(tasks)[0].prompt).toBe('批量 · 25 张图')
+    // 卡片仍然聚合成一张，但显示的是提示词本身
+    expect(groupSopTasks(tasks)[0].prompt).toContain('一只猫')
+    expect(groupSopTasks(tasks)[0].prompt).not.toContain('张图')
   })
 
   it('纯文生图没有拆分，数量仍按渠道单请求上限收', async () => {

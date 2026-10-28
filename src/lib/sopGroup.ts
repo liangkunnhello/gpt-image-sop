@@ -51,13 +51,12 @@ export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
       (latest, task) => Math.max(latest, task.finishedAt ?? task.createdAt),
       0,
     )
-    // 普通模式拆出来的请求没有 SOP 正文，标题按「张图」算，别写成「条提示词」
-    const plainBatch = !rep.sopText
+    // 输入内容要显示真正提交的提示词，不能拿「批量 · N 张图」这种概况顶替：
+    // 详情页/卡片上的「输入内容」就是这一栏，概况会让人以为提示词丢了。
+    const prompts = sorted.map((task) => (task.prompt ?? '').trim()).filter(Boolean)
     out.push({
       ...rep,
-      prompt: plainBatch
-        ? `${rep.sopName || '批量'} · ${sorted.length} 张图`
-        : `${rep.sopName || 'SOP'} · ${sorted.length} 条提示词`,
+      prompt: prompts.length ? prompts.join('\n\n') : rep.prompt,
       outputImages: sorted.flatMap((task) => task.outputImages),
       outputErrors: sorted.flatMap((task) => task.outputErrors ?? []),
       trashedOutputImages: trashed.length ? trashed : undefined,

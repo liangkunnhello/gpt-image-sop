@@ -43,3 +43,27 @@ describe('卡片聚合', () => {
     expect(card.qcVerdicts).toBeUndefined()
   })
 })
+
+describe('卡片的「输入内容」', () => {
+  it('普通模式批量：显示各条提示词，不是「批量 · N 张图」这种概况', () => {
+    const a = task({ id: 'a', sopJobId: 'job', sopPromptIndex: 1, prompt: '第一条提示词', outputImages: ['img-a'] })
+    const b = task({ id: 'b', sopJobId: 'job', sopPromptIndex: 2, prompt: '第二条提示词', outputImages: ['img-b'] })
+    const [card] = groupSopTasks([a, b])
+    expect(card.prompt).toBe('第一条提示词\n\n第二条提示词')
+    expect(card.prompt).not.toContain('张图')
+  })
+
+  it('SOP 卡同样显示真实提示词（SOP 正文另有展示）', () => {
+    const a = task({ id: 'a', sopJobId: 'job', sopPromptIndex: 1, prompt: '提示词一', sopText: 'SOP 正文', outputImages: ['img-a'] })
+    const b = task({ id: 'b', sopJobId: 'job', sopPromptIndex: 2, prompt: '提示词二', sopText: 'SOP 正文', outputImages: ['img-b'] })
+    const [card] = groupSopTasks([a, b])
+    expect(card.prompt).toBe('提示词一\n\n提示词二')
+  })
+
+  it('都没提示词时退回代表任务的那条，不会拼成空串', () => {
+    const a = task({ id: 'a', sopJobId: 'job', sopPromptIndex: 1, prompt: '', outputImages: ['img-a'] })
+    const b = task({ id: 'b', sopJobId: 'job', sopPromptIndex: 2, prompt: '  ', outputImages: ['img-b'] })
+    const [card] = groupSopTasks([a, b])
+    expect(card.prompt).toBe('')
+  })
+})
