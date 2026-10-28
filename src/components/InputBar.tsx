@@ -40,6 +40,7 @@ import { buildPromptBundle } from '../lib/promptBundle'
 import { taskMatchesChannel } from '../lib/channel'
 import { enqueueSopJobs, splitReferenceGroups } from '../lib/sopPipeline'
 import { extraContents, hasExtra, resolveExtraIds } from '../lib/extraRequirements'
+import { hasImageTag, imageFilesFromHtmlAsync, imageFilesFromText } from '../lib/clipboardImages'
 import SopExtraPicker from './SopExtraPicker'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
@@ -1207,10 +1208,35 @@ export default function InputBar() {
   }
 
   const handlePromptPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
-    const text = e.clipboardData.getData('text/plain')
-    if (!text) return
-    if (Array.from(e.clipboardData.items).some((item) => item.type.startsWith('image/'))) return
+    const data = e.clipboardData
+    // 剪贴板里直接是图（截图、文件）：交给文档级监听去上传，这里什么都不做。
+    // 但必须挡住默认行为 —— 输入框是 contentEditable，不挡就会把图插进文字里。
+    if (Array.from(data.items).some((item) => item.type.startsWith('image/'))) {
+      e.preventDefault()
+      return
+    }
+    // 从网页复制的图：剪贴板里只有 text/html（带 <img>，src 往往是远程地址），没有 image/* 项。
+    // 以前这里只认 text/plain，于是浏览器把图当富文本插进了输入框。
+    // 只要 html 里有 <img> 就必须拦下默认插入 —— 图片抓不回来也不能让它变成富文本图片。
+    const html = data.getData('text/html')
+    if (hasImageTag(html)) {
+      e.preventDefault()
+      void imageFilesFromHtmlAsync(html).then((files) => {
+        if (files.length) void handleFilesRef.current(files)
+        else useStore.getState().showToast('这张图取不回来（可能是外链需要登录或已失效），请先另存再拖进来', 'info')
+      })
+      return
+    }
 
+    const text = data.getData('text/plain')
+    if (!text) return
+    // 纯文本本身就是一张图的 dataURL：转成图片，别把这串 base64 插进提示词
+    const textImages = imageFilesFromText(text)
+    if (textImages.length) {
+      e.preventDefault()
+      void handleFilesRef.current(textImages)
+      return
+    }
     e.preventDefault()
     insertPromptTextAtSelection(text.replace(/\r\n?/g, '\n'))
   }
@@ -1243,10 +1269,19 @@ export default function InputBar() {
           if (file) imageFiles.push(file)
         }
       }
-      if (imageFiles.length > 0) {
-        e.preventDefault()
-        handleFilesRef.current(imageFiles)
+      if (imageFiles.length === 0) {
+        // 剪贴板里没有 image/* 项，但 html 里带 <img>（网页复制的图）：同样拦下并尝试上传
+        const html = e.clipboardData?.getData('text/html') || ''
+        if (hasImageTag(html)) {
+          e.preventDefault()
+          void imageFilesFromHtmlAsync(html).then((files) => {
+            if (files.length) void handleFilesRef.current(files)
+          })
+        }
+        return
       }
+      e.preventDefault()
+      void handleFilesRef.current(imageFiles)
     }
     document.addEventListener('paste', handlePaste)
     return () => document.removeEventListener('paste', handlePaste)
