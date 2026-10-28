@@ -110,6 +110,15 @@ export function buildQcPrompt(expect: ExpectText, strict: boolean, checks: QcChe
     lines.push('这些额外检查项任意一条不通过，verdict 就是 fail，并在 reason 里点名是哪条没通过。')
   }
   lines.push('', 'found 填图上实际读到的文字；missing 填应有但没找到的；wrong 填「应为X实为Y」；extra 填规范外多出来的；overlap_spots 填压字位置描述。')
+  // reason 是用户唯一会看的「为什么不合格」。不约束就会套模板，几十张图理由一模一样
+  lines.push(
+    'reason 必须写这张图自己的具体问题，禁止套模板：',
+    '- 不要写「画面文字与应出现文案不一致」这类结论式空话；',
+    '- 要写清「哪一句 / 哪个字 / 哪个位置」，例如「主标题第 3 字『续』印成『读』」、',
+    '「漏了卖点『带病投保也能赔』」「左上角 Logo 压住副标题前两字」；',
+    '- 有多处问题时逐条写，用分号隔开；',
+    '- 不合格但确实找不到具体问题时，写清你查过什么、哪一处拿不准。',
+  )
   lines.push('verdict 取 pass / fail / unsure；拿不准一律 unsure，不要硬判 pass。')
   if (strict) lines.push('', '上一次输出不是合法 JSON。这次只输出一行 JSON，不要换行，不要代码块。')
   lines.push('', '输出结构：', SCHEMA)

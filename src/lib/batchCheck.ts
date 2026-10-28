@@ -12,12 +12,45 @@ export interface ExpectText {
 }
 
 /** 从提示词里抽取「」包裹的文案，作为图上应有文字的候选标准答案 */
+/**
+ * 从提示词里抽出「应出现的文案」。
+ *
+ * 只有「」包住的才算 —— 这是提示词里唯一能确定「必须逐字出现在图上」的写法。
+ * 抽不到就返回空，此时质检只做违规与压叠，**不判文案**（判了也只是同一句笼统结论）。
+ */
 export function expectFromPrompt(prompt: string): ExpectText {
   const quoted = [...prompt.matchAll(/「([^」]+)」/g)].map((m) => m[1].trim()).filter(Boolean)
   if (!quoted.length) return { mainTitle: '', tags: [], brand: [], disclaimer: [] }
   // 约定：最长的一条当主标题，其余按出现顺序当标签
   const mainTitle = [...quoted].sort((a, b) => b.length - a.length)[0]
   const tags = quoted.filter((item) => item !== mainTitle)
+  return { mainTitle, tags, brand: [], disclaimer: [] }
+}
+
+/**
+ * 把任务里能确定的文案补进 expect：卖点原文比提示词里的「」更权威。
+ *
+ * SOP / 变量模式下提示词是模型写的，经常不带「」，于是文案核对整段落空 ——
+ * 模型只能说「无法核对」，几十张图的理由自然一模一样。任务上记着当初选的卖点
+ * （sopPointName 只是名字）与实际喂进去的 copyText，用它们兜底才判得出来。
+ */
+export function expectForTask(task: {
+  prompt?: string
+  copyText?: string
+  sopPointName?: string
+}): ExpectText {
+  const base = expectFromPrompt(task.prompt || '')
+  if (base.mainTitle || base.tags.length) return base
+  // copyText 是多条卖点用换行/分号分开的原文，拆成标题 + 标签
+  const copy = String(task.copyText || '').trim()
+  if (!copy) return base
+  const lines = copy
+    .split(/\n|；|;/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!lines.length) return base
+  const mainTitle = [...lines].sort((a, b) => b.length - a.length)[0]
+  const tags = lines.filter((item) => item !== mainTitle)
   return { mainTitle, tags, brand: [], disclaimer: [] }
 }
 

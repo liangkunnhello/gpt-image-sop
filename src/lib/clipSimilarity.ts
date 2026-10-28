@@ -8,7 +8,7 @@ import { duplicateScopeKey, groupTasksByScope } from './duplicateScope'
 import { flushClipVectors, hasClipVector, matchAgainstLibrary, putClipVector } from './clipVectors'
 import { useInspectConfig } from './inspectConfig'
 import { activeQcRules, qcInBrowser, type QcChecks } from './visionQc'
-import { expectFromPrompt, type ExpectText } from './batchCheck'
+import { expectForTask, type ExpectText, type QcOutcome } from './batchCheck'
 
 import { SIDECAR } from './sidecar'
 /** 送给 CLIP 前先缩到这个边长，既快又不影响判断 */
@@ -27,6 +27,12 @@ export interface QcResult {
   custom?: Array<{ name: string; pass: boolean; note: string }>
   /** 压叠/遮挡位置：哪个字被什么盖住，模型说得出时才有 */
   spots?: string[]
+  /** 具体问题清单：缺哪句 / 错哪个字 / 多哪句。reason 只是概括，这里是可逐条核对的原文 */
+  details?: {
+    missing?: string[]
+    wrong?: string[]
+    extra?: string[]
+  }
 }
 
 export interface ClipScore {
@@ -313,8 +319,8 @@ export const useClipStore = create<ClipState>()((set, get) => ({
     if (!imageIds.length) return
     const scope = scopeOverride ?? config.duplicateScope
     const group = duplicateScopeKey(task, scope)
-    // 质检要拿提示词里的「」文案当对照，降级到浏览器直连时同样适用
-    const expect = expectFromPrompt(task.prompt || '')
+    // 质检要拿「应出现的文案」当对照：先取提示词里的「」，抽不到再用任务上的卖点原文兜底
+    const expect = expectForTask(task)
     set((s) => ({ queued: s.queued + imageIds.length }))
     enqueue(async () => {
       for (const imageId of imageIds) {
@@ -365,6 +371,99 @@ useInspectConfig.subscribe((state) => {
 
 
 /**
+ * 把模型的判定结果拼成一句「能排查」的理由。
+ *
+ * 为什么需要它：模型返回的 reason 常常是同一句式（「画面文字与要求不一致」），
+ * 几十张不合格图看起来理由一模一样，等于没说。真正有用的信息在
+ * missing / wrong / extra / overlap_spots 里，把它们逐条带上。
+ */
+export function describeOutcome(outcome: QcOutcome): string {
+  const parts: string[] = []
+  const base = outcome.reason.trim()
+  if (outcome.missing.length) parts.push(`缺：${outcome.missing.join(' / ')}`)
+  if (outcome.wrong.length) parts.push(`错字：${outcome.wrong.join(' / ')}`)
+  if (outcome.extra.length) parts.push(`多出：${outcome.extra.join(' / ')}`)
+  if (outcome.spots.length) parts.push(`遮挡：${outcome.spots.join(' / ')}`)
+  const failedRules = outcome.custom.filter((item) => !item.pass)
+  if (failedRules.length) {
+    parts.push(`规则未过：${failedRules.map((item) => item.note ? `${item.id}（${item.note}）` : item.id).join(' / ')}`)
+  }
+  if (!parts.length && !outcome.violationPass) {
+    parts.push('画面含违规内容')
+  }
+  // 概括在前、细节在后：只显示一行时也先看到模型那句话，展开能看到具体条目
+  if (!parts.length) return base || (outcome.verdict === 'pass' ? '通过' : '未给出具体原因')
+  return base ? `${base}｜${parts.join('；')}` : parts.join('；')
+}
+
+/** 逐张调本地服务的 /api/qc-image，返回结构化结论 */
+async function qcViaSidecar(dataUrl: string, expect: ExpectText): Promise<QcOutcome | null> {
+  try {
+    const res = await fetch(`${SIDECAR}/api/qc-image`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataUrl, expect }),
+      signal: AbortSignal.timeout(180000),
+    })
+    const json = await res.json() as {
+      ok?: boolean
+      error?: string
+      result?: {
+        verdict?: string
+        confidence?: number | null
+        reason?: string
+        violation?: { pass?: boolean; items?: string[] }
+        text?: { pass?: boolean; found?: string[]; missing?: string[]; wrong?: string[]; extra?: string[] }
+        overlap?: { pass?: boolean; spots?: string[] }
+      }
+    }
+    if (!json?.ok || !json.result) return null
+    const r = json.result
+    return {
+      verdict: r.verdict === 'pass' || r.verdict === 'fail' ? r.verdict : 'unsure',
+      violationPass: r.violation?.pass !== false,
+      textPass: r.text?.pass !== false,
+      overlapPass: r.overlap?.pass !== false,
+      spots: Array.isArray(r.overlap?.spots) ? r.overlap!.spots.map(String).filter(Boolean) : [],
+      missing: Array.isArray(r.text?.missing) ? r.text!.missing.map(String) : [],
+      wrong: Array.isArray(r.text?.wrong) ? r.text!.wrong.map(String) : [],
+      extra: Array.isArray(r.text?.extra) ? r.text!.extra.map(String) : [],
+      custom: [],
+      reason: typeof r.reason === 'string' ? r.reason : '',
+      confidence: typeof r.confidence === 'number' ? r.confidence : null,
+    }
+  } catch (err) {
+    console.warn('本地服务质检失败：', err)
+    return null
+  }
+}
+
+/** 批量两两相似度（/api/sim-batch） */
+async function similarityViaSidecar(
+  payload: Array<{ id: string; dataUrl: string }>,
+  limit: number,
+): Promise<{ limit?: number; perImage?: Record<string, { mean: number; max: number; nearest?: string | null }> } | null> {
+  try {
+    const res = await fetch(`${SIDECAR}/api/sim-batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit, items: payload.map((item) => ({ dataUrl: item.dataUrl })) }),
+      signal: AbortSignal.timeout(180000),
+    })
+    const json = await res.json() as {
+      ok?: boolean
+      error?: string
+      similarity?: { perImage?: Record<string, { mean: number; max: number; nearest?: string | null }> }
+    }
+    if (!json?.ok || !json.similarity) return null
+    return json.similarity
+  } catch (err) {
+    console.warn('本地服务相似度失败：', err)
+    return null
+  }
+}
+
+/**
  * 一次调用同时做质检和重复度（后端 /api/inspect），结果按图片 id 写回 store。
  * 传进来的第一张是主角，其余作为「同方向历史图」一起参与两两比对，
  * 所以返回的重复度就是主角与它们之中最像那张的相似度。
@@ -395,39 +494,51 @@ export async function inspectImages(
   if (!payload.length) return
 
   try {
-    const res = await fetch(`${SIDECAR}/api/inspect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: payload, limit: options.limit ?? useClipStore.getState().limit }),
-      signal: AbortSignal.timeout(180000),
-    })
-    const json = await res.json() as {
-      ok?: boolean
-      error?: string
-      limit?: number
-      qc?: Record<string, { ok?: boolean; verdict?: string; reason?: string; confidence?: number | null }>
-      similarity?: { perImage?: Record<string, { mean: number; max: number; nearest?: string | null }> }
-    }
-    if (!res.ok) throw new Error(json?.error || '检查失败')
+    // 质检走 /api/qc-image（逐张判定）；重复度走 /api/sim-batch（批量两两比对）。
+    // 这两个才是本地服务真实存在的接口 —— 以前这里打的是 /api/inspect，那个接口根本不存在，
+    // 每次都是 404 然后静默降级到浏览器端质检。
+    const expect = options.expect ?? EMPTY_EXPECT
+    const qcByIndex = new Map<number, QcOutcome>()
+    await Promise.all(payload.map(async (item, index) => {
+      const outcome = await qcViaSidecar(item.dataUrl, expect)
+      if (outcome) qcByIndex.set(index, outcome)
+    }))
+    if (!qcByIndex.size) throw new Error('本地服务没有返回质检结果')
+
+    const sim = await similarityViaSidecar(payload, options.limit ?? useClipStore.getState().limit)
 
     const imageIdAt = (key: string) => imageIdByIndex[Number(key)]
 
     const nextQc: Record<string, QcResult> = { ...useClipStore.getState().qc }
-    for (const [key, item] of Object.entries(json?.qc || {})) {
-      const imageId = imageIdAt(key)
-      if (!imageId || !item) continue
-      const verdict: QcVerdict = item.verdict === 'pass' || item.verdict === 'fail' || item.verdict === 'unsure'
-        ? item.verdict
-        : 'unsure'
+    for (const [index, outcome] of qcByIndex) {
+      const imageId = imageIdByIndex[index]
+      if (!imageId) continue
+      const ruleName = new Map(useInspectConfig.getState().config.customRules.map((rule) => [rule.id, rule.name.trim()]))
       nextQc[imageId] = {
-        verdict,
-        reason: String(item.reason || ''),
-        confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
+        // error 不是合法结论，统一记成待定
+        verdict: outcome.verdict === 'pass' || outcome.verdict === 'fail' ? outcome.verdict : 'unsure',
+        // 模型那句 reason 往往很笼统；把「缺哪句 / 错哪个字 / 多哪句 / 哪里被盖住」拼进去，
+        // 否则每张不合格的图看起来理由都一样，根本没法排查
+        reason: describeOutcome(outcome),
+        confidence: outcome.confidence ?? undefined,
+        custom: outcome.custom.length
+          ? outcome.custom.map((item) => ({
+            name: ruleName.get(item.id) || item.id,
+            pass: item.pass,
+            note: item.note,
+          }))
+          : undefined,
+        spots: outcome.spots.length ? outcome.spots : undefined,
+        details: {
+          missing: outcome.missing.length ? outcome.missing : undefined,
+          wrong: outcome.wrong.length ? outcome.wrong : undefined,
+          extra: outcome.extra.length ? outcome.extra : undefined,
+        },
       }
     }
 
     const nextScores: Record<string, ClipScore> = { ...useClipStore.getState().scores }
-    for (const [key, score] of Object.entries(json?.similarity?.perImage || {})) {
+    for (const [key, score] of Object.entries(sim?.perImage || {})) {
       const imageId = imageIdAt(key)
       if (!imageId) continue
       const nearestKey = score.nearest ? String(score.nearest).replace(/\.[a-z]+$/i, '') : ''
@@ -438,7 +549,7 @@ export async function inspectImages(
     useClipStore.setState((state) => ({
       qc: nextQc,
       scores: nextScores,
-      limit: json?.limit ?? state.limit,
+      limit: sim?.limit ?? state.limit,
       engine: 'clip',
     }))
     // 交付在生图完成时就跑了，质检这时才出结论：判不合格的那几张要从交付文件夹里撤掉

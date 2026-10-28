@@ -24,7 +24,7 @@ import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from 
 import { getApiProviderLabel } from '../lib/apiProfiles'
 import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
 import { inspectImages, useClipStore } from '../lib/clipSimilarity'
-import { expectFromPrompt } from '../lib/batchCheck'
+import { expectForTask, expectFromPrompt } from '../lib/batchCheck'
 import { filterGalleryIndexes, galleryFilterCounts, type GalleryFilter } from '../lib/galleryFilter'
 import { resolveCardInputText } from '../lib/sopGroup'
 import { mergeCardTasks } from '../lib/cardTasks'
@@ -403,11 +403,15 @@ export default function DetailModal() {
     custom?: Array<{ name: string; pass: boolean; note: string }>
     /** 压叠/遮挡位置：哪个字被什么盖住 */
     spots?: string[]
+    /** 具体问题清单：缺哪句 / 错哪个字 / 多哪句 */
+    details?: { missing?: string[]; wrong?: string[]; extra?: string[] }
   } | null => {
     const manual = manualQcVerdicts[imageId]
-    if (manual) return { verdict: manual, reason: '人工改判', custom: undefined, spots: undefined }
+    if (manual) return { verdict: manual, reason: '人工改判', custom: undefined, spots: undefined, details: undefined }
     const auto = clipQc[imageId]
-    return auto ? { verdict: auto.verdict, reason: auto.reason, custom: auto.custom, spots: auto.spots } : null
+    return auto
+      ? { verdict: auto.verdict, reason: auto.reason, custom: auto.custom, spots: auto.spots, details: auto.details }
+      : null
   }, [manualQcVerdicts, clipQc])
 
   /** 每张图的重复度，筛选用 */
@@ -463,6 +467,7 @@ export default function DetailModal() {
       reason: string
       custom?: Array<{ name: string; pass: boolean; note: string }>
       spots?: string[]
+      details?: { missing?: string[]; wrong?: string[]; extra?: string[] }
     } => Boolean(item))
   const inspectQc = inspectQcList.find((item) => item.verdict === 'fail')
     ?? inspectQcList.find((item) => item.verdict === 'unsure')
@@ -590,8 +595,9 @@ export default function DetailModal() {
         if (entries.length >= 12) break
       }
       await inspectImages(entries, {
-        // 整卡检查时图来自多条提示词，没法用一份「应出现文案」对照，交给模型只判违规与压叠
-        expect: expectFromPrompt(groupTasks.length > 1 ? '' : task.prompt),
+        // 整卡检查时图来自多条提示词，没法用一份「应出现文案」对照，交给模型只判违规与压叠；
+        // 单条任务时用 expectForTask，提示词里没有「」就退回任务上的卖点原文
+        expect: groupTasks.length > 1 ? expectFromPrompt('') : expectForTask(task),
         manual: true,
         scope: duplicateScope,
         group: duplicateScopeKey(task, duplicateScope),
@@ -1805,6 +1811,29 @@ export default function DetailModal() {
                           {item.note && <span className="min-w-0 flex-1 text-red-500/80 dark:text-red-300/80">{item.note}</span>}
                         </div>
                       ))}
+                      {/* 具体问题：缺哪句 / 错哪个字 / 多哪句。只给一句概括时，每张图的理由看起来都一样 */}
+                      {inspectQc?.details && (
+                        <>
+                          {(inspectQc.details.missing ?? []).map((item) => (
+                            <div key={`missing-${item}`} className="flex items-start gap-1.5 pl-8 text-[11px] text-red-600 dark:text-red-400">
+                              <span className="shrink-0">缺少文案</span>
+                              <span className="min-w-0 flex-1">{item}</span>
+                            </div>
+                          ))}
+                          {(inspectQc.details.wrong ?? []).map((item) => (
+                            <div key={`wrong-${item}`} className="flex items-start gap-1.5 pl-8 text-[11px] text-red-600 dark:text-red-400">
+                              <span className="shrink-0">文字有误</span>
+                              <span className="min-w-0 flex-1">{item}</span>
+                            </div>
+                          ))}
+                          {(inspectQc.details.extra ?? []).map((item) => (
+                            <div key={`extra-${item}`} className="flex items-start gap-1.5 pl-8 text-[11px] text-amber-600 dark:text-amber-400">
+                              <span className="shrink-0">多出文案</span>
+                              <span className="min-w-0 flex-1">{item}</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
                       {/* 压叠/遮挡位置：模型指出「哪个字被什么盖住」，只列位置不给结论就没法排查 */}
                       {(inspectQc?.spots ?? []).map((spot) => (
                         <div key={spot} className="flex items-start gap-1.5 pl-8 text-[11px] text-red-600 dark:text-red-400">

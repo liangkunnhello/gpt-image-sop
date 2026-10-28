@@ -41,6 +41,7 @@ function buildPrompt(expect, strict = false) {
     if ((expect.disclaimer || []).length) L.push(`免责小字：${expect.disclaimer.join(' / ')}`);
     L.push('');
     L.push('主标题和标签必须逐字一致。免责小字字号很小，读不出时在 reason 里注明"小字不可辨"，不算错字。');
+    L.push('reason 必须写这张图自己的具体问题，禁止套模板：「哪一句 / 哪个字 / 哪个位置」，不要写"画面文字与要求不一致"这类空话。');
   } else {
     L.push('本图不要求出现任何文字。若图上有文字，记入 extra。');
   }
