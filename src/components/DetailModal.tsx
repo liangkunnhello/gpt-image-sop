@@ -7,6 +7,8 @@ import { directionPath, useSopStore } from '../lib/sopStore'
 import { productIdForDirection } from '../lib/applyPostTemplate'
 import { channelLabel } from '../lib/channel'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { useDeleteKey } from '../hooks/useDeleteKey'
+import { nextIndexAfterDelete } from '../lib/lightboxNav'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
@@ -47,6 +49,9 @@ export default function DetailModal() {
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const markTaskDetailViewed = useStore((s) => s.markTaskDetailViewed)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
+  const lightboxImageId = useStore((s) => s.lightboxImageId)
+  const lightboxImageList = useStore((s) => s.lightboxImageList)
+  const lightboxPrompt = useStore((s) => s.lightboxCommentPrompt)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
   const openFavoritePicker = useStore((s) => s.openFavoritePicker)
@@ -192,6 +197,14 @@ export default function DetailModal() {
   }, [imageIndex, streamPreviewItems.length, task, task?.status])
 
   useCloseOnEscape(Boolean(task), () => setDetailTaskId(null))
+  /**
+   * 详情页开着时按 Delete / Backspace 把当前图移入回收站。
+   * 注册必须在这里（提前 return 之前）：hook 数量变化会直接白屏。
+   * 具体动作放 ref 里，等下面的 handler 定义完再赋值。
+   */
+  const deleteKeyHandlerRef = useRef<() => void>(() => {})
+  useDeleteKey(Boolean(task), () => deleteKeyHandlerRef.current())
+
   usePreventBackgroundScroll(Boolean(task), [modalRef, rawUrlsModalRef, rawResponseModalRef])
 
   // Reset index when task changes
@@ -442,6 +455,18 @@ export default function DetailModal() {
     const first = filteredOutputSlots[0]
     if (first) setImageIndex(first.index)
   }, [galleryFilter, filteredOutputSlots, imageIndex])
+
+  /**
+   * 按 Delete 把图移入回收站后，画廊会少一张：索引若越界就贴到末尾。
+   *
+   * 不处理的话右侧参数、工具条会全部变成「没选中」，看着像操作失败了；
+   * 贴到末尾等于自动选中「同一位置的那一张」（被删那张的下一张顺位补上来）。
+   */
+  useEffect(() => {
+    if (!visibleOutputSlots.length) return
+    if (imageIndex <= visibleOutputSlots.length - 1) return
+    setImageIndex(visibleOutputSlots.length - 1)
+  }, [visibleOutputSlots.length, imageIndex])
 
   useEffect(() => {
     if (!task) return
@@ -739,6 +764,58 @@ export default function DetailModal() {
     }
   }
 
+  /**
+   * 移入图片回收站（工具栏按钮与 Delete 键共用）。
+   *
+   * 灯箱开着时不能因为这张图从画廊消失就退出去：
+   * 图片本体还在库里，把「目前看着的那张」留在灯箱列表里，用户能继续看图、继续按 →
+   * 跳下一张，只是画廊里不再显示它。关掉灯箱后再回到画廊，它就已经在回收站了。
+   */
+  const doTrashImage = (imageId: string) => {
+    if (!imageId || !task) return
+    void trashOutputImage(task.id, imageId)
+  }
+
+  const handleTrashConfirm = (imageId: string) => {
+    if (!imageId) return
+    setConfirmDialog({
+      title: '移入图片回收站',
+      message: '这张图会从画廊和交付里移除，原图仍保留，可在「回收站」里还原。',
+      action: () => doTrashImage(imageId),
+    })
+  }
+
+  /**
+   * Delete / Backspace 把「当前正在看的那张」移入回收站。
+   *
+   * 为什么不用确认弹窗：键盘删除是「快速清理」动作，一张张弹确认等于没法用。
+   * 移进回收站是可还原的，比直接删安全得多，所以这里直接执行并给一条 toast。
+   *
+   * 灯箱开着时清的是灯箱那张（而不是画廊里选中的那张）—— 用户眼睛看的是哪个就该删哪个。
+   */
+  const handleDeleteKey = () => {
+    if (!task || reapplying) return
+    const target = lightboxImageId || currentOutputImageId
+    if (!target) return
+    // 已经进了回收站就不再重复处理
+    if ((task.trashedOutputImages ?? []).includes(target)) return
+
+    // 灯箱开着时先把视图挪到下一张，再执行回收：
+    // 这样画面不会停在「一张已经不存在的图」上，也不会因为列表变化而退出
+    if (lightboxImageId && lightboxImageList.length > 1) {
+      const nextIndex = nextIndexAfterDelete(lightboxImageList, lightboxImageId)
+      const nextId = nextIndex >= 0 ? lightboxImageList[nextIndex] : null
+      // 注意：列表里保留被删的那张（见 lightboxNav.pinnedNavList），所以这里只是切换，
+      // 灯箱不会被关掉，用户可以接着按 Delete 继续清理
+      if (nextId && nextId !== lightboxImageId) {
+        setLightboxImageId(nextId, lightboxImageList, lightboxPrompt)
+      }
+    }
+    doTrashImage(target)
+  }
+
+  deleteKeyHandlerRef.current = handleDeleteKey
+
   const handleCopyPrompt = async () => {
     if (!cardInputText.text) return
     try {
@@ -928,11 +1005,7 @@ export default function DetailModal() {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation()
-                      setConfirmDialog({
-                        title: '移入图片回收站',
-                        message: '这张图会从画廊和交付里移除，原图仍保留，可在「回收站」里还原。',
-                        action: () => trashOutputImage(task.id, currentOutputImageId),
-                      })
+                      handleTrashConfirm(currentOutputImageId)
                     }}
                     className="flex items-center justify-center px-1.5 py-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-red-500/80 transition focus:outline-none focus:ring-1 focus:ring-white/50"
                     aria-label="放入回收站"

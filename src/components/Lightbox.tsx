@@ -3,6 +3,7 @@ import type { ImageComment } from '../types'
 import { createInputImageFromFile, deleteImageIfUnreferenced, setImageQcVerdict, trashOutputImage, useStore } from '../store'
 import { useClipStore } from '../lib/clipSimilarity'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { pinnedNavList } from '../lib/lightboxNav'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
@@ -49,6 +50,8 @@ export default function Lightbox() {
   const close = useCallback(() => setLightboxImageId(null), [setLightboxImageId])
   useCloseOnEscape(Boolean(lightboxImageId), close)
   usePreventBackgroundScroll(Boolean(lightboxImageId))
+  // 灯箱开着时，Delete 由详情页那层处理（它知道这张图属于哪条任务）；
+  // 这里只负责把「删除后不要退出查看」这件事兜住 —— 见下面的 keepList。
 
   // 图片加载
   useEffect(() => {
@@ -133,16 +136,37 @@ export default function Lightbox() {
     }
   }, [src, maskImageSrc])
 
+  /**
+   * 灯箱打开期间固定住列表。
+   *
+   * 图被移入回收站后，详情页会把它从画廊里隐藏，但灯箱必须**继续显示这张**：
+   * 否则用户按 Delete 之后画面直接退出/跳走，等于「删一下就没了」，没法连着清理。
+   * 图片本体还在库里（回收站可还原），所以这里保留它是安全且合理的。
+   */
+  const pinnedListRef = useRef<string[]>([])
+  const pinnedIdRef = useRef<string | null>(null)
+  if (lightboxImageId && pinnedIdRef.current !== lightboxImageId) {
+    pinnedListRef.current = lightboxImageList
+    pinnedIdRef.current = lightboxImageId
+  }
+  if (!lightboxImageId && pinnedIdRef.current !== null) {
+    pinnedIdRef.current = null
+    pinnedListRef.current = []
+  }
+  const navList = pinnedListRef.current.length
+    ? pinnedNavList(pinnedListRef.current, lightboxImageId, lightboxImageList, Boolean(lightboxImageId))
+    : lightboxImageList
+
   // 导航
-  const currentIndex = lightboxImageId ? lightboxImageList.indexOf(lightboxImageId) : -1
-  const total = lightboxImageList.length
+  const currentIndex = lightboxImageId ? navList.indexOf(lightboxImageId) : -1
+  const total = navList.length
   const showNav = total > 1
 
   const goTo = useCallback((idx: number) => {
-    if (lightboxImageList.length === 0) return
-    const wrapped = ((idx % lightboxImageList.length) + lightboxImageList.length) % lightboxImageList.length
-    setLightboxImageId(lightboxImageList[wrapped], lightboxImageList, lightboxCommentPrompt)
-  }, [lightboxCommentPrompt, lightboxImageList, setLightboxImageId])
+    if (navList.length === 0) return
+    const wrapped = ((idx % navList.length) + navList.length) % navList.length
+    setLightboxImageId(navList[wrapped], navList, lightboxCommentPrompt)
+  }, [lightboxCommentPrompt, navList, setLightboxImageId])
 
   const goPrev = useCallback(() => { if (showNav) goTo(currentIndex - 1) }, [showNav, currentIndex, goTo])
   const goNext = useCallback(() => { if (showNav) goTo(currentIndex + 1) }, [showNav, currentIndex, goTo])
