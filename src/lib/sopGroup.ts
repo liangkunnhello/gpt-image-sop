@@ -6,6 +6,24 @@ import { isTaskUnread } from './unread'
  * 以组内第一条任务作为代表（保留它的 id，选择、详情、删除都仍按它走），
  * 输出图按提示词序号合并，状态取最"差"的那个。
  */
+/**
+ * 把同一张卡里多条任务的提示词合并成「输入内容」显示。
+ *
+ * 批量生图常见「同一条提示词跑 N 张」，直接拼会得到同一段话重复 N 遍；
+ * 所以先按内容去重（保留第一次出现的顺序），只有内容真的不同时才按空行分段。
+ */
+export function mergePromptText(prompts: Array<string | undefined | null>): { text: string; count: number } {
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const raw of prompts) {
+    const value = String(raw ?? '').trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    unique.push(value)
+  }
+  return { text: unique.join('\n\n'), count: unique.length }
+}
+
 export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
   const out: TaskRecord[] = []
   const groups = new Map<string, TaskRecord[]>()
@@ -53,10 +71,10 @@ export function groupSopTasks(tasks: TaskRecord[]): TaskRecord[] {
     )
     // 输入内容要显示真正提交的提示词，不能拿「批量 · N 张图」这种概况顶替：
     // 详情页/卡片上的「输入内容」就是这一栏，概况会让人以为提示词丢了。
-    const prompts = sorted.map((task) => (task.prompt ?? '').trim()).filter(Boolean)
+    const merged = mergePromptText(sorted.map((task) => task.prompt))
     out.push({
       ...rep,
-      prompt: prompts.length ? prompts.join('\n\n') : rep.prompt,
+      prompt: merged.text || rep.prompt,
       outputImages: sorted.flatMap((task) => task.outputImages),
       outputErrors: sorted.flatMap((task) => task.outputErrors ?? []),
       trashedOutputImages: trashed.length ? trashed : undefined,

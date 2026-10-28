@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskRecord } from '../types'
 import { DEFAULT_PARAMS } from '../types'
-import { groupSopTasks } from './sopGroup'
+import { groupSopTasks, mergePromptText } from './sopGroup'
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -65,5 +65,44 @@ describe('卡片的「输入内容」', () => {
     const b = task({ id: 'b', sopJobId: 'job', sopPromptIndex: 2, prompt: '  ', outputImages: ['img-b'] })
     const [card] = groupSopTasks([a, b])
     expect(card.prompt).toBe('')
+  })
+})
+
+describe('mergePromptText 同一条提示词不重复', () => {
+  it('同一条提示词跑 N 张，只显示一份', () => {
+    const merged = mergePromptText(['一只猫在雨里', '一只猫在雨里', '一只猫在雨里'])
+    expect(merged.text).toBe('一只猫在雨里')
+    expect(merged.count).toBe(1)
+  })
+
+  it('内容不同的才按空行分段，保持先出现的顺序', () => {
+    const merged = mergePromptText(['第二条', '第一条', '第二条', '  第三条  '])
+    expect(merged.text).toBe('第二条\n\n第一条\n\n第三条')
+    expect(merged.count).toBe(3)
+  })
+
+  it('首尾空格不同但内容一样，算同一条', () => {
+    expect(mergePromptText(['  一只猫 ', '一只猫']).count).toBe(1)
+  })
+
+  it('空值与 undefined 跳过，不占段', () => {
+    const merged = mergePromptText(['', '  ', undefined, null, '正文'])
+    expect(merged.text).toBe('正文')
+    expect(merged.count).toBe(1)
+  })
+
+  it('整卡聚合用的是去重后的结果', () => {
+    const same = '同一段提示词'
+    const tasks = Array.from({ length: 8 }, (_, i) => task({
+      id: `t${i}`,
+      sopJobId: 'job',
+      sopPromptIndex: i + 1,
+      prompt: same,
+      outputImages: [`img-${i}`],
+    }))
+    const [card] = groupSopTasks(tasks)
+    expect(card.prompt).toBe(same)
+    // 8 张图仍在，只有提示词去重
+    expect(card.outputImages).toHaveLength(8)
   })
 })

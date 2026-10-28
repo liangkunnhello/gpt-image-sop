@@ -26,6 +26,7 @@ import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
 import { inspectImages, useClipStore } from '../lib/clipSimilarity'
 import { expectFromPrompt } from '../lib/batchCheck'
 import { filterGalleryIndexes, galleryFilterCounts, type GalleryFilter } from '../lib/galleryFilter'
+import { mergePromptText } from '../lib/sopGroup'
 import { DUPLICATE_SCOPE_LABEL, duplicateScopeKey, peersForTask, scopeTasksFor } from '../lib/duplicateScope'
 import { useInspectConfig } from '../lib/inspectConfig'
 import GalleryFilterBar from './GalleryFilterBar'
@@ -115,6 +116,11 @@ export default function DetailModal() {
       .filter((item) => item.sopJobId === rawTask.sopJobId && !item.sopPlaceholder)
       .sort((a, b) => (a.sopPromptIndex ?? 0) - (b.sopPromptIndex ?? 0))
   }, [rawTask, tasks])
+  /** 内容不同的提示词有几条：同一条跑 N 张时是 1，不用标「N 条提示词」 */
+  const promptVariantCount = useMemo(
+    () => mergePromptText(groupTasks.map((item) => item.prompt)).count,
+    [groupTasks],
+  )
   /**
    * 人工改判的质检结论。改判存在「真正持有这张图」的那条任务上，
    * 而详情页是把同一张卡的多条任务拼起来展示的，所以先摊平成一张 图id → 结论 的表。
@@ -135,11 +141,12 @@ export default function DetailModal() {
     const leader = group[0]
     const anyRunning = group.some((item) => item.status === 'running')
     const allError = group.every((item) => item.status === 'error')
-    // 输入内容显示真正提交的提示词（多条按空行拼起来），不要拿「N 张图」这种概况顶替
-    const prompts = group.map((item) => (item.prompt ?? '').trim()).filter(Boolean)
+    // 输入内容显示真正提交的提示词，不要拿「N 张图」这种概况顶替。
+    // 同一条提示词跑 N 张是常态，去重后再拼，否则会重复 N 遍（见 mergePromptText）
+    const merged = mergePromptText(group.map((item) => item.prompt))
     return {
       ...leader,
-      prompt: prompts.length ? prompts.join('\n\n') : leader.prompt,
+      prompt: merged.text || leader.prompt,
       outputImages: group.flatMap((item) => item.outputImages),
       // 原图也按同顺序摊平：否则「下载原图」永远只指向第一条提示词那张，
       // 后面的图会拿错源。老任务没有这个字段时补空串占位，保持下标对齐。
@@ -1476,10 +1483,10 @@ export default function DetailModal() {
               <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider">
                 输入内容
               </h3>
-              {/* 多条提示词按空行拼在一起显示，这里标一下共几条，别让人以为是同一段文字 */}
-              {groupTasks.length > 1 && (
+              {/* 只有内容真的不同的提示词才标条数；同一条跑 N 张去重后只剩一条，标了反而让人以为有差异 */}
+              {promptVariantCount > 1 && (
                 <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-400">
-                  {groupTasks.length} 条提示词
+                  {promptVariantCount} 条提示词
                 </span>
               )}
               {task.prompt && !showPendingPrompt && (
