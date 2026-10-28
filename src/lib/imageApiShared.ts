@@ -24,6 +24,13 @@ export interface CallApiOptions {
   onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void
   onCustomTaskEnqueued?: (task: { taskId: string }) => void
   onPartialImage?: (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => void
+  /**
+   * 外部中止信号：用户点「停止」时立刻掐断请求。
+   *
+   * 不传的话只能等超时，用户点了停止要干等到接口返回，还照样烧 token。
+   * 实现里会把它与内部超时合并（AbortSignal.any），谁先到算谁。
+   */
+  signal?: AbortSignal
 }
 
 export interface CallApiResult {
@@ -242,4 +249,51 @@ export function pickActualParams(source: unknown): Partial<TaskParams> {
 export function mergeActualParams(...sources: Array<Partial<TaskParams> | undefined>): Partial<TaskParams> | undefined {
   const merged = Object.assign({}, ...sources.filter((source) => source && Object.keys(source).length))
   return Object.keys(merged).length ? merged : undefined
+}
+
+/**
+ * 把「内部超时」和「外部停止」合到一个 signal 上。
+ *
+ * 返回清理函数，调用方 finally 里清掉超时，避免定时器泄漏。
+ * 老环境没有 AbortSignal.any 时退回：外部先 abort 就手动串联。
+ */
+export function linkAbortSignal(
+  controller: AbortController,
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+  onTimeout: () => unknown,
+): () => void {
+  let detach: (() => void) | undefined
+  if (external) {
+    if (external.aborted) {
+      controller.abort(external.reason)
+    } else {
+      const forward = () => controller.abort(external.reason)
+      external.addEventListener('abort', forward, { once: true })
+      // 结束后把监听摘掉，避免外部 signal 长期持有引用
+      detach = () => external.removeEventListener('abort', forward)
+    }
+  }
+  const timeoutId = setTimeout(() => {
+    controller.abort(onTimeout())
+  }, timeoutMs)
+  return () => {
+    clearTimeout(timeoutId)
+    detach?.()
+  }
+}
+
+/** 用户主动停止时用的中止原因，便于上层把它和「超时」「网络错误」区分开 */
+export function createUserAbortError(): Error {
+  const error = new Error('已停止生成')
+  error.name = 'AbortError'
+  return error
+}
+
+/** 这个错误是不是「用户点了停止」而不是失败 */
+export function isUserAbort(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.name !== 'AbortError' && !/aborted|abort/i.test(error.message)) return false
+  // 超时的 reason 里带 timeout 标记，停止的没有
+  return !/timeout|超时/i.test(error.message)
 }

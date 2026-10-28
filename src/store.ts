@@ -61,7 +61,7 @@ import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSin
 import { buildAgentApiInput, buildAgentContinuationInput } from './lib/agentInputBuilder'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId } from './lib/agentImageReferences'
 import { showBrowserNotification } from './lib/browserNotification'
-import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
+import { IMAGE_FETCH_CORS_HINT, createUserAbortError, isUserAbort } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
@@ -113,6 +113,11 @@ const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const taskExecutions = new Map<string, symbol>()
+/**
+ * 每个正在跑的任务一个中止控制器：用户点「停止」时用它掐断请求。
+ * 只放「当前这次执行」的那一个；任务结束时删掉，避免误停已经结束的任务。
+ */
+const taskAbortControllers = new Map<string, AbortController>()
 const agentRoundControllers = new Map<string, AbortController>()
 const agentRecoveryContinuations = new Set<string>()
 const deletedActiveAgentTasks = new Map<string, { task: TaskRecord; controller: AbortController }>()
@@ -5020,6 +5025,9 @@ async function executeTask(taskId: string) {
   if (!task) return
   const execution = Symbol(taskId)
   taskExecutions.set(taskId, execution)
+  // 新一次执行换一个新控制器：旧的已结束，残留的 map 项会在这里被覆盖
+  const abortController = new AbortController()
+  taskAbortControllers.set(taskId, abortController)
   const taskProfile = getTaskApiProfile(settings, task)
   if (!taskProfile && task.apiProfileId) {
     const error = '找不到此任务所使用的 API 配置。'
@@ -5132,6 +5140,8 @@ async function executeTask(taskId: string) {
         useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
         void persistTaskStreamPartialImage(taskId, partial.image, execution)
       },
+      // 用户点停止 → 立刻掐断请求，不再干等超时、也不再继续烧 token
+      signal: abortController.signal,
     })
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -5233,6 +5243,12 @@ async function executeTask(taskId: string) {
     clearOpenAIWatchdogTimer(taskId)
     const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
     if (!latestTask || latestTask.status !== 'running') return
+    // 用户点了停止：任务已经被 stopTask 转成「已停止」，这里不能再当失败处理
+    // （否则会盖掉文案、弹失败通知、还可能触发异步任务的重连查询）
+    if (isUserAbort(err)) {
+      useStore.getState().setTaskStreamPreview(taskId)
+      return
+    }
     useStore.getState().setTaskStreamPreview(taskId)
     const latestFalRequestInfo = falRequestInfo ?? (latestTask.falRequestId && latestTask.falEndpoint
       ? { requestId: latestTask.falRequestId, endpoint: latestTask.falEndpoint }
@@ -5280,7 +5296,11 @@ async function executeTask(taskId: string) {
       showTaskFailureNotification(task)
     }
   } finally {
-    if (taskExecutions.get(taskId) === execution) taskExecutions.delete(taskId)
+    if (taskExecutions.get(taskId) === execution) {
+      taskExecutions.delete(taskId)
+      // 这次执行结束了，控制器也一起清掉，免得「停止」按到一个已经跑完的任务
+      taskAbortControllers.delete(taskId)
+    }
     // 释放输入图片的内存缓存（已持久化到 IndexedDB，后续按需从 DB 加载）
     if (!taskExecutions.has(taskId)) {
       for (const imgId of task.inputImageIds) deleteCachedImage(imgId)
@@ -5389,6 +5409,47 @@ export async function deleteFavoriteCollection(collectionId: string, deleteTasks
 }
 
 /** 按重试方式新建任务或覆盖原任务；Agent 对话中的任务始终新建 */
+/** 用户主动停止时写进任务的错误文案：界面上要能看出「这是你停的」，不是失败 */
+export const TASK_STOPPED_MESSAGE = '已停止生成。'
+
+/**
+ * 停止一个正在生成的任务。
+ *
+ * 两件事同时做：
+ * 1. 掐断网络请求（AbortController）—— 否则要干等到超时，期间还在烧 token；
+ * 2. 作废执行标记（taskExecutions）—— 请求可能已经返回、正在存图的路上，
+ *    标记一失效，后续那几步的检查点会全部 return，不会把半成品写进任务。
+ *
+ * 停止不算失败：任务转成「已停止」的错误态（可重试），不弹失败通知、不改交付。
+ *
+ * 关于 fal.ai：它的 SDK subscribe 不吃 signal，所以那边只能靠「执行标记作废 + 任务转成
+ * 已停止」来阻止结果落地 —— 界面立刻显示已停止，但 fal 侧那一次调用可能仍会跑完
+ * （不会写进任务、不会进交付）。OpenAI 兼容 / 自定义服务商那两条是真掐断。
+ */
+export async function stopTask(taskId: string): Promise<boolean> {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task || task.status !== 'running') return false
+
+  taskAbortControllers.get(taskId)?.abort(createUserAbortError())
+  taskAbortControllers.delete(taskId)
+  taskExecutions.delete(taskId)
+  clearOpenAIWatchdogTimer(taskId)
+  clearFalRecoveryTimer(taskId)
+  clearCustomRecoveryTimer(taskId)
+
+  updateTaskInStore(taskId, {
+    status: 'error',
+    error: TASK_STOPPED_MESSAGE,
+    finishedAt: Date.now(),
+    // 停止不是失败：把「可恢复」标记清掉，界面上不会出现「继续等待」这类按钮
+    falRecoverable: false,
+    customRecoverable: false,
+  })
+  useStore.getState().setTaskStreamPreview(taskId)
+  useStore.getState().showToast('已停止生成，可随时重试', 'info')
+  return true
+}
+
 export async function retryTask(task: TaskRecord) {
   const { settings, tasks } = useStore.getState()
   const source = tasks.find((item) => item.id === task.id)

@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { addImagesFromFiles, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashOutputImage, trashOutputImages, useStore } from './store'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -6665,5 +6665,56 @@ describe('再次后处理的重做范围（进度条总数）', () => {
       sourceImages: ['src-1', 'src-2', 'src-3'],
     })
     expect(reapplyTargetIndexes(t)).toEqual([0, 2])
+  })
+})
+
+describe('停止正在生成的任务', () => {
+  it('运行中的任务能被停止，转成「已停止」而不是失败', async () => {
+    useStore.setState({
+      tasks: [task({ id: 'run-1', status: 'running', error: null })],
+    })
+    const stopped = await stopTask('run-1')
+    expect(stopped).toBe(true)
+    const after = useStore.getState().tasks.find((item) => item.id === 'run-1')!
+    expect(after.status).toBe('error')
+    // 与卡片上「已停止」的判断用同一个常量，文案不能写岔
+    expect(after.error).toBe(TASK_STOPPED_MESSAGE)
+    expect(after.finishedAt).toBeTruthy()
+  })
+
+  it('停止不是失败：不会留下「继续等待」这类可恢复标记', async () => {
+    useStore.setState({
+      tasks: [task({ id: 'run-2', status: 'running', falRecoverable: true, customRecoverable: true })],
+    })
+    await stopTask('run-2')
+    const after = useStore.getState().tasks.find((item) => item.id === 'run-2')!
+    expect(after.falRecoverable).toBeFalsy()
+    expect(after.customRecoverable).toBeFalsy()
+  })
+
+  it('已结束的任务不会被「停止」改写状态', async () => {
+    useStore.setState({
+      tasks: [task({ id: 'done-1', status: 'done', error: null, outputImages: ['img-1'] })],
+    })
+    expect(await stopTask('done-1')).toBe(false)
+    const after = useStore.getState().tasks.find((item) => item.id === 'done-1')!
+    expect(after.status).toBe('done')
+    expect(after.error).toBeNull()
+  })
+
+  it('不存在的任务返回 false，不抛异常', async () => {
+    expect(await stopTask('not-exist')).toBe(false)
+  })
+
+  it('停止后可以重试（转成错误态是为了让「重试」按钮可用）', async () => {
+    useStore.setState({
+      tasks: [task({ id: 'run-3', status: 'running', error: null })],
+    })
+    await stopTask('run-3')
+    const after = useStore.getState().tasks.find((item) => item.id === 'run-3')!
+    // retryTask 只对非 running、且没有可恢复标记的任务生效
+    expect(after.status).not.toBe('running')
+    expect(after.falRecoverable).toBeFalsy()
+    expect(after.customRecoverable).toBeFalsy()
   })
 })

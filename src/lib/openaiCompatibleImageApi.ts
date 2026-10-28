@@ -1,29 +1,7 @@
 import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefinition, type CustomProviderPollMapping, type CustomProviderResultMapping, type CustomProviderSubmitMapping, type ImageApiResponse, type ImageResponseItem, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
-import {
-  assertImageInputPayloadSize,
-  assertMaskEditFileSize,
-  appendStreamingFormatHint,
-  createRequestTimeoutError,
-  maybeAppendStreamingHint,
-  type CallApiOptions,
-  type CallApiResult,
-  fetchImageUrlAsDataUrl,
-  getApiErrorMessage,
-  getDataUrlDecodedByteSize,
-  getDataUrlEncodedByteSize,
-  getResponsesImageResultBase64,
-  isDataUrl,
-  isHttpUrl,
-  mergeActualParams,
-  maybeAppendTransparentBackgroundHint,
-  maybeAppendImageToolDroppedHint,
-  MIME_MAP,
-  normalizeBase64Image,
-  pickActualParams,
-  PROMPT_REWRITE_GUARD_PREFIX,
-} from './imageApiShared'
+import { assertImageInputPayloadSize, assertMaskEditFileSize, appendStreamingFormatHint, createRequestTimeoutError, maybeAppendStreamingHint, type CallApiOptions, type CallApiResult, fetchImageUrlAsDataUrl, getApiErrorMessage, getDataUrlDecodedByteSize, getDataUrlEncodedByteSize, getResponsesImageResultBase64, isDataUrl, isHttpUrl, mergeActualParams, maybeAppendTransparentBackgroundHint, maybeAppendImageToolDroppedHint, MIME_MAP, normalizeBase64Image, pickActualParams, PROMPT_REWRITE_GUARD_PREFIX, linkAbortSignal } from './imageApiShared'
 import { getImageGenerationModel } from './imageModels'
 import { apiFetch, FetchConnectError } from './platform'
 import { isEventStreamResponse, readJsonServerSentEvents } from './serverSentEvents'
@@ -498,7 +476,13 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): P
   const paths = createOpenAICompatiblePaths()
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(createRequestTimeoutError(profile.timeout)), profile.timeout * 1000)
+  // 与外部「停止」信号合并：用户点停止要立刻掐断，不能干等超时还继续烧 token
+  const cleanupAbort = linkAbortSignal(
+    controller,
+    opts.signal,
+    profile.timeout * 1000,
+    () => createRequestTimeoutError(profile.timeout),
+  )
 
   try {
     let response: Response
@@ -626,7 +610,7 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): P
 
     return await parseImagesApiResponse(await response.json() as ImageApiResponse, mime, controller.signal)
   } finally {
-    clearTimeout(timeoutId)
+    cleanupAbort()
   }
 }
 
@@ -920,7 +904,13 @@ async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiProfile,
   const isEdit = inputImageDataUrls.length > 0
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const controller = new AbortController()
-  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(createRequestTimeoutError(profile.timeout)), profile.timeout * 1000)
+  // 同样合并外部「停止」信号：异步自定义服务商在轮询阶段也要能立刻停下
+  let cleanupAbort = linkAbortSignal(
+    controller,
+    opts.signal,
+    profile.timeout * 1000,
+    () => createRequestTimeoutError(profile.timeout),
+  )
 
   try {
     const proxyConfig = readClientDevProxyConfig()
@@ -943,13 +933,11 @@ async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiProfile,
     if (!taskId) return await extractCustomImages(submitPayload, submitMapping.result ?? {}, mime, controller.signal)
     if (!customProvider.poll) throw new Error('异步接口返回了 task_id，但服务商配置缺少 poll')
     opts.onCustomTaskEnqueued?.({ taskId })
-    if (timeoutId) {
-      clearTimeout(timeoutId)
-      timeoutId = null
-    }
+    // 提交成功后不再受提交超时约束，但外部停止信号要留到轮询结束
+    cleanupAbort()
     return pollCustomTaskResult(profile, customProvider.poll, taskId, mime, controller.signal)
   } finally {
-    if (timeoutId) clearTimeout(timeoutId)
+    cleanupAbort()
   }
 }
 
@@ -1023,7 +1011,13 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const requestHeaders = createRequestHeaders(profile)
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(createRequestTimeoutError(profile.timeout)), profile.timeout * 1000)
+  // 与外部「停止」信号合并：用户点停止要立刻掐断，不能干等超时还继续烧 token
+  const cleanupAbort = linkAbortSignal(
+    controller,
+    opts.signal,
+    profile.timeout * 1000,
+    () => createRequestTimeoutError(profile.timeout),
+  )
 
   try {
     if (opts.maskDataUrl) {
@@ -1080,6 +1074,6 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
       revisedPrompts: imageResults.map((result) => result.revisedPrompt),
     }
   } finally {
-    clearTimeout(timeoutId)
+    cleanupAbort()
   }
 }

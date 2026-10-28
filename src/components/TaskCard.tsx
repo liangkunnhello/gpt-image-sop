@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, retryTask } from '../store'
+import { TASK_STOPPED_MESSAGE, useStore, retryTask, stopTask } from '../store'
 import { useClipStore } from '../lib/clipSimilarity'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { useNearViewport } from '../hooks/useNearViewport'
@@ -388,7 +388,8 @@ export default function TaskCard({
 
   const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
   const showModel = task.apiModel && task.apiModel !== defaultModelForProvider
-  const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
+  // 用同一个常量比对：文案写岔过一次（少了中文句号），换个地方改就认不出来了
+  const isInterrupted = task.status === 'error' && task.error === TASK_STOPPED_MESSAGE
 
   return (
     <div className="relative rounded-xl">
@@ -503,6 +504,21 @@ export default function TaskCard({
                 />
               </svg>
               <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
+              {/* 生成中的卡要能停：卡在跑时占用接口额度，点了停止立刻掐断请求，不必等超时 */}
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void stopTask(task.id)
+                }}
+                title="停止生成（已出的部分不会保存）"
+                className="flex items-center gap-1 rounded-full border border-gray-300 bg-white/80 px-2 py-0.5 text-[11px] text-gray-600 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600 dark:border-white/20 dark:bg-white/10 dark:text-gray-200 dark:hover:bg-red-500/20 dark:hover:text-red-300"
+              >
+                <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                </svg>
+                停止
+              </button>
             </div>
           )}
           {task.status === 'error' && isFalReconnecting && (
