@@ -1,6 +1,6 @@
 [package]
 name = "gpt-image-playground"
-version = "1.2.28"
+version = "1.2.29"
 description = "GPT Image SOP"
 edition = "2021"
 
