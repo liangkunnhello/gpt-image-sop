@@ -8,7 +8,7 @@
 
 import { imageSizeFromDataUrl } from './imageDimensions'
 import { calculateImageSize, type SizeTier } from './size'
-import { isSizeSupported } from './sizeCapability'
+import { DEFAULT_CAPABILITY, isSizeSupported, maxSizeForRatio, type SizeCapability } from './sizeCapability'
 
 function gcd(a: number, b: number): number {
   return b === 0 ? a : gcd(b, a % b)
@@ -35,6 +35,34 @@ export function sizeForReferenceImage(dataUrl: string, tier: SizeTier = '2K'): s
   const size = calculateImageSize(tier, `${width / divisor}:${height / divisor}`)
   if (!size) return null
   return isSizeSupported(size) ? size : null
+}
+
+/**
+ * 参考图比例 → 渠道支持得起的**最大**尺寸（4K 优先，不支持就退 2K / 1K）。
+ *
+ * SOP 模式下上传参考图，画幅基本上就是跟着这张图走的：与其让用户再手动挑一次，
+ * 或者干脆留在 auto 让渠道自己猜，不如直接按它的比例取能出的最大尺寸 ——
+ * 后续套后处理模板时像素够用，也不会出现「图是竖的、出来是方的」。
+ *
+ * 读不出尺寸、或比例极端到算不出合适尺寸时返回 null，调用方保持原来的设置。
+ */
+export function maxSizeForReferenceImage(
+  dataUrl: string,
+  capability: SizeCapability = DEFAULT_CAPABILITY,
+): string | null {
+  if (!dataUrl) return null
+  const dims = imageSizeFromDataUrl(dataUrl)
+  if (!dims) return null
+
+  const width = Math.round(dims.width)
+  const height = Math.round(dims.height)
+  if (!(width > 0 && height > 0)) return null
+
+  // 约成最简比，maxSizeForRatio 内部才能命中常用比例预设
+  const divisor = gcd(width, height)
+  if (!divisor) return null
+
+  return maxSizeForRatio(`${width / divisor}:${height / divisor}`, capability)?.size ?? null
 }
 
 /**

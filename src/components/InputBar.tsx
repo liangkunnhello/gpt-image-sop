@@ -45,6 +45,7 @@ import SopExtraPicker from './SopExtraPicker'
 import CustomCopyPicker from './CustomCopyPicker'
 import { buildCopyPrefix, mergeTaskCopy } from '../lib/customCopy'
 import { arkSizeHint, toArkSize } from '../lib/arkSize'
+import { maxSizeForReferenceImage } from '../lib/referenceSize'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import PromptOptimizeModal from './PromptOptimizeModal'
@@ -1145,10 +1146,24 @@ export default function InputBar() {
     }
     uploadingRef.current = true
     const startedAt = Date.now()
+    // 记下导入前的图片 id：导入是按 id 追加的，差集就能拿到「这一批新增的」
+    const imagesBefore = new Set(useStore.getState().inputImages.map((img) => img.id))
     try {
       const { added, discarded, overflow, failed } = await addImagesFromFiles(list, {
         limit: Number.isFinite(imageLimit) ? imageLimit : undefined,
       })
+      /**
+       * SOP 模式：画幅跟着刚上传的参考图走。
+       *
+       * SOP 的参考图就是成品图的样子（比例、构图），尺寸留在 auto 让渠道猜很容易出成别的比例，
+       * 手动挑一次又要对着原图算比例。这里直接按这张图的比例取「能出的最大尺寸」。
+       * 只在上传动作之后触发，所以用户之后自己改尺寸不会被顶掉。
+       */
+      if (sopMode && added > 0) {
+        const fresh = useStore.getState().inputImages.find((img) => !imagesBefore.has(img.id))
+        const size = fresh ? maxSizeForReferenceImage(fresh.dataUrl) : null
+        if (size) setParams({ size })
+      }
       // 大批量导入给一次结果反馈；单张小图不打扰
       if (list.length > 1 || failed > 0 || discarded > 0) {
         const consumed = Date.now() - startedAt

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { sizeForReferenceImage, sizeOverridesForMixedRatios } from './referenceSize'
+import { sizeForReferenceImage, sizeOverridesForMixedRatios, maxSizeForReferenceImage } from './referenceSize'
 
 function toDataUrl(bytes: Uint8Array, mime = 'image/png') {
   let bin = ''
@@ -18,6 +18,35 @@ function pngDataUrl(width: number, height: number) {
   new DataView(bytes.buffer).setUint32(20, height)
   return toDataUrl(bytes)
 }
+
+describe('maxSizeForReferenceImage（SOP 上传图后自动定画幅）', () => {
+  it('常用比例取该比例能出的最大尺寸（4K 档）', () => {
+    expect(maxSizeForReferenceImage(pngDataUrl(1920, 1080))).toBe('3840x2160')
+    expect(maxSizeForReferenceImage(pngDataUrl(1080, 1920))).toBe('2160x3840')
+    expect(maxSizeForReferenceImage(pngDataUrl(1024, 1024))).toBe('2880x2880')
+  })
+
+  it('比 2K 基准更大 —— 这才是「最大尺寸」和「基准尺寸」的区别', () => {
+    expect(sizeForReferenceImage(pngDataUrl(1536, 2048))).toBe('1536x2048')
+    expect(maxSizeForReferenceImage(pngDataUrl(1536, 2048))).toBe('2400x3200')
+  })
+
+  it('读不出尺寸的图不写死尺寸，交给调用方保持原设置', () => {
+    expect(maxSizeForReferenceImage('')).toBeNull()
+    expect(maxSizeForReferenceImage('data:image/png;base64,AAAA')).toBeNull()
+    expect(maxSizeForReferenceImage('not-a-data-url')).toBeNull()
+  })
+
+  it('非常用比例也算得出，且落在渠道允许范围内', () => {
+    const size = maxSizeForReferenceImage(pngDataUrl(1000, 800))
+    expect(size).toMatch(/^\d+x\d+$/)
+    const [width, height] = size!.split('x').map(Number)
+    expect(Math.min(width, height)).toBeGreaterThanOrEqual(1024)
+    expect(Math.max(width, height)).toBeLessThanOrEqual(4096)
+    // 比例要和原图接近（5:4）
+    expect(Math.abs(width / height - 1.25)).toBeLessThan(0.05)
+  })
+})
 
 describe('sizeForReferenceImage', () => {
   it('横图取同比例的 2K 基准尺寸', () => {
