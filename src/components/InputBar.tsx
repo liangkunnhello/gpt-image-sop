@@ -42,6 +42,8 @@ import { enqueueSopJobs, splitReferenceGroups } from '../lib/sopPipeline'
 import { extraContents, hasExtra, resolveExtraIds } from '../lib/extraRequirements'
 import { hasImageTag, imageFilesFromHtmlAsync, imageFilesFromText } from '../lib/clipboardImages'
 import SopExtraPicker from './SopExtraPicker'
+import CustomCopyPicker from './CustomCopyPicker'
+import { buildCopyPrefix, mergeTaskCopy } from '../lib/customCopy'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import PromptOptimizeModal from './PromptOptimizeModal'
@@ -619,6 +621,15 @@ export default function InputBar() {
     : undefined
 
   /** 只负责把任务卡推进后台队列，立即返回，不阻塞输入和其他操作 */
+  /**
+   * 本次出图用的文案 = 本次自定义文案（前） + 该方向所选卖点（后）。
+   * 三种模式共用这一份，避免「某个模式不吃自定义文案」这种不一致。
+   * 自定义文案为空时结果就是卖点原文，与改造前完全一致。
+   */
+  const taskCopyText = useCallback(() => {
+    return mergeTaskCopy(useStore.getState().customCopy, pickedPoint?.content)
+  }, [pickedPoint])
+
   const runSop = useCallback((options: SopRunOptions) => {
     setSopSplitOpen(false)
     // 三个板块合成一份再发：卖点排最前并写死优先级，避免被系统提示词里的文案盖掉
@@ -631,7 +642,8 @@ export default function InputBar() {
     const skipOverlay = !hasExtra(sopSnapshot.extraRequirements, extraIds, 'avoid-overlay')
     const bundle = buildPromptBundle({
       systemPrompt: options.systemPromptText,
-      point: pickedPoint?.content,
+      // 自定义文案在前、所选卖点在后；没填自定义文案时就是卖点原文
+      point: taskCopyText(),
       style: pickedStyle?.content,
       extras,
     })
@@ -657,8 +669,10 @@ export default function InputBar() {
       skipOverlay,
       // 输入框原文：这两种模式不拿它生成，但「复用配置」要能原样还原回输入框
       inputPrompt: useStore.getState().prompt,
+      // 本次文案那一栏：已经合进 copyText，这里只供「复用配置」还原
+      customCopy: useStore.getState().customCopy,
     })))
-  }, [inputImages, pickedPoint, pickedStyle])
+  }, [inputImages, pickedStyle, taskCopyText])
 
   /** 变量模式：把任务卡推进后台队列，立即返回；参考图只用于提取策略，不参与生图 */
   const runVariable = useCallback((options: VariableRunOptions) => {
@@ -686,7 +700,8 @@ export default function InputBar() {
       imageIds: group.map((img) => img.id),
       variablePromptText,
       variablePromptName: options.variablePromptName,
-      copyText: options.copyText,
+      // 弹窗里选的卖点 + 本次自定义文案合成一份（自定义在前）
+      copyText: mergeTaskCopy(useStore.getState().customCopy, options.copyText),
       styleText: options.styleText,
       fillsPerCard: options.fillsPerCard,
       directionId: options.directionId,
@@ -700,6 +715,8 @@ export default function InputBar() {
       skipExtract: options.skipExtract,
       // 输入框原文：复用配置时原样还原，不拿生成的提示词顶替
       inputPrompt: useStore.getState().prompt,
+      // 本次文案那一栏：已经合进 copyText，这里只供「复用配置」还原
+      customCopy: useStore.getState().customCopy,
     })))
   }, [inputImages, fixedImages, variableImages])
 
@@ -722,13 +739,14 @@ export default function InputBar() {
       setSopSplitOpen(true)
       return
     }
-    // 普通模式：选中的卖点 / 风格拼在提示词前面一起发出去
-    const presetPrefix = [
-      pickedPoint?.content ? `卖点：${pickedPoint.content}` : '',
-      pickedStyle?.content ? `风格：${pickedStyle.content}` : '',
-    ].filter(Boolean).join('\n')
+    // 普通模式：本次文案 + 卖点 / 风格拼在提示词前面一起发出去
+    const presetPrefix = buildCopyPrefix({
+      customCopy: useStore.getState().customCopy,
+      point: pickedPoint?.content,
+      style: pickedStyle?.content,
+    })
     void submitTask({ promptPrefix: presetPrefix })
-  }, [appMode, sopMode, variableMode, inputImages.length, fixedImages.length, variableImages.length, pickedPoint, pickedStyle])
+  }, [appMode, sopMode, variableMode, inputImages.length, fixedImages.length, variableImages.length, pickedPoint, pickedStyle, taskCopyText])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -2197,6 +2215,7 @@ export default function InputBar() {
                 <SopSystemPromptPicker scopeIds={sopScopeIds} directionId={pickerDirectionId} />
               )}
               <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
+              <CustomCopyPicker />
               <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
               <SopExtraPicker />
             </div>
@@ -2206,6 +2225,7 @@ export default function InputBar() {
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <VariablePromptPicker scopeIds={sopScopeIds} directionId={pickerDirectionId} />
               <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
+              <CustomCopyPicker />
               <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
               <SopExtraPicker />
             </div>
@@ -2216,6 +2236,7 @@ export default function InputBar() {
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <PlainImageModeSwitch />
               <SopPresetPicker kind="point" label="卖点" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
+              <CustomCopyPicker />
               <SopPresetPicker kind="style" label="风格" directionId={pickerDirectionId} scopeIds={sopScopeIds} />
               <SopExtraPicker />
             </div>

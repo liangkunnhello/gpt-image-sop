@@ -591,6 +591,11 @@ export interface VariableJobRequest {
    */
   inputPrompt?: string
   /**
+   * 发送瞬间「本次文案」那一栏的内容。
+   * 已经合进 copyText 参与生成，这里只是为了「复用配置」能把它还原回输入区。
+   */
+  customCopy?: string
+  /**
    * 图生图：每条提示词都带上的固定图（产品实拍、包装等）。
    * 不传就是原来「纯靠提示词出图」的行为。
    */
@@ -781,6 +786,8 @@ async function runJob(job: VariableJobRequest) {
         mode: 'variable',
         // 输入框原文：变量模式不拿它生成，只是「复用配置」时要原样还原回输入框
         prompt: job.inputPrompt?.trim() || undefined,
+        // 「本次文案」那一栏：复用配置时原样还原回去
+        customCopy: job.customCopy?.trim() || undefined,
         fixedImageIds: (job.fixedImages ?? []).map((img) => img.id),
         variableImageIds: (job.variableImages ?? []).map((img) => img.id),
       },

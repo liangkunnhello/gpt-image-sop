@@ -318,6 +318,11 @@ export interface TaskInputSnapshot {
    * 复用时会丢掉池里其他图，所以整池在这里补全。
    */
   variableImageIds?: string[]
+  /**
+   * 发送瞬间「本次文案」那一栏的内容。
+   * 只影响本次出图的图上文字，复用配置时要能原样还原回去。
+   */
+  customCopy?: string
 }
 
 export interface TaskRecord {

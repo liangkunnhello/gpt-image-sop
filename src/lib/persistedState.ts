@@ -15,6 +15,8 @@ export interface PersistedAppState {
   plainImageMode?: 'merge' | 'batch'
   prompt?: string
   inputImages?: InputImage[]
+  /** 本次自定义文案：会一直被记住，直到用户手动清掉 */
+  customCopy?: string
   dismissedCodexCliPrompts: string[]
   appMode: AppMode
   galleryInputDraft: AgentInputDraft | null
@@ -112,6 +114,7 @@ export function createPersistedState(state: PersistedStateSource, includeLegacyA
           inputImages: galleryInputDraft?.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) ?? [],
         }
       : {}),
+    customCopy: state.customCopy ?? '',
     dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
     appMode: state.appMode,
     galleryInputDraft: settings.persistInputOnRestart && galleryInputDraft
@@ -228,6 +231,9 @@ export function normalizePersistedState(
       // 赞助弹窗自动弹出已关闭：恢复时强制为关闭，避免历史持久化值让弹窗重新出现
       supportPromptOpen: false,
       supportPromptSkippedForImportedData: Boolean(persistedState.supportPromptSkippedForImportedData),
+      // 自定义文案不受「重启后恢复输入」开关约束：它是用户特意留着的一栏，
+      // 不能因为关了输入恢复就每次重启都被清掉
+      customCopy: typeof persistedState.customCopy === 'string' ? persistedState.customCopy : '',
       prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
       inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
       maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,

@@ -8,7 +8,7 @@ import { hasActiveDataOperations, hasInterruptibleOperations, trackDataTransfer 
 import { cancelDataProgress, useDataProgress } from './lib/dataProgress'
 import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, remapAgentRoundMentionsForPathChange } from './lib/agentConversationState'
 import { cleanStaleAgentInputDrafts } from './lib/inputDraftState'
-import { normalizePersistedState } from './lib/persistedState'
+import { createPersistedState, normalizePersistedState } from './lib/persistedState'
 import { setPresetConfig } from './lib/presetConfig'
 import { FetchConnectError } from './lib/platform'
 vi.mock('./lib/db', () => {
@@ -6716,5 +6716,95 @@ describe('停止正在生成的任务', () => {
     expect(after.status).not.toBe('running')
     expect(after.falRecoverable).toBeFalsy()
     expect(after.customRecoverable).toBeFalsy()
+  })
+})
+
+describe('本次文案：只对这一批生效，且会被记住', () => {
+  const openaiProfile = createDefaultOpenAIProfile({ id: 'custom-copy-profile', apiKey: 'custom-copy-key' })
+
+  beforeEach(async () => {
+    await clearTasks()
+    useStore.setState({
+      settings: normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        profiles: [openaiProfile],
+        activeProfileId: openaiProfile.id,
+      }),
+      prompt: '',
+      customCopy: '',
+      inputImages: [],
+      maskDraft: null,
+      params: { ...DEFAULT_PARAMS },
+      tasks: [],
+      showSettings: false,
+      toast: null,
+      reusedTaskApiProfileId: null,
+      reusedTaskApiProfileName: null,
+      reusedTaskApiProfileMissing: false,
+      showToast: vi.fn(),
+      setConfirmDialog: vi.fn(),
+    })
+  })
+
+  it('默认是空的，不影响原有出图（只用卖点）', () => {
+    expect(useStore.getState().customCopy).toBe('')
+  })
+
+  it('填了就记住，不会因为提交或清空输入框被自动清掉', () => {
+    useStore.getState().setCustomCopy('赔付总限额600万')
+    expect(useStore.getState().customCopy).toBe('赔付总限额600万')
+    // 清空输入框（提交后按设置清输入）不该顺手把这一栏也清了
+    useStore.getState().setPrompt('')
+    expect(useStore.getState().customCopy).toBe('赔付总限额600万')
+  })
+
+  it('手动清空才回到空', () => {
+    useStore.getState().setCustomCopy('写点什么')
+    useStore.getState().setCustomCopy('')
+    expect(useStore.getState().customCopy).toBe('')
+  })
+
+  it('复用配置：快照里记了本次文案就原样还原', async () => {
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: '提示词',
+      inputImageIds: [],
+      inputSnapshot: {
+        mode: 'sop',
+        prompt: '',
+        customCopy: '这张卡当时的本次文案',
+        fixedImageIds: [],
+        variableImageIds: [],
+      },
+    }))
+    expect(useStore.getState().customCopy).toBe('这张卡当时的本次文案')
+  })
+
+  it('复用配置：快照里没记就清空，不让上一批的文案混进来', async () => {
+    useStore.getState().setCustomCopy('上一批留下的文案')
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      apiProfileId: openaiProfile.id,
+      prompt: '普通模式的提示词',
+      inputImageIds: [],
+      inputSnapshot: { mode: 'plain', prompt: '普通模式的提示词', fixedImageIds: [], variableImageIds: [] },
+    }))
+    expect(useStore.getState().customCopy).toBe('')
+  })
+})
+
+describe('本次文案的持久化', () => {
+  it('进持久化、并能在恢复时读回（不受「重启后恢复输入」开关约束）', () => {
+    const state = {
+      ...useStore.getState(),
+      customCopy: '要留着的文案',
+      settings: { ...normalizeSettings(DEFAULT_SETTINGS), persistInputOnRestart: false },
+    }
+    const persisted = createPersistedState(state)
+    expect(persisted.customCopy).toBe('要留着的文案')
+
+    const restored = normalizePersistedState(persisted, state)
+    expect(restored?.state.customCopy).toBe('要留着的文案')
   })
 })

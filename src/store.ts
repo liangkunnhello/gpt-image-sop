@@ -346,6 +346,13 @@ interface AppState {
   prompt: string
   setPrompt: (p: string) => void
   /**
+   * 本次的自定义文案（输入框上方那一栏「本次文案」）。
+   * 只影响出图时的图上文字，不参与输入框提交；会一直被记住，直到手动清掉。
+   */
+  customCopy: string
+  setCustomCopy: (text: string) => void
+
+  /**
    * 输入框最后一次的选区（可见文本偏移），供画板等外部入口插入胶囊并覆盖选中内容；未聚焦过时为 null。
    * 同时记下当时的提示词，提示词被其他途径替换后选区即失效，使用前需比对。
    */
@@ -808,6 +815,9 @@ export const useStore = create<AppState>()(
       // Input
       prompt: '',
       setPrompt: (prompt) => set((s) => syncActiveInputDraft(s, { prompt })),
+      customCopy: '',
+      setCustomCopy: (customCopy) => set({ customCopy }),
+
       promptSelection: null,
       setPromptSelection: (selection) => set((s) => ({ promptSelection: { ...selection, prompt: s.prompt } })),
       inputImages: [],
@@ -1935,6 +1945,11 @@ interface SubmitOptions {
 interface SubmitInput {
   settings: AppSettings
   prompt: string
+  /**
+   * 提交瞬间「本次文案」那一栏的内容。
+   * 排队执行时用户可能已经改了它，所以跟 prompt 一样要快照下来。
+   */
+  customCopy: string
   inputImages: InputImage[]
   maskDraft: MaskDraft | null
   params: TaskParams
@@ -1958,6 +1973,7 @@ function captureSubmitInput(): SubmitInput {
   return {
     settings: state.settings,
     prompt: state.prompt,
+    customCopy: state.customCopy,
     inputImages: state.inputImages,
     maskDraft: state.maskDraft,
     params: state.params,
@@ -2289,6 +2305,7 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
       plainImageMode: planImageMode,
       fixedImageIds: input.fixedImages.map((img) => img.id),
       variableImageIds: orderedInputImages.map((img) => img.id),
+      customCopy: input.customCopy?.trim() || undefined,
     }
     // 批量模式每个请求只带一张参考图。尺寸填 auto 又横竖混排时，渠道会把画幅统一成一个，
     // 所以同批参考图比例不一致时，按各请求自己那张图的比例取 2K 基准尺寸；
@@ -2359,6 +2376,7 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
       plainImageMode: input.plainImageMode,
       fixedImageIds: input.fixedImages.map((img) => img.id),
       variableImageIds: orderedInputImages.map((img) => img.id),
+      customCopy: input.customCopy?.trim() || undefined,
     }
     await startTask(finalPrompt, undefined, undefined, undefined, undefined, fallbackSnapshot)
     useStore.getState().showToast('任务已提交', 'success')
@@ -2446,6 +2464,7 @@ async function runBatchPrompts(
         plainImageMode: useStore.getState().plainImageMode,
         fixedImageIds: useStore.getState().fixedImages.map((img) => img.id),
         variableImageIds: useStore.getState().inputImages.map((img) => img.id),
+        customCopy: useStore.getState().customCopy.trim() || undefined,
       }
       const taskId = await startTask(taskPrompt, undefined, undefined, undefined, undefined, snapshot)
       await waitForTaskSettled(taskId, isStopped)
@@ -5531,7 +5550,7 @@ export async function retryTask(task: TaskRecord) {
 
 /** 复用配置 */
 export async function reuseConfig(task: TaskRecord) {
-  const { settings, setPrompt, setParams, setInputImages, setFixedImages, setVariableImages, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile } = useStore.getState()
+  const { settings, setPrompt, setCustomCopy, setParams, setInputImages, setFixedImages, setVariableImages, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile } = useStore.getState()
   const normalizedSettings = normalizeSettings(settings)
   const currentProfile = getActiveApiProfile(settings)
   const taskProfile = normalizedSettings.reuseTaskApiProfileTemporarily ? getTaskApiProfile(normalizedSettings, task) : null
@@ -5690,6 +5709,13 @@ export async function reuseConfig(task: TaskRecord) {
   const restorePrompt = snapshot
     ? (snapshot.mode === 'plain' ? (snapshot.prompt ?? task.prompt) : (snapshot.prompt ?? ''))
     : (legacyNonPlain ? '' : task.prompt)
+  /**
+   * 「本次文案」那一栏：快照里记了就原样还原，没记（老任务）就清空。
+   *
+   * 不清空会出事：这一栏是「一直记住直到手动清掉」的，复用一张旧卡却留着
+   * 上一批的文案，出图就会带着不该有的字。所以宁可给空。
+   */
+  setCustomCopy(snapshot?.customCopy ?? '')
   // 部分参考图可能已被删除，按图片 id 重新对齐提示词中的图片序号，避免评论和提及错位到其他图片
   setPrompt(remapImageMentionsForOrder(restorePrompt, inputIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)

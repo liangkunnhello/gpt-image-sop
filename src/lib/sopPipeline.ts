@@ -683,6 +683,11 @@ export interface SopJobRequest {
    */
   inputPrompt?: string
   /**
+   * 发送瞬间「本次文案」那一栏的内容。
+   * 已经合进 copyText 参与生成，这里只是为了「复用配置」能把它还原回输入区。
+   */
+  customCopy?: string
+  /**
    * 不把后处理预留区写进提示词。由「额外要求」里“避开 Logo / 警示语位置”那条控制：
    * 用户关掉它就不该再算预留区，否则会继续强行避让。
    */
@@ -827,6 +832,8 @@ async function runJob(job: SopJobRequest) {
       inputSnapshot: {
         mode: 'sop',
         prompt: job.inputPrompt?.trim() || undefined,
+        // 「本次文案」那一栏：复用配置时原样还原回去
+        customCopy: job.customCopy?.trim() || undefined,
         fixedImageIds: [],
         variableImageIds: [],
       },
@@ -950,6 +957,7 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
     directionId: input.directionId,
     prompts,
     promptIndexOffset: input.existingCount,
+    // 补充生图的入口没有「本次文案」这一栏，快照里不记
     inputSnapshot: { mode: 'sop', fixedImageIds: [], variableImageIds: [] },
   })
 }
