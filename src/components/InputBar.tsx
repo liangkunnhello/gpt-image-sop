@@ -652,8 +652,11 @@ export default function InputBar() {
     // 没有参考图时 splitEven 会返回一个空组：这一组只靠系统提示词与卖点反推文字版 SOP
     // 参考图不进生图接口，只按用户选的卡数均分，不限张数、也不再自动多分卡
     const groups = splitReferenceGroups(inputImages, options.groupCount)
+    // 先把参数固定下来：反推要跑几分钟，中途改尺寸不该影响这一批
+    const enqueueParams = useStore.getState().params
     enqueueSopJobs(groups.map((group, index) => ({
       label: `第 ${index + 1}/${groups.length} 张卡`,
+      params: enqueueParams,
       imageDataUrls: group.map((img) => img.dataUrl),
       imageIds: group.map((img) => img.id),
       systemPromptText: bundle.merged,
@@ -698,6 +701,8 @@ export default function InputBar() {
       : [[]]
     enqueueVariableJobs(referenceGroups.map((group, index) => ({
       label: `第 ${index + 1}/${referenceGroups.length} 张卡`,
+      // 同 SOP：参数在入队时定死，提取策略期间改尺寸不影响这一批
+      params: useStore.getState().params,
       imageDataUrls: group.map((img) => img.dataUrl),
       imageIds: group.map((img) => img.id),
       variablePromptText,

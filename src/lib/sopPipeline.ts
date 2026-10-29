@@ -1,4 +1,4 @@
-import type { ApiProfile } from '../types'
+import type { ApiProfile, TaskParams } from '../types'
 import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, updateTaskInStore, useStore } from '../store'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
@@ -692,6 +692,14 @@ export interface SopJobRequest {
    * 用户关掉它就不该再算预留区，否则会继续强行避让。
    */
   skipOverlay?: boolean
+  /**
+   * 入队那一刻的输入参数（尺寸 / 质量 / 后处理开关…）。
+   *
+   * 反推 SOP、写提示词要跑好几分钟，这期间用户完全可能回去改尺寸。
+   * 这一批的「预留区模板」是按发送时的尺寸挑的，出图却用最新尺寸的话，
+   * Logo / 警示语的位置就对不上了 —— 所以从入队起就把参数定死，全程用这一份。
+   */
+  params: TaskParams
 }
 
 /** 同时在跑的任务卡数量 */
@@ -717,16 +725,18 @@ async function runJob(job: SopJobRequest) {
   const settings = state.settings
   const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
   if (!profile) throw new Error('没有可用的接口配置')
+  // 参数以入队那一刻为准：反推期间用户改了尺寸也不影响这一批（见 SopJobRequest.params）
+  const runParams = job.params ?? state.params
 
   // 后处理预留区：出图后要在固定位置叠 Logo / 警示语，写提示词时就让模型避开
   // 关掉后处理就不用留位了，画面可以画满
   const sopState = useSopStore.getState()
   // skipOverlay 来自「额外要求」里“避开 Logo / 警示语位置”有没有选
-  const avoidTemplate = job.skipOverlay || sopState.avoidOverlay === false || state.params.post_process === false
+  const avoidTemplate = job.skipOverlay || sopState.avoidOverlay === false || runParams.post_process === false
     ? null
     : pickAvoidTemplate(
       resolvePostTemplates(sopState.postTemplates, sopState.directions, job.directionId).templates,
-      state.params.size,
+      runParams.size,
       job.imageDataUrls,
     )
   const avoidHint = buildAvoidHint(avoidTemplate)
@@ -813,6 +823,8 @@ async function runJob(job: SopJobRequest) {
     void submitSopTasks({
       sopJobId,
       sopName: sopTitleOf(sop, job.label),
+      // 出图沿用入队时的参数，别用此刻的全局参数（中途可能被改过）
+      params: runParams,
       // 用的是存档 SOP 时不记系统提示词，详情页改显示 SOP 名字
       systemPromptName: job.savedSopName
         ? ''
@@ -919,14 +931,16 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
   const settings = state.settings
   const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
   if (!profile) throw new Error('没有可用的接口配置')
+  // 写提示词时按这一刻的参数算预留区，出图也必须用同一份，否则位置的依据就变了
+  const runParams = state.params
 
   // 与正常出图一致：后处理要叠 Logo / 警示语时，提示词得避开预留区
   const sopState = useSopStore.getState()
-  const avoidHint = sopState.avoidOverlay === false || state.params.post_process === false
+  const avoidHint = sopState.avoidOverlay === false || runParams.post_process === false
     ? ''
     : buildAvoidHint(pickAvoidTemplate(
       resolvePostTemplates(sopState.postTemplates, sopState.directions, input.directionId).templates,
-      state.params.size,
+      runParams.size,
     ))
 
   const count = clampPromptCount(input.count)
@@ -950,6 +964,7 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
   return await submitSopTasks({
     sopJobId: input.sopJobId,
     sopName: input.sopName,
+    params: runParams,
     // 补充生图不改 SOP 来源，避免把这张卡的「用的是什么」覆盖掉
     systemPromptName: '',
     savedSopName: input.savedSopName,

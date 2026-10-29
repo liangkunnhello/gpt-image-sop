@@ -9,7 +9,7 @@
  * 所以任务卡、详情页、筛选、下载都不用另做一套。
  */
 
-import type { ApiProfile, InputImage, VariableDimension, VariablePrompt, VariableStrategy } from '../types'
+import type { ApiProfile, InputImage, TaskParams, VariableDimension, VariablePrompt, VariableStrategy } from '../types'
 import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, updateTaskInStore, useStore } from '../store'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
@@ -605,6 +605,14 @@ export interface VariableJobRequest {
    * 与固定图一起决定每条提示词发给接口的输入图。
    */
   variableImages?: InputImage[]
+  /**
+   * 入队那一刻的输入参数（尺寸 / 质量 / 后处理开关…）。
+   *
+   * 提取策略、写提示词要跑几分钟，这期间用户可能回去改尺寸。
+   * 预留区模板是按入队时的尺寸挑的，出图再取最新尺寸就会错位，
+   * 所以从入队起把参数定死，整条链路用同一份。
+   */
+  params: TaskParams
 }
 
 const QUEUE_LIMIT = 10
@@ -629,14 +637,16 @@ async function runJob(job: VariableJobRequest) {
   const settings = state.settings
   const profile = settings.profiles.find((item) => item.id === settings.activeProfileId) || settings.profiles[0]
   if (!profile) throw new Error('没有可用的接口配置')
+  // 参数以入队那一刻为准：提取策略期间用户改了尺寸也不影响这一批
+  const runParams = job.params ?? state.params
 
   const sopState = useSopStore.getState()
   // 关掉后处理时不必再给 Logo / 警示语留位
-  const avoidHint = sopState.avoidOverlay === false || state.params.post_process === false
+  const avoidHint = sopState.avoidOverlay === false || runParams.post_process === false
     ? ''
     : buildAvoidHint(pickAvoidTemplate(
       resolvePostTemplates(sopState.postTemplates, sopState.directions, job.directionId).templates,
-      state.params.size,
+      runParams.size,
       job.imageDataUrls,
     ))
 
@@ -762,6 +772,8 @@ async function runJob(job: VariableJobRequest) {
     void submitSopTasks({
       sopJobId,
       sopName: strategies[0]?.name || job.label,
+      // 出图沿用入队时的参数，别用此刻的全局参数（中途可能被改过）
+      params: runParams,
       systemPromptName: job.variablePromptName,
       sopText: specText,
       directionId: job.directionId,

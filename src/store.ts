@@ -7144,6 +7144,14 @@ export async function submitSopTasks(input: {
    * SOP 与变量模式的分池情况不同，由调用方按当时的模式构造。
    */
   inputSnapshot?: TaskInputSnapshot
+  /**
+   * 出图参数（尺寸 / 质量 / 后处理开关…）。
+   *
+   * 流水线要等反推、写提示词跑完才调到这里，那已经是几分钟之后 ——
+   * 这期间用户改过的尺寸不该影响这一批（提示词里的预留区是按入队时尺寸算的），
+   * 所以由调用方把入队那一刻的参数传进来，没传才退回当前全局参数。
+   */
+  params?: TaskParams
 }): Promise<string[]> {
   const state = useStore.getState()
   const settings = state.settings
@@ -7162,7 +7170,7 @@ export async function submitSopTasks(input: {
     return {
       id: genId(),
       prompt,
-      params: { ...state.params, n: 1 },
+      params: { ...(input.params ?? state.params), n: 1 },
       apiProvider: profile.provider,
       apiProfileId: profile.id,
       apiProfileName: profile.name,
