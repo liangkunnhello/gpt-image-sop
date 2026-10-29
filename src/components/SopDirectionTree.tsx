@@ -9,6 +9,7 @@ import { effectiveNodeKind, trashNodeWithTasks } from '../lib/directionTree'
 import { nearestScopeId } from '../lib/sopScope'
 import { taskMatchesChannel } from '../lib/channel'
 import { isTaskUnread } from '../lib/unread'
+import { generatingNodeIds } from '../lib/generating'
 import type { PostTemplateScope } from '../lib/applyPostTemplate'
 import LingjingImportModal from './LingjingImportModal'
 import PostTemplateModal from './PostTemplateModal'
@@ -180,16 +181,67 @@ export default function SopDirectionTree() {
     return set
   }, [cards])
 
-  /** 名字右上角的小红点：跟着文字末尾走，不占后面数字的位置 */
-  const unreadDot = (nodeId: string) => (
-    unreadNodeIds.has(nodeId) ? (
-      <span
-        title="这个归属下有未读结果"
-        aria-label="有未读结果"
-        className="absolute -right-1 -top-0.5 block h-1.5 w-1.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-900"
-      />
-    ) : null
-  )
+  /**
+   * 有任务正在生成的归属节点（含其祖先）。
+   *
+   * 用原始 tasks 而不是聚合后的 cards：同一张卡由几十条任务拼成，
+   * cards 里留下的是代表任务，它的 status 未必反映「其中有一条在跑」。
+   */
+  const generatingNodeIdsSet = useMemo(() => {
+    const alive = new Map(directions.filter((node) => !node.deletedAt).map((node) => [node.id, node]))
+    const ancestorOf = (nodeId: string): string[] => {
+      const out: string[] = []
+      const seen = new Set<string>()
+      let cursor = alive.get(nodeId)
+      while (cursor?.parentId && !seen.has(cursor.parentId)) {
+        seen.add(cursor.parentId)
+        out.push(cursor.parentId)
+        cursor = alive.get(cursor.parentId)
+      }
+      return out
+    }
+    return generatingNodeIds(
+      tasks.filter((task) => taskMatchesChannel(task, channelFilter)),
+      ancestorOf,
+    )
+  }, [tasks, directions, channelFilter])
+
+  /** 收起侧栏时也要提示「有东西在跑」：集合非空即可 */
+  const hasGenerating = generatingNodeIdsSet.size > 0
+
+  /**
+   * 状态点：未读（红）+ 正在生成（蓝，呼吸）。
+   *
+   * 两个点各自绝对定位在同一个位置会互相盖住，所以统一由一个容器排：
+   * 贴着名字末尾，两个点时并排、一个点时也在这个位置。
+   * 颜色要分开 —— 红点是「有新图等你去看」，蓝点是「还在等图出来」，两件事。
+   */
+  const statusDots = (nodeId: string) => {
+    const unread = unreadNodeIds.has(nodeId)
+    const generating = generatingNodeIdsSet.has(nodeId)
+    if (!unread && !generating) return null
+    return (
+      // 普通内联元素，跟在名字块后面，与徽章/计数同排：
+      // 既不压住名字文字，也不会因为名字太长被挤到裁剪区外
+      <span className="flex shrink-0 items-center gap-0.5">
+        {unread && (
+          <span
+            title="这个归属下有未读结果"
+            aria-label="有未读结果"
+            className="block h-1.5 w-1.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-900"
+          />
+        )}
+        {generating && (
+          <span
+            title="这个归属下正在生成"
+            aria-label="正在生成"
+            className="block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500 ring-2 ring-white dark:ring-gray-900"
+          />
+        )}
+      </span>
+    )
+  }
+
   const matches = useMemo(() => {
     const keyword = search.trim().toLowerCase()
     if (!keyword) return []
@@ -406,12 +458,22 @@ export default function SopDirectionTree() {
           <button
             type="button"
             onClick={() => setCollapsed(false)}
-            title={currentPath ? `展开产品-方向（当前归属：${currentPath}）` : '展开产品-方向'}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-800 dark:border-white/10 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-white/[0.08]"
+            title={[
+              currentPath ? `展开产品-方向（当前归属：${currentPath}）` : '展开产品-方向',
+              // 收起来了也得知道「下面有东西在跑」，否则要展开才发现
+              hasGenerating ? '有任务正在生成' : '',
+            ].filter(Boolean).join(' · ')}
+            className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-800 dark:border-white/10 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-white/[0.08]"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 6l6 6-6 6" />
             </svg>
+            {hasGenerating && (
+              <span
+                aria-label="有任务正在生成"
+                className="absolute -right-0.5 -top-0.5 block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500 ring-2 ring-white dark:ring-gray-800"
+              />
+            )}
           </button>
         </div>
       </aside>
@@ -492,11 +554,11 @@ export default function SopDirectionTree() {
           className={rowClass(highlight)}
         >
           {highlight.current && currentBar}
-          <span className="min-w-0 flex-1">
-            <span className="relative inline-block max-w-full align-middle">
+          <span className="flex min-w-0 flex-1 items-center gap-0.5">
+            <span className="relative inline-block min-w-0 max-w-full align-middle">
               <span className="block truncate">{node.name}</span>
-              {unreadDot(node.id)}
             </span>
+            {statusDots(node.id)}
           </span>
           {ownTemplates.length > 0 && templateBadge(ownTemplates.length, ownTemplates.filter((item) => item.enabled).length)}
           {counts.get(node.id) ? tailBadge(counts.get(node.id) ?? 0) : <span className="shrink-0 text-[11px] tabular-nums text-gray-300">0</span>}
@@ -718,7 +780,7 @@ export default function SopDirectionTree() {
                         <span className="min-w-0 flex-1">
                           <span className="relative inline-block max-w-full align-middle">
                             <span className="block truncate">{category.name}</span>
-                            {unreadDot(category.id)}
+                            {statusDots(category.id)}
                           </span>
                         </span>
                         {tailBadge(counts.get(category.id) ?? 0)}
@@ -763,7 +825,7 @@ export default function SopDirectionTree() {
                                   <span className="min-w-0 flex-1">
                                     <span className="relative inline-block max-w-full align-middle">
                                       <span className="block truncate">{product.name}</span>
-                                      {unreadDot(product.id)}
+                                      {statusDots(product.id)}
                                     </span>
                                   </span>
                                   {promptCount(product.id) > 0 && promptBadge(promptCount(product.id))}
