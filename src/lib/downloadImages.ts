@@ -5,7 +5,7 @@ import { getNumberedFileNameBase, sanitizeFileNamePart } from './exportFileName'
 import { ensureImageCached } from './imageCache'
 import { apiFetch, isTauri } from './platform'
 import { createSaveFolder, pickSaveDir, saveFile, saveFileToDir, type SaveDir } from './saveFile'
-import { buildTaskFolderName, type TaskFolderContext } from './taskFolderName'
+import { buildTaskFolderName, type TaskCopySource, type TaskFolderContext } from './taskFolderName'
 import { pickWebFolderRoot, supportsWebFolder, writeFilesToWebFolder } from './webFolder'
 
 const MIME_EXTENSIONS: Record<string, string> = {
@@ -62,7 +62,7 @@ export interface TaskFolderDownloadOptions {
  * 重名时客户端自动补 -02、-03；网页版没有文件夹，调用方应退回原来的下载方式。
  */
 export async function downloadTaskImagesToFolder(
-  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName'>,
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName'> & TaskCopySource,
   options: TaskFolderDownloadOptions,
 ): Promise<DownloadImagesResult> {
   const imageIds = task.outputImages || []
@@ -77,6 +77,7 @@ export async function downloadTaskImagesToFolder(
     direction: options.direction,
     size: task.params?.size,
     sopName: task.sopName,
+    copy: task.inputSnapshot?.customCopy,
     pointName: task.sopPointName,
     custom: options.custom,
   }
@@ -119,6 +120,8 @@ export interface TaskCardFolderTask {
   sopName?: string
   /** 提交时选中的卖点名，命名模板 {point} 用 */
   sopPointName?: string
+  /** 「本次文案」记在输入快照里，命名模板 {copy} 用（排在卖点前） */
+  inputSnapshot?: { customCopy?: string }
   sopDirectionId?: string
 }
 
@@ -154,6 +157,7 @@ export async function downloadTaskCardsToFolders(
           direction: names.direction,
           size: task.params?.size,
           sopName: task.sopName,
+          copy: task.inputSnapshot?.customCopy,
           pointName: task.sopPointName,
           custom: options.custom,
         }) || `task-${task.id}`
@@ -185,7 +189,7 @@ export async function downloadTaskCardsToFolders(
  * 不支持的浏览器返回 webUnsupported，调用方退回原来的下载方式。
  */
 export async function downloadTaskImagesToWebFolder(
-  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName'>,
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName'> & TaskCopySource,
   options: TaskFolderDownloadOptions,
 ): Promise<DownloadImagesResult & { webUnsupported?: boolean }> {
   const imageIds = task.outputImages || []
@@ -201,6 +205,7 @@ export async function downloadTaskImagesToWebFolder(
     direction: options.direction,
     size: task.params?.size,
     sopName: task.sopName,
+    copy: task.inputSnapshot?.customCopy,
     pointName: task.sopPointName,
     custom: options.custom,
   }) || `task-${task.id}`
@@ -259,7 +264,8 @@ export async function downloadTaskCardsToWebFolders(
         direction: names.direction,
         size: task.params?.size,
         sopName: task.sopName,
-    pointName: task.sopPointName,
+        copy: task.inputSnapshot?.customCopy,
+        pointName: task.sopPointName,
         custom: options.custom,
       }) || `task-${task.id}`
       const files: Array<{ name: string; blob: Blob }> = []

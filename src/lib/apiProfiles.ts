@@ -26,7 +26,7 @@ import { isImportableConfigUrl } from './importableConfigUrl'
 import { DEFAULT_IMAGES_MODEL } from './imageModels'
 import { DEFAULT_BATCH_PROMPT_CONCURRENCY, normalizeBatchPromptConcurrency } from './batchPrompts'
 import { normalizeFontMode } from './fonts'
-import { DEFAULT_TASK_FOLDER_TEMPLATE } from './taskFolderName'
+import { DEFAULT_TASK_FOLDER_TEMPLATE, withCopyToken } from './taskFolderName'
 
 const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 const RAW_DEFAULT_API_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL)
@@ -783,10 +783,11 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     referenceImageEditAction: normalizeReferenceImageEditAction(record.referenceImageEditAction),
     zipDownloadRoutes: normalizeZipDownloadRoutes(record.zipDownloadRoutes),
     saveLocationMode: record.saveLocationMode === 'default' ? 'default' : 'ask',
-    // 允许暂时为空（正在清空重输），真正拼名字时再由 buildTaskFolderName 退回默认模板
-    taskFolderTemplate: typeof record.taskFolderTemplate === 'string'
+    // 允许暂时为空（正在清空重输），真正拼名字时再由 buildTaskFolderName 退回默认模板；
+    // 老模板到这里自动补上 {copy}（本次文案要排在卖点前），已经在用的不会重复加
+    taskFolderTemplate: withCopyToken(typeof record.taskFolderTemplate === 'string'
       ? record.taskFolderTemplate.slice(0, 200)
-      : DEFAULT_TASK_FOLDER_TEMPLATE,
+      : DEFAULT_TASK_FOLDER_TEMPLATE),
     taskFolderCustom: typeof record.taskFolderCustom === 'string' ? record.taskFolderCustom.slice(0, 40) : '',
     autoDeliver: typeof record.autoDeliver === 'boolean' ? record.autoDeliver : false,
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,

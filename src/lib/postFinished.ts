@@ -1,6 +1,6 @@
 import { call } from './dbTauri'
 import { isTauri } from './platform'
-import { buildTaskFolderName } from './taskFolderName'
+import { buildTaskFolderName, type TaskCopySource } from './taskFolderName'
 import type { TaskRecord } from '../types'
 import type { SopDirectionNode } from '../types'
 
@@ -21,7 +21,7 @@ function nameOf(directions: SopDirectionNode[], id: string | undefined): string 
  * 文件夹名沿用设置里的「任务文件夹命名」模板，和导出用的是同一套规则。
  */
 export function finishedFolderName(
-  task: Pick<TaskRecord, 'id' | 'createdAt' | 'params' | 'sopName' | 'sopPointName' | 'sopDirectionId'>,
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'params' | 'sopName' | 'sopPointName' | 'sopDirectionId'> & TaskCopySource,
   directions: SopDirectionNode[],
   template: string,
   custom: string | undefined,
@@ -33,6 +33,7 @@ export function finishedFolderName(
     direction: nameOf(directions, task.sopDirectionId),
     size: task.params?.size,
     sopName: task.sopName,
+    copy: task.inputSnapshot?.customCopy,
     pointName: task.sopPointName,
     custom,
   })

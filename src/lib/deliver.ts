@@ -123,6 +123,8 @@ export function cardFolderName(task: TaskRecord, context: DeliverContext, sizeOv
     direction: nameOf(task.sopDirectionId ?? ''),
     size: sizeOverride?.trim() || task.params?.size,
     sopName: task.sopName,
+    // 本次文案排在卖点前：它才是这一批临时换上去的那套字
+    copy: task.inputSnapshot?.customCopy,
     pointName: task.sopPointName,
     custom,
   })

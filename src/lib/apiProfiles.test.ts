@@ -1739,10 +1739,21 @@ describe('model list', () => {
 })
 
 describe('任务卡文件夹命名设置', () => {
-  it('缺省时用默认模板，自定义为空', () => {
+  it('缺省时用默认模板（本次文案排在卖点前），自定义为空', () => {
     const settings = normalizeSettings({})
-    expect(settings.taskFolderTemplate).toBe('{date}-{product}-{direction}-{size}-{sop}-{point}-{custom}')
+    expect(settings.taskFolderTemplate).toBe('{date}-{product}-{direction}-{size}-{sop}-{copy}-{point}-{custom}')
     expect(settings.taskFolderCustom).toBe('')
+  })
+
+  it('老模板自动补上 {copy}，且重复归一化不会叠加', () => {
+    const once = normalizeSettings({ taskFolderTemplate: '{date}-{point}-{custom}' })
+    expect(once.taskFolderTemplate).toBe('{date}-{copy}-{point}-{custom}')
+    const twice = normalizeSettings(once)
+    expect(twice.taskFolderTemplate).toBe('{date}-{copy}-{point}-{custom}')
+  })
+
+  it('模板暂时清空时保持为空，交给拼名字时退回默认', () => {
+    expect(normalizeSettings({ taskFolderTemplate: '' }).taskFolderTemplate).toBe('')
   })
 
   it('保留用户填的模板与自定义文案，长度截断', () => {

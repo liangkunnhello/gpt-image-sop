@@ -40,6 +40,7 @@ export default function GeneralSettingsTab({
     direction: '月亮',
     size: '1280x720',
     sopName: 'SOP名',
+    copy: '本次文案',
     pointName: '卖点名',
     custom: draft.taskFolderCustom,
   })

@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildTaskFolderName,
+  copyLabel,
   DEFAULT_TASK_FOLDER_TEMPLATE,
+  MAX_CUSTOM_COPY_CHARS,
   MAX_POINT_NAME_CHARS,
   MAX_SOP_NAME_CHARS,
   sizeLabel,
   truncatePointName,
   truncateSopName,
+  withCopyToken,
 } from './taskFolderName'
 
 describe('sizeLabel', () => {
@@ -41,6 +44,23 @@ describe('buildTaskFolderName', () => {
 
   it('没配卖点时整段跳过，不留空分隔符', () => {
     expect(buildTaskFolderName(DEFAULT_TASK_FOLDER_TEMPLATE, context)).toBe('20261021-百万医疗险-月亮-大图-SOP A-第三批')
+  })
+
+  /**
+   * 「本次文案」要排在卖点**前面**。
+   * 之前只在生图提示词里做了这个顺序，文件名模板里根本没这个占位符，
+   * 导出的文件夹名里就看不到这一批临时换上的文案。
+   */
+  it('本次文案排在卖点前面', () => {
+    expect(buildTaskFolderName(DEFAULT_TASK_FOLDER_TEMPLATE, { ...context, copy: '住院直付', pointName: '小病住院' }))
+      .toBe('20261021-百万医疗险-月亮-大图-SOP A-住院直付-小病住院-第三批')
+  })
+
+  it('本次文案是多行时压成一行再截断，不会把名字撑开', () => {
+    const name = copyLabel('住院直付\n不限社保范围\n0免赔')
+    expect(name.includes('\n')).toBe(false)
+    expect(Array.from(name).length).toBeLessThanOrEqual(MAX_CUSTOM_COPY_CHARS)
+    expect(name.startsWith('住院直付')).toBe(true)
   })
 
   it('卖点名和 SOP 名一样按「字」截断，超长不会撑开名字', () => {
@@ -98,5 +118,27 @@ describe('SOP 名截断', () => {
       sopName: '2D手绘风信息流广告图生图SOP（保险类·文字型主体）',
     })
     expect(name).toBe('20261026-京东保-大字报-大图-2D手绘风信')
+  })
+})
+
+describe('withCopyToken（老模板自动补 {copy}）', () => {
+  it('把 {copy} 补在 {point} 前面', () => {
+    expect(withCopyToken('{date}-{product}-{point}-{custom}')).toBe('{date}-{product}-{copy}-{point}-{custom}')
+  })
+
+  it('已经在用 {copy} 的模板原样返回，重复执行不会叠加', () => {
+    const template = '{date}-{copy}-{point}'
+    expect(withCopyToken(template)).toBe(template)
+    expect(withCopyToken(withCopyToken('{date}-{point}'))).toBe('{date}-{copy}-{point}')
+  })
+
+  it('模板里没有 {point} 就不动', () => {
+    expect(withCopyToken('{date}-{custom}')).toBe('{date}-{custom}')
+  })
+
+  it('空模板原样留着，退回默认是拼名字时的事', () => {
+    // 设置里允许清空重输，这里替它填默认值会让输入框自己长出内容
+    expect(withCopyToken('')).toBe('')
+    expect(withCopyToken('   ')).toBe('   ')
   })
 })
