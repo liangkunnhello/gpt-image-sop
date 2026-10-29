@@ -10,6 +10,7 @@ import { DEFAULT_FAL_MODEL, DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskPromptText } from '../lib/promptImageMentions'
 import { isTaskUnread } from '../lib/unread'
+import { inspectCard } from '../lib/manualInspect'
 import { visibleOutputImages } from '../lib/taskState'
 import { taskIdLabel } from '../lib/taskId'
 import { copyTaskIdToClipboard } from '../lib/copyTaskId'
@@ -79,6 +80,8 @@ export default function TaskCard({
   const [coverRatio, setCoverRatio] = useState<string>('')
   const [coverSize, setCoverSize] = useState<string>('')
   const [now, setNow] = useState(Date.now())
+  /** 正在手动跑质检：按钮转圈并禁用，避免连点重复送检（每次都要调模型） */
+  const [inspecting, setInspecting] = useState(false)
   const [isSwiping, setIsSwiping] = useState(false)
   const [swipeStartedSelected, setSwipeStartedSelected] = useState(false)
   const [swipeActionActive, setSwipeActionActive] = useState(false)
@@ -388,6 +391,44 @@ export default function TaskCard({
 
   const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
   const showModel = task.apiModel && task.apiModel !== defaultModelForProvider
+  /**
+   * 手动质检：对这张卡所有还看得见的图跑一次质检 + 重复度。
+   *
+   * 质检默认只在生图完成时自动跑一次；改了设置（判定线、规则、比对范围）之后
+   * 想马上看到新结论，以前只能进详情页点「重新检查」。这里给卡片一个直接入口。
+   * 逻辑和详情页共用 lib/manualInspect，不在两处各写一份。
+   */
+  const handleInspectCard = async () => {
+    if (inspecting) return
+    setInspecting(true)
+    try {
+      const state = useStore.getState()
+      const targetIds = visibleOutputImages(task)
+      if (!targetIds.length) {
+        state.showToast('这张卡还没有可检查的图', 'info')
+        return
+      }
+      const result = await inspectCard({ task, tasks: state.tasks })
+      if (!result.ok) {
+        state.showToast(`质检失败：${result.error ?? '未知原因'}`, 'error')
+        return
+      }
+      // 质检本身是静默写回结论的，这里给个结果统计，否则点完像没反应
+      const qc = useClipStore.getState().qc
+      const failed = targetIds.filter((id) => qc[id]?.verdict === 'fail').length
+      const unsure = targetIds.filter((id) => qc[id]?.verdict === 'unsure').length
+      const parts = [`已检查 ${targetIds.length} 张`]
+      if (failed) parts.push(`${failed} 张不合格`)
+      if (unsure) parts.push(`${unsure} 张待定`)
+      if (!failed && !unsure) parts.push('全部合格')
+      state.showToast(parts.join('，'), failed ? 'error' : 'success')
+    } catch (err) {
+      useStore.getState().showToast(`质检失败：${err instanceof Error ? err.message : '未知原因'}`, 'error')
+    } finally {
+      setInspecting(false)
+    }
+  }
+
   // 用同一个常量比对：文案写岔过一次（少了中文句号），换个地方改就认不出来了
   const isInterrupted = task.status === 'error' && task.error === TASK_STOPPED_MESSAGE
 
@@ -860,6 +901,31 @@ export default function TaskCard({
                   />
                   <circle cx="7" cy="7" r="1.2" fill="currentColor" stroke="none" />
                 </svg>
+              </TaskActionButton>
+              {/*
+                手动质检：改过判定线 / 规则 / 比对范围后想马上看到新结论，
+                以前只能进详情页点「重新检查」，卡片上直接给一个入口。
+                跑的时候转圈并禁用，避免连点重复送检（每次都调模型）。
+              */}
+              <TaskActionButton
+                tooltip={inspecting ? '质检中…' : '手动质检这张卡'}
+                onClick={() => { void handleInspectCard() }}
+                className="p-1.5 rounded-md hover:bg-violet-50 dark:hover:bg-violet-950/30 text-gray-400 hover:text-violet-500 transition disabled:opacity-30"
+                disabled={inspecting || !task.outputImages?.length}
+              >
+                {inspecting ? (
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  // 放大镜 + 勾：语义是「检查这张卡」
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4a7 7 0 100 14 7 7 0 000-14z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 20l-3.6-3.6" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.2 10.8l2 2 3.6-3.6" />
+                  </svg>
+                )}
               </TaskActionButton>
               <TaskActionButton
                 tooltip="编辑输出"

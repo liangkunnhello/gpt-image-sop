@@ -25,8 +25,8 @@ import { copyTaskIdToClipboard } from '../lib/copyTaskId'
 import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { getApiProviderLabel } from '../lib/apiProfiles'
 import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
-import { inspectImages, useClipStore } from '../lib/clipSimilarity'
-import { expectForTask, expectFromPrompt } from '../lib/batchCheck'
+import { useClipStore } from '../lib/clipSimilarity'
+import { inspectCard } from '../lib/manualInspect'
 import {
   boxSelect,
   clickSelect,
@@ -44,7 +44,7 @@ import { resolveCardInputText } from '../lib/sopGroup'
 import { mergeCardTasks } from '../lib/cardTasks'
 import { usePostReapplyProgress } from '../lib/postProgress'
 import ReapplyProgressBar from './ReapplyProgressBar'
-import { DUPLICATE_SCOPE_LABEL, duplicateScopeKey, needsPeers, peersForTask, scopeTasksFor } from '../lib/duplicateScope'
+import { DUPLICATE_SCOPE_LABEL, scopeTasksFor } from '../lib/duplicateScope'
 import { useInspectConfig } from '../lib/inspectConfig'
 import GalleryFilterBar from './GalleryFilterBar'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
@@ -700,34 +700,16 @@ export default function DetailModal() {
     return `${mm}:${ss}`
   }
 
-  /** 手动重跑检查：本任务的图连同同方向历史图一起送后端，一次拿回质检结论和重复度 */
+  /**
+   * 手动重跑检查：本任务的图连同同方向历史图一起送后端，一次拿回质检结论和重复度。
+   * 具体逻辑在 lib/manualInspect —— 任务卡上的「质检」走同一份，别在这里再写一遍。
+   */
   const handleInspect = async () => {
     if (inspecting) return
     setInspecting(true)
     try {
-      const entries: Array<{ imageId: string; dataUrl: string }> = []
-      for (const id of visibleOutputImages(task)) {
-        const dataUrl = await ensureImageCached(id)
-        if (dataUrl) entries.push({ imageId: id, dataUrl })
-      }
-      // 重复度按当前口径挑参照：同一张卡 / 同产品-方向；全库比对不需要带 peers（参照来自向量库）
-      for (const peer of needsPeers(duplicateScope) ? peersForTask(tasks, task, duplicateScope, 12) : []) {
-        for (const id of visibleOutputImages(peer).slice(0, 2)) {
-          const dataUrl = await ensureImageCached(id)
-          if (dataUrl) entries.push({ imageId: id, dataUrl })
-        }
-        if (entries.length >= 12) break
-      }
-      await inspectImages(entries, {
-        // 整卡检查时图来自多条提示词，没法用一份「应出现文案」对照，交给模型只判违规与压叠；
-        // 单条任务时用 expectForTask，提示词里没有「」就退回任务上的卖点原文
-        expect: groupTasks.length > 1 ? expectFromPrompt('') : expectForTask(task),
-        manual: true,
-        scope: duplicateScope,
-        group: duplicateScopeKey(task, duplicateScope),
-      })
-    } catch (err) {
-      showToast(`检查失败：${err instanceof Error ? err.message : '未知原因'}`, 'error')
+      const result = await inspectCard({ task, tasks, scope: duplicateScope })
+      if (!result.ok) showToast(`检查失败：${result.error ?? '未知原因'}`, 'error')
     } finally {
       setInspecting(false)
     }
@@ -1173,23 +1155,8 @@ export default function DetailModal() {
     if (!task || !selectedImageIds.length || inspecting) return
     setInspecting(true)
     try {
-      const entries: Array<{ imageId: string; dataUrl: string }> = []
-      for (const id of selectedImageIds) {
-        const dataUrl = await ensureImageCached(id)
-        if (dataUrl) entries.push({ imageId: id, dataUrl })
-      }
-      if (!entries.length) {
-        showToast('选中的图读不出来了（可能已被清理）', 'error')
-        return
-      }
-      await inspectImages(entries, {
-        expect: groupTasks.length > 1 ? expectFromPrompt('') : expectForTask(task),
-        manual: true,
-        scope: duplicateScope,
-        group: duplicateScopeKey(task, duplicateScope),
-      })
-    } catch (err) {
-      showToast(`检查失败：${err instanceof Error ? err.message : '未知原因'}`, 'error')
+      const result = await inspectCard({ task, tasks, scope: duplicateScope, imageIds: selectedImageIds })
+      if (!result.ok) showToast(`检查失败：${result.error ?? '未知原因'}`, 'error')
     } finally {
       setInspecting(false)
     }
