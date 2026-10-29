@@ -7,7 +7,9 @@ import { visibleOutputImages } from '../lib/taskState'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
-import { ChevronLeftIcon, CloseIcon } from './icons'
+import { ChevronLeftIcon, CloseIcon, CopyIcon } from './icons'
+import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
+import { hasCopyablePrompt, joinPromptsForClipboard } from '../lib/promptPairCopy'
 
 interface Props {
   /** 同一张卡（同一 sopJobId）下的全部任务，已经按 sopPromptIndex 排好 */
@@ -78,8 +80,25 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
 
   // 只统计真正产出的图：失败或还在跑的任务也列出来，注明状态，避免"少了一张不知道去哪了"
   const rows = useMemo(() => buildPairRows(tasks, directions), [tasks, directions])
+  const showToast = useStore((s) => s.showToast)
+
+  /** 复制一段文本：统一处理失败提示，别每处各写一遍 */
+  const copyText = async (text: string, successText: string) => {
+    if (!text.trim()) {
+      showToast('这条没有提示词可复制', 'info')
+      return
+    }
+    try {
+      await copyTextToClipboard(text)
+      showToast(successText, 'success')
+    } catch (err) {
+      showToast(getClipboardFailureMessage('复制提示词失败', err), 'error')
+    }
+  }
 
   const imageCount = rows.reduce((sum, row) => sum + row.images.length, 0)
+  /** 有内容的提示词条数：一条都没有时不显示「复制全部」 */
+  const copyableCount = rows.filter((row) => hasCopyablePrompt(row.prompt)).length
 
   const modal = (
     <div
@@ -107,6 +126,17 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
             {rows.length} 条提示词 · {imageCount} 张图
           </span>
           <span className="min-w-0 flex-1 truncate text-[11px] text-gray-400">{title}</span>
+          {copyableCount > 1 && (
+            <button
+              type="button"
+              onClick={() => { void copyText(joinPromptsForClipboard(rows.map((row) => row.prompt)), `已复制全部 ${copyableCount} 条提示词`) }}
+              title="按空行分隔复制全部提示词，可直接粘回输入框批量跑"
+              className="flex shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-1.5 py-1 text-[11px] text-gray-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 dark:border-white/10 dark:text-gray-300 dark:hover:border-blue-400/40 dark:hover:bg-blue-500/10 dark:hover:text-blue-300"
+            >
+              <CopyIcon className="h-3 w-3" />
+              复制全部
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -158,8 +188,20 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
                   </div>
                 )}
 
-                <div className="whitespace-pre-wrap break-words rounded-lg bg-gray-50 px-2.5 py-2 text-xs leading-relaxed text-gray-700 dark:bg-white/[0.04] dark:text-gray-300">
+                <div className="group/prompt relative whitespace-pre-wrap break-words rounded-lg bg-gray-50 px-2.5 py-2 pr-9 text-xs leading-relaxed text-gray-700 dark:bg-white/[0.04] dark:text-gray-300">
                   {row.prompt || '(空)'}
+                  {/* 一键复制这一条。常驻而不是 hover 才出现：触屏没有 hover，
+                      而且要滚着看的时候也不该为了复制先精准悬停 */}
+                  {hasCopyablePrompt(row.prompt) && (
+                    <button
+                      type="button"
+                      onClick={() => { void copyText(row.prompt, `已复制第 ${row.index} 条提示词`) }}
+                      title="复制这条提示词"
+                      className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-white hover:text-blue-600 hover:shadow-sm dark:hover:bg-white/10 dark:hover:text-blue-300"
+                    >
+                      <CopyIcon className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
 
                 {/* 变量模式：把这几个变量取值标出来，一眼能看出相邻两条差在哪 */}
