@@ -777,11 +777,16 @@ export default function SopDirectionTree() {
                         className={rowClass(rowHighlight(category.id))}
                       >
                         <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                        <span className="min-w-0 flex-1">
-                          <span className="relative inline-block max-w-full align-middle">
+                        {/*
+                          名字和状态点必须是 flex 的兄弟：
+                          早先把点塞进名字那个 inline-block 里，而名字是 block 占满整行，
+                          点只能掉到第二行、贴着文字左边缘，看着就像「点歪了」。
+                        */}
+                        <span className="flex min-w-0 flex-1 items-center gap-0.5">
+                          <span className="relative inline-block min-w-0 max-w-full align-middle">
                             <span className="block truncate">{category.name}</span>
-                            {statusDots(category.id)}
                           </span>
+                          {statusDots(category.id)}
                         </span>
                         {tailBadge(counts.get(category.id) ?? 0)}
                       </button>
@@ -822,11 +827,12 @@ export default function SopDirectionTree() {
                                   className={rowClass(rowHighlight(product.id))}
                                 >
                                   <FolderIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                                  <span className="min-w-0 flex-1">
-                                    <span className="relative inline-block max-w-full align-middle">
+                                  {/* 同业务线：点要和名字同排，不能塞进名字块里 */}
+                                  <span className="flex min-w-0 flex-1 items-center gap-0.5">
+                                    <span className="relative inline-block min-w-0 max-w-full align-middle">
                                       <span className="block truncate">{product.name}</span>
-                                      {statusDots(product.id)}
                                     </span>
+                                    {statusDots(product.id)}
                                   </span>
                                   {promptCount(product.id) > 0 && promptBadge(promptCount(product.id))}
                                   {tailBadge(counts.get(product.id) ?? 0)}
