@@ -36,7 +36,13 @@ export default function Toast() {
 
   return (
     <div className="fixed bottom-24 left-1/2 z-[120] pointer-events-none toast-enter">
-      <div className="flex items-center gap-2.5 w-max max-w-[calc(100vw-32px)] sm:max-w-[min(44rem,80vw)] px-5 py-3.5 bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl border border-gray-200/60 dark:border-white/[0.08] rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] ring-1 ring-black/5 dark:ring-white/10 text-sm font-medium text-gray-700 dark:text-gray-300">
+      {/*
+        这里刻意不用 backdrop-blur / 半透明背景。
+        气泡是 fixed 且压在视口中央，背后往往是几十张图；毛玻璃会让合成器每帧重新采样
+        整块背景，出现的一瞬间（尤其是 0.3s 入场动画期间）整页会卡一下。
+        改成实色 + 轻阴影后，动画只剩 transform/opacity，纯合成层完成，不再掉帧。
+      */}
+      <div className="flex items-center gap-2.5 w-max max-w-[calc(100vw-32px)] sm:max-w-[min(44rem,80vw)] px-5 py-3.5 bg-white dark:bg-gray-900 border border-gray-200/70 dark:border-white/[0.08] rounded-full shadow-[0_4px_16px_rgb(0,0,0,0.10)] dark:shadow-[0_4px_16px_rgb(0,0,0,0.28)] ring-1 ring-black/5 dark:ring-white/10 text-sm font-medium text-gray-700 dark:text-gray-300">
         <span className="flex-shrink-0">{getIcon()}</span>
         <span className="leading-5 whitespace-pre-line text-center">{toast.message}</span>
       </div>
