@@ -8,7 +8,7 @@ vi.mock('./platform', () => ({
   isTauri: false,
 }))
 
-const { buildArkGenerationUrl, buildArkRequestBody, callArkImageApi, getArkErrorMessage } = await import('./arkImageApi')
+const { buildArkGenerationUrl, buildArkRequestBody, callArkImageApi, getArkErrorMessage, isArkOfficialBaseUrl, resolveArkModelId } = await import('./arkImageApi')
 
 function profile(patch: Partial<ApiProfile> = {}): ApiProfile {
   return {
@@ -72,6 +72,71 @@ describe('地址拼接（方舟是 /api/v3，不是 /v1）', () => {
 
   it('留空时用默认地址', () => {
     expect(buildArkGenerationUrl('')).toBe('https://ark.cn-beijing.volces.com/api/v3/images/generations')
+  })
+})
+
+describe('第三方中转（OpenAI 兼容 /v1）', () => {
+  const relay = 'https://relay.example.com/v1'
+
+  it('中转地址已到 /v1 时直接接 images/generations', () => {
+    expect(buildArkGenerationUrl(relay)).toBe('https://relay.example.com/v1/images/generations')
+  })
+
+  it('中转只填域名时补 /v1（不能补成 /api/v3）', () => {
+    expect(buildArkGenerationUrl('https://relay.example.com'))
+      .toBe('https://relay.example.com/v1/images/generations')
+  })
+
+  it('已经填到 images/generations 时原样使用', () => {
+    expect(buildArkGenerationUrl(`${relay}/images/generations`))
+      .toBe('https://relay.example.com/v1/images/generations')
+  })
+
+  it('按地址判断是否官方直连', () => {
+    expect(isArkOfficialBaseUrl('https://ark.cn-beijing.volces.com/api/v3')).toBe(true)
+    expect(isArkOfficialBaseUrl('')).toBe(true)
+    expect(isArkOfficialBaseUrl(relay)).toBe(false)
+  })
+
+  it('中转上把官方日期 ID 换成展示名（拿官方 ID 会被 403 未开通）', () => {
+    expect(resolveArkModelId('doubao-seedream-4-5-251128', relay)).toBe('Doubao-seedream-4.5')
+    expect(resolveArkModelId('Doubao-seedream-4.5', relay)).toBe('Doubao-seedream-4.5')
+    expect(resolveArkModelId('', relay)).toBe('Doubao-seedream-4.5')
+  })
+
+  it('官方直连上把展示名换回日期 ID', () => {
+    expect(resolveArkModelId('Doubao-seedream-4.5', 'https://ark.cn-beijing.volces.com/api/v3'))
+      .toBe('doubao-seedream-4-5-251128')
+    expect(resolveArkModelId('', 'https://ark.cn-beijing.volces.com/api/v3'))
+      .toBe('doubao-seedream-4-5-251128')
+  })
+
+  it('4.0 也双向换算', () => {
+    expect(resolveArkModelId('Doubao-seedream-4.0', '')).toBe('doubao-seedream-4-0-250828')
+    expect(resolveArkModelId('doubao-seedream-4-0-250828', relay)).toBe('Doubao-seedream-4.0')
+  })
+
+  it('不认识的模型名原样透传，不自作主张改写', () => {
+    expect(resolveArkModelId('Doubao-Seedream-5.0-lite', relay)).toBe('Doubao-Seedream-5.0-lite')
+  })
+
+  it('中转请求体里就是展示名', () => {
+    const body = buildArkRequestBody(opts(), profile({ baseUrl: relay }))
+    expect(body.model).toBe('Doubao-seedream-4.5')
+  })
+
+  it('中转报「未开通模型」时把原文带出来', async () => {
+    apiFetch.mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: { message: '当前账号未开通模型 xxx', type: 'model_not_allowed', code: 'model_not_allowed' } }),
+    })
+    await expect(callArkImageApi(opts(), profile({ baseUrl: relay }))).rejects.toThrow(/当前账号未开通模型 xxx/)
+  })
+
+  it('404 时追加地址排查提示', async () => {
+    apiFetch.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) })
+    await expect(callArkImageApi(opts(), profile({ baseUrl: relay }))).rejects.toThrow(/官方填到 \/api\/v3/)
   })
 })
 

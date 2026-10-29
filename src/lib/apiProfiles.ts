@@ -39,8 +39,8 @@ const DEFAULT_BASE_URL = DEFAULT_API_URL_PATCH?.baseUrl ?? ''
 export { DEFAULT_IMAGES_MODEL } from './imageModels'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-6.1-sol'
 export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
-// 火山方舟（即梦 Seedream）：地址到 /api/v3，模型默认 4.5
-export { DEFAULT_ARK_BASE_URL, DEFAULT_ARK_MODEL } from './arkImageApi'
+// 火山方舟（即梦 Seedream）：地址到 /api/v3，模型默认 4.5（官方 ID / 中转名两种写法见 arkImageApi）
+export { DEFAULT_ARK_BASE_URL, DEFAULT_ARK_MODEL, DEFAULT_ARK_RELAY_MODEL } from './arkImageApi'
 export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
 export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 600

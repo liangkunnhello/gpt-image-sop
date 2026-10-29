@@ -6,7 +6,15 @@
  * - 尺寸有硬性像素下限（4.5 最小 368 万像素），需要换算；
  * - 输出固定 jpeg，`response_format` 需要显式指定；
  * - 水印默认可能开着，必须显式关掉；
- * - baseUrl 是 `/api/v3`，用通用拼接会被补成 `/api/v3/v1/...`。
+ * - baseUrl 有两种形态，拼接规则不同：
+ *   - 官方直连：`https://ark.cn-beijing.volces.com/api/v3`（补 `/api/v3`）
+ *   - 第三方中转：`https://xxx.com/v1`（OpenAI 兼容，直接接 `/images/generations`）
+ *   用通用拼接会被补成 `/api/v3/v1/...` 或 `/v1/api/v3/...`，两边都 404。
+ *
+ * 另一处两边不一致的是**模型名**：
+ * - 官方要带日期版本号，如 `doubao-seedream-4-5-251128`；
+ * - 中转按展示名路由，如 `Doubao-seedream-4.5`（拿官方 ID 去问会 403「未开通模型」）。
+ * 所以模型名按 baseUrl 自动换算，用户在哪边写哪种写法都能跑。
  */
 
 import type { ApiProfile, TaskParams } from '../types'
@@ -26,28 +34,84 @@ import {
 } from './imageApiShared'
 import { apiFetch } from './platform'
 
-/** 方舟默认地址（到 /api/v3 为止） */
+/** 方舟官方地址（到 /api/v3 为止） */
 export const DEFAULT_ARK_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3'
 
-/** 4.5 的模型 ID（带版本号的那个） */
+/** 官方直连的 4.5 模型 ID（带日期版本号） */
 export const DEFAULT_ARK_MODEL = 'doubao-seedream-4-5-251128'
+
+/** 第三方中转用的 4.5 模型名（不带日期，大小写按中转的模型列表） */
+export const DEFAULT_ARK_RELAY_MODEL = 'Doubao-seedream-4.5'
+
+/**
+ * 是否官方直连。
+ *
+ * 官方和第三方中转对「模型名」「URL 拼接」的要求都不同，
+ * 所有差异都从这一个判断派生，别处不要再各判一次。
+ */
+export function isArkOfficialBaseUrl(baseUrl?: string): boolean {
+  const base = (baseUrl || '').trim()
+  // 地址留空时走 DEFAULT_ARK_BASE_URL，也就是官方
+  if (!base) return true
+  return /volces\.com/i.test(base)
+}
 
 /**
  * 拼出图片生成地址。
  *
- * 用户可能只填域名，也可能已经填到 /api/v3 —— 两种都要能对上，
- * 不能像 OpenAI 那条路径那样自动补 /v1。
+ * 用户可能填域名、填到 `/v1`、填到 `/api/v3`，甚至直接填到 `/images/generations`——
+ * 四种都要能对上，不能像 OpenAI 那条路径那样无条件补 `/v1`。
  */
-export function buildArkGenerationUrl(baseUrl: string): string {
+export function buildArkGenerationUrl(baseUrl?: string): string {
   const base = (baseUrl || DEFAULT_ARK_BASE_URL).trim().replace(/\/+$/, '')
   if (!base) return `${DEFAULT_ARK_BASE_URL}/images/generations`
-  if (/\/api\/v\d+$/i.test(base)) return `${base}/images/generations`
-  return `${base}/api/v3/images/generations`
+  // 已经填完整了，别再补一层
+  if (/\/images\/generations$/i.test(base)) return base
+  // 已经到版本路径（官方 /api/v3、中转 /v1）→ 直接接 images/generations
+  if (/\/v\d+$/i.test(base)) return `${base}/images/generations`
+  // 官方域名但没带路径 → 补 /api/v3
+  if (isArkOfficialBaseUrl(base)) return `${base}/api/v3/images/generations`
+  // 其它（第三方中转）按 OpenAI 兼容约定补 /v1
+  return `${base}/v1/images/generations`
+}
+
+/**
+ * 同一代模型的两种写法。
+ *
+ * marker 是把模型名去掉非字母数字后用来识别的片段：
+ * `doubao-seedream-4-5-251128` 和 `Doubao-seedream-4.5` 都会归一成含 `seedream45` 的串。
+ */
+interface ArkModelFamily {
+  marker: string
+  official: string
+  relay: string
+}
+
+const ARK_MODEL_FAMILIES: ArkModelFamily[] = [
+  { marker: 'seedream45', official: DEFAULT_ARK_MODEL, relay: DEFAULT_ARK_RELAY_MODEL },
+  { marker: 'seedream40', official: 'doubao-seedream-4-0-250828', relay: 'Doubao-seedream-4.0' },
+]
+
+/**
+ * 按地址形态把模型名换算成对方认的写法。
+ *
+ * 认识的代（4.5 / 4.0）双向换算；不认识的（比如中转上的 5.0-lite）原样透传，
+ * 免得自作聪明改坏用户手填的名字。
+ */
+export function resolveArkModelId(model: string, baseUrl?: string): string {
+  // 模型字段允许多个（逗号分隔），出图只用第一个
+  const trimmed = (model || '').split(',')[0].trim()
+  const official = isArkOfficialBaseUrl(baseUrl)
+  const key = trimmed.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const family = ARK_MODEL_FAMILIES.find((item) => key.includes(item.marker))
+  if (family) return official ? family.official : family.relay
+  if (trimmed) return trimmed
+  return official ? DEFAULT_ARK_MODEL : DEFAULT_ARK_RELAY_MODEL
 }
 
 /** 请求体（抽出来为了能单测，不用真的发请求） */
 export function buildArkRequestBody(opts: CallApiOptions, profile: ApiProfile): Record<string, unknown> {
-  const model = (profile.imageGenerationModel || profile.model || DEFAULT_ARK_MODEL).trim() || DEFAULT_ARK_MODEL
+  const model = resolveArkModelId(profile.imageGenerationModel || profile.model, profile.baseUrl)
   return {
     model,
     prompt: opts.prompt,
@@ -87,6 +151,17 @@ export function getArkErrorMessage(payload: unknown, fallback: string): string {
   }
   const message = typeof record.message === 'string' ? record.message.trim() : ''
   return message || fallback
+}
+
+/**
+ * 404 / 405 时补一句排查方向。
+ *
+ * 中转站对不存在的路径往往不返回 404，而是自己兜一句「所有供应商暂时不可用」，
+ * 光看那句话完全想不到是地址拼错了 —— 所以这里只在状态码明确异常时才追加提示。
+ */
+function describeArkHttpFailure(status: number, message: string): string {
+  if (status !== 404 && status !== 405) return message
+  return `${message}（生图地址可能不对：官方填到 /api/v3，第三方中转填到 /v1）`
 }
 
 /**
@@ -164,7 +239,7 @@ export async function callArkImageApi(opts: CallApiOptions, profile: ApiProfile)
         payload = null
       }
       const message = getArkErrorMessage(payload, `请求失败（HTTP ${response.status}）`)
-      throw new Error(message || (await getApiErrorMessage(response)))
+      throw new Error(describeArkHttpFailure(response.status, message || (await getApiErrorMessage(response))))
     }
 
     const payload = await response.json() as unknown
