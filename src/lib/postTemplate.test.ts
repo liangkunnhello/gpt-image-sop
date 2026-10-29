@@ -11,6 +11,10 @@ import {
   newPostElement,
   pickTemplateForImage,
   postTemplateRatioKey,
+  ELEMENT_POS_LIMIT,
+  clampElementPos,
+  elementInCanvas,
+  sanitizeNumberDraft,
 } from './postTemplate'
 
 const make = (width: number, height: number, patch: Partial<ReturnType<typeof createPostTemplate>> = {}) => ({
@@ -172,5 +176,55 @@ describe('文字对齐、行距与字间距', () => {
     expect(right.x1).toBeCloseTo(0.5, 5)
     const left = elementBox({ ...el, align: 'left' }, 1000, 1000)
     expect(left.x0).toBeCloseTo(0.5, 5)
+  })
+})
+
+describe('元素位置可以移出画布（负值）', () => {
+  it('夹取允许 −50%~150%，不再锁死在 0~1', () => {
+    expect(clampElementPos(-0.3)).toBe(-0.3)
+    expect(clampElementPos(1.2)).toBe(1.2)
+    // 两边各留半个画布，推太远就夹住，免得彻底找不回来
+    expect(clampElementPos(-0.9)).toBe(-ELEMENT_POS_LIMIT)
+    expect(clampElementPos(3)).toBe(1 + ELEMENT_POS_LIMIT)
+  })
+
+  it('非法值给 0，不会写进 NaN 让预览消失', () => {
+    expect(clampElementPos(Number.NaN)).toBe(0)
+    expect(clampElementPos(Number.POSITIVE_INFINITY)).toBe(1 + ELEMENT_POS_LIMIT)
+  })
+
+  it('整块推到画布外时不算占位（不给生图模型留白的理由）', () => {
+    const logo = { ...newPostElement('logo', 0), x: -0.5, y: 0.1, width: 0.2, aspect: 0.3 }
+    const box = elementBox(logo, 1280, 720)
+    expect(elementInCanvas(box)).toBe(false)
+
+    // 只露出一部分时仍然算占位，得让主体避开那一条
+    const partial = { ...logo, x: -0.1 }
+    expect(elementInCanvas(elementBox(partial, 1280, 720))).toBe(true)
+  })
+})
+
+describe('数字输入框接受负号', () => {
+  it('allowNegative 时保留最前面的负号', () => {
+    expect(sanitizeNumberDraft('-10', { allowDecimal: true, allowNegative: true })).toBe('-10')
+    expect(sanitizeNumberDraft('-10.5', { allowDecimal: true, allowNegative: true })).toBe('-10.5')
+  })
+
+  it('不传 allowNegative 时行为与改造前一致（负号被丢掉）', () => {
+    expect(sanitizeNumberDraft('-10', { allowDecimal: true })).toBe('10')
+    expect(sanitizeNumberDraft('abc12', {})).toBe('12')
+  })
+
+  it('负号只能出现在最前面，后面再打不算', () => {
+    expect(sanitizeNumberDraft('1-0', { allowNegative: true })).toBe('10')
+    expect(sanitizeNumberDraft('--5', { allowNegative: true })).toBe('-5')
+  })
+
+  it('小数点只留一个', () => {
+    expect(sanitizeNumberDraft('1.2.3', { allowDecimal: true, allowNegative: true })).toBe('1.23')
+  })
+
+  it('只打一个负号时保留它，允许后续继续输入', () => {
+    expect(sanitizeNumberDraft('-', { allowNegative: true })).toBe('-')
   })
 })

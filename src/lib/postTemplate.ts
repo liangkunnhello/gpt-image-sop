@@ -220,6 +220,54 @@ export function clamp01(value: number) {
   return Math.min(1, Math.max(0, value))
 }
 
+/**
+ * 元素相对坐标的允许范围：可以移出画布，但别移得太远。
+ *
+ * 为什么放开负值：logo 常常需要「整块推到画面外」（比如这块版位留空、
+ * 或者这一版干脆不带 logo）。以前坐标被 clamp01 锁在 0~1，只能贴着边，推不出去。
+ *
+ * 为什么不一放开就无限：完全推没了就点不到、拖不回来。这里前后各留半个画布，
+ * 保证元素始终有一部分（或至少紧邻画布边缘）可见，能用鼠标再拖回去。
+ */
+export const ELEMENT_POS_LIMIT = 0.5
+
+/** 元素坐标的夹取：允许 −50%~150%，超出部分在成品图上会被裁掉 */
+export function clampElementPos(value: number) {
+  // 只有真正的 NaN 退成 0（写进 NaN 会让预览直接不见）；
+  // 无穷大属于「越界」，正常夹到边界上去
+  if (Number.isNaN(value)) return 0
+  return Math.min(1 + ELEMENT_POS_LIMIT, Math.max(-ELEMENT_POS_LIMIT, value))
+}
+
+/**
+ * 数字输入框的草稿清洗。
+ *
+ * 老实现会把非数字字符一律删掉，连带把负号也删了 —— 于是位置框里
+ * 想输「-10」根本打不进去，只能一路被夹回 0。
+ * 这里按需保留负号，并且只允许出现在最前面一个。
+ */
+export function sanitizeNumberDraft(text: string, options: { allowDecimal?: boolean; allowNegative?: boolean } = {}): string {
+  const decimal = options.allowDecimal === true
+  const negative = options.allowNegative === true
+  let out = ''
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]
+    if (char >= '0' && char <= '9') {
+      out += char
+      continue
+    }
+    if (decimal && char === '.' && !out.includes('.')) {
+      out += char
+      continue
+    }
+    // 负号只认最前面那个；已经有内容再打负号就是误触，丢掉
+    if (negative && char === '-' && out === '') {
+      out += char
+    }
+  }
+  return out
+}
+
 /** 文字行高默认值，没单独设过 lineHeight 的元素用它 */
 export const POST_LINE_HEIGHT = 1.35
 
@@ -288,6 +336,16 @@ export function elementBox(el: PostElement, width: number, height: number): Post
     x1: clamp((startX + boxWidth) / width),
     y1: clamp((top + boxHeight) / height),
   }
+}
+
+/**
+ * 这块在成品画布上还占着面积吗。
+ *
+ * 元素可以被推到画布外（位置写负值），此时成品图上根本看不到它，
+ * 也就不该再让生图模型「避开这里」——一个看不见的框会让模型误留白。
+ */
+export function elementInCanvas(box: PostElementBox): boolean {
+  return box.x1 > box.x0 && box.y1 > box.y0
 }
 
 /** 把占位框翻译成人话方位，例如「左上角」「底部通栏」；按中心点落在九宫格哪一格判断 */

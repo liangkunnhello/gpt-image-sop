@@ -10,6 +10,7 @@ import { imageSizeFromDataUrl } from './imageDimensions'
 import { SIZE_PATTERN } from './size'
 import {
   elementBox,
+  elementInCanvas,
   elementLabel,
   pickTemplateForImage,
   regionName,
@@ -41,9 +42,11 @@ function avoidableElements(template: PostTemplate): PostElement[] {
 export function collectAvoidZones(template: PostTemplate | null): AvoidZone[] {
   if (!template) return []
   if (template.avoidOverlay === false) return []
-  return avoidableElements(template).map((element, index) => {
+  return avoidableElements(template).flatMap((element, index) => {
     const box = elementBox(element, template.width, template.height)
-    return { region: regionName(box), label: elementLabel(element, index), box }
+    // 整块被推到画布外：成品图上没有它，不能让模型去避开一个看不见的框
+    if (!elementInCanvas(box)) return []
+    return [{ region: regionName(box), label: elementLabel(element, index), box }]
   })
 }
 

@@ -11,7 +11,9 @@ import {
   POST_LINE_HEIGHT_RANGE,
   POST_RATIO_FILTERS,
   POST_SIZE_PRESETS,
-  clamp01,
+  ELEMENT_POS_LIMIT,
+  clampElementPos,
+  sanitizeNumberDraft,
   commitNumberInput,
   createPostTemplate,
   elementLineHeight,
@@ -41,6 +43,7 @@ export function NumberInput({
   max,
   step,
   allowDecimal = false,
+  allowNegative = false,
   onCommit,
   className,
 }: {
@@ -49,6 +52,8 @@ export function NumberInput({
   max?: number
   step?: number
   allowDecimal?: boolean
+  /** 允许负数：元素位置可以移出画布（传负坐标），不传就是老行为（只收非负） */
+  allowNegative?: boolean
   onCommit: (next: number) => void
   className?: string
 }) {
@@ -72,7 +77,8 @@ export function NumberInput({
       inputMode={allowDecimal ? 'decimal' : 'numeric'}
       value={draft}
       onFocus={() => setEditing(true)}
-      onChange={(e) => setDraft(e.target.value.replace(allowDecimal ? /[^\d.]/g : /[^\d]/g, ''))}
+      // 过滤逻辑交给 sanitizeNumberDraft：老的正则会把负号一起删掉，位置框根本输不进负数
+      onChange={(e) => setDraft(sanitizeNumberDraft(e.target.value, { allowDecimal, allowNegative }))}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
@@ -525,9 +531,10 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
       pushHistory(templatesRef.current)
     }
     // 按指针位移移动，不把锚点吸到指针上：抓哪儿都不会跳一下
+    // 允许拖出画布：logo 常常要整块推到框外，锁在 0~1 就推不动
     patchElement(drag.id, {
-      x: clamp01(drag.originX + (event.clientX - drag.startX) / rect.width),
-      y: clamp01(drag.originY + (event.clientY - drag.startY) / rect.height),
+      x: clampElementPos(drag.originX + (event.clientX - drag.startX) / rect.width),
+      y: clampElementPos(drag.originY + (event.clientY - drag.startY) / rect.height),
     }, { record: false })
   }
 
@@ -1442,10 +1449,12 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                         X
                         <NumberInput
                           value={Math.round(selected.x * 1000) / 10}
-                          min={0}
+                          // 允许负值：把这块推到画布外（成品图上会被裁掉），想留空版位时用
+                          min={-ELEMENT_POS_LIMIT * 100}
                           step={0.1}
                           allowDecimal
-                          onCommit={(percent) => patchElement(selected.id, { x: clamp01(percent / 100) }, { coalesceKey: `x:${selected.id}` })}
+                          allowNegative
+                          onCommit={(percent) => patchElement(selected.id, { x: clampElementPos(percent / 100) }, { coalesceKey: `x:${selected.id}` })}
                           className="w-12 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                         />
                         %
@@ -1454,15 +1463,31 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                         Y
                         <NumberInput
                           value={Math.round(selected.y * 1000) / 10}
-                          min={0}
+                          min={-ELEMENT_POS_LIMIT * 100}
                           step={0.1}
                           allowDecimal
-                          onCommit={(percent) => patchElement(selected.id, { y: clamp01(percent / 100) }, { coalesceKey: `y:${selected.id}` })}
+                          allowNegative
+                          onCommit={(percent) => patchElement(selected.id, { y: clampElementPos(percent / 100) }, { coalesceKey: `y:${selected.id}` })}
                           className="w-12 rounded border border-gray-200 px-1 py-0.5 text-[11px] tabular-nums dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
                         />
                         %
                       </span>
                     </div>
+
+                    {/* 位置可以填负值把这块推到画布外（成品图上会被裁掉）。
+                        推出去之后预览里就看不见了，给一个一键归位，免得找不回来 */}
+                    {(selected.x < 0 || selected.y < 0) && (
+                      <div className="flex items-start justify-between gap-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] leading-relaxed text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-300">
+                        <span>这块已被推到画布外，成品图上看不到它。</span>
+                        <button
+                          type="button"
+                          onClick={() => patchElement(selected.id, { x: Math.max(0, selected.x), y: Math.max(0, selected.y) }, { coalesceKey: `posReset:${selected.id}` })}
+                          className="shrink-0 underline decoration-dotted underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100"
+                        >
+                          移回框内
+                        </button>
+                      </div>
+                    )}
 
                     <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
                       透明度

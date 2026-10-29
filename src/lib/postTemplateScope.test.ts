@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { resolvePostTemplates } from './applyPostTemplate'
+import { elementDrawOrigin, resolvePostTemplates } from './applyPostTemplate'
+import { newPostElement } from './postTemplate'
 import { createPostTemplate, type PostTemplate } from './postTemplate'
 import { useSopStore } from './sopStore'
 import type { SopDirectionNode } from '../types'
@@ -100,5 +101,22 @@ describe('方向模板与产品模板分开存', () => {
     expect(next.postTemplates['dir-1']).toBeUndefined()
     expect(next.postTemplates['prod-1']).toHaveLength(1)
     expect(next.postPreviewImages['dir-1']).toBeUndefined()
+  })
+})
+
+describe('负坐标元素在成品图上会被裁掉', () => {
+  it('绘制起点原样取负值，不偷偷改回 0', () => {
+    const logo = { ...newPostElement('logo', 0), x: -0.3, y: -0.1 }
+    const origin = elementDrawOrigin(logo, 1280, 720)
+    // 起点为负 → 画布自动裁掉框外那部分，正是「把 logo 移出框外」想要的效果
+    expect(origin.x).toBeCloseTo(-384, 6)
+    expect(origin.y).toBeCloseTo(-72, 6)
+  })
+
+  it('正常位置不受影响', () => {
+    const logo = { ...newPostElement('logo', 0), x: 0.06, y: 0.08 }
+    const origin = elementDrawOrigin(logo, 1280, 720)
+    expect(origin.x).toBeCloseTo(76.8, 6)
+    expect(origin.y).toBeCloseTo(57.6, 6)
   })
 })

@@ -56,11 +56,18 @@ export function resolvePostTemplates(
   return { ownerId: productId, scope: 'product', templates: templates[productId] ?? [] }
 }
 
+/**
+ * 元素在成品图上的绘制起点（像素）。
+ * 位置可以是负的（这块被推到画布外），画布会自动裁掉露不出来的部分。
+ */
+export function elementDrawOrigin(el: PostElement, width: number, height: number) {
+  return { x: el.x * width, y: el.y * height }
+}
+
 function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: number, height: number, logo: HTMLImageElement | null) {
   ctx.save()
   ctx.globalAlpha = el.opacity
-  const x = el.x * width
-  const y = el.y * height
+  const { x, y } = elementDrawOrigin(el, width, height)
 
   if (el.kind === 'text') {
     const size = Math.max(8, Math.round(el.fontSize))
