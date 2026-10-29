@@ -2454,7 +2454,7 @@ export default function DetailModal() {
             {task.sopJobId && task.sopText && (
               <button
                 onClick={() => setSupplementOpen(true)}
-                title="用这张卡的 SOP（或库里另一份）再写几条提示词，新图补到这张卡下面"
+                title="用这张卡的 SOP（或库里另一份）再生成一批图：可以补到这张卡下面，也可以另起一张新卡"
                 className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-teal-50 dark:bg-teal-500/10 text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-500/20 transition text-sm font-medium whitespace-nowrap"
               >
                 <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
