@@ -27,6 +27,18 @@ import { getApiProviderLabel } from '../lib/apiProfiles'
 import { openImagesFolder, revealImageFile } from '../lib/openImagesFolder'
 import { inspectImages, useClipStore } from '../lib/clipSimilarity'
 import { expectForTask, expectFromPrompt } from '../lib/batchCheck'
+import {
+  boxSelect,
+  clickSelect,
+  EMPTY_SELECTION,
+  isSelected,
+  primarySelectedId,
+  pruneSelection,
+  rectFromPoints,
+  rectIntersects,
+  selectAll,
+  type SelectionState,
+} from '../lib/gallerySelection'
 import { filterGalleryIndexes, galleryFilterCounts, type GalleryFilter } from '../lib/galleryFilter'
 import { resolveCardInputText } from '../lib/sopGroup'
 import { mergeCardTasks } from '../lib/cardTasks'
@@ -80,11 +92,27 @@ export default function DetailModal() {
   const [dispatchOpen, setDispatchOpen] = useState(false)
   /** 缩略图缩放倍率：1 = 按目标列宽自适应，拖滑块可无级放大缩小 */
   const [galleryZoom, setGalleryZoom] = useState(1)
+  /**
+   * 画廊多选（照文件管理器）：单击单选、Ctrl 加选、Shift 连选、空白处拖动框选。
+   * 多选后底部出现批量操作条。
+   */
+  const [selection, setSelection] = useState<SelectionState>(EMPTY_SELECTION)
+  /** 框选进行中的矩形（像素，相对画廊滚动容器）；null 表示没在框选 */
+  const [marquee, setMarquee] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  const galleryScrollRef = useRef<HTMLDivElement>(null)
+  const marqueeStartRef = useRef<{ x: number; y: number; additive: boolean } | null>(null)
+  /** 框选开始时已选的项：按住 Ctrl 框选要并进这些，而不是整段替换 */
+  const marqueeBaseRef = useRef<string[]>([])
   const sopDirections = useSopStore((s) => s.directions)
   const addSavedSop = useSopStore((s) => s.addSavedSop)
   const [now, setNow] = useState(Date.now())
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
+  /**
+   * 上面是否有更上层的弹层（灯箱 / 对照表、派发、原图地址、原始响应）。
+   * Ctrl+A 全选只在画廊这一层生效 —— 弹层开着时按 Ctrl+A 不该把背后的图全选上。
+   */
+  const overlayRef = useRef(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   /** 手动触发的检查是否在进行中（质检 + 重复度一起跑） */
   const [inspecting, setInspecting] = useState(false)
@@ -196,7 +224,19 @@ export default function DetailModal() {
     if (count > 0 && imageIndex >= count) setImageIndex(count - 1)
   }, [imageIndex, streamPreviewItems.length, task, task?.status])
 
-  useCloseOnEscape(Boolean(task), () => setDetailTaskId(null))
+  /**
+   * Esc：有多选时先清空选择，再按一次才关闭详情页。
+   * 和文件管理器一致（在那里 Esc 也是先取消选择），也不会「取消选择」时把面板一起关掉。
+   */
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
+  useCloseOnEscape(Boolean(task), () => {
+    if (selectionRef.current.ids.length) {
+      setSelection(EMPTY_SELECTION)
+      return
+    }
+    setDetailTaskId(null)
+  })
   /**
    * 详情页开着时按 Delete / Backspace 把当前图移入回收站。
    * 注册必须在这里（提前 return 之前）：hook 数量变化会直接白屏。
@@ -206,6 +246,31 @@ export default function DetailModal() {
   useDeleteKey(Boolean(task), () => deleteKeyHandlerRef.current())
 
   usePreventBackgroundScroll(Boolean(task), [modalRef, rawUrlsModalRef, rawResponseModalRef])
+
+  /**
+   * Ctrl / ⌘ + A 全选画廊里的图。
+   *
+   * 只在这个详情页开着、且焦点不在输入框里时生效 —— 否则会和「全选文字」打架。
+   * 用 ref 拿最新的可见顺序，避免每次筛选变化都重挂监听。
+   */
+  const selectAllOrderRef = useRef<string[]>([])
+  useEffect(() => {
+    if (!task) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'a' && event.key !== 'A') return
+      if (!(event.ctrlKey || event.metaKey)) return
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      // 在输入框里 Ctrl+A 应该是全选文字
+      if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return
+      // 有别的弹层盖在上面时不抢这个快捷键（灯箱、对照表、派发、确认框）
+      if (overlayRef.current) return
+      event.preventDefault()
+      setSelection(selectAll(selectAllOrderRef.current))
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [task])
 
   // Reset index when task changes
   useEffect(() => {
@@ -310,7 +375,20 @@ export default function DetailModal() {
   const galleryTileSize = Math.max(48, Math.round(galleryTile * galleryZoom))
 
   const currentOutputSlot = visibleOutputSlots[imageIndex]
-  const currentOutputImageId = currentOutputSlot?.imageId || ''
+  /**
+   * 「当前这张」：多选时按最后选中的那张走（后点的算主），
+   * 单选时就是点中那一张 —— 右侧参数、工具条都看着它。
+   *
+   * 选择为空（比如 Ctrl 点掉了唯一一张）时退回 imageIndex 那张：
+   * 右侧参数区不至于整片变成「没选中」，和改造前一致。
+   */
+  // 每次渲染都刷新：这些弹层状态一变，Ctrl+A 的判定要立刻跟着变
+  overlayRef.current = Boolean(
+    lightboxImageId || pairOpen || dispatchOpen || supplementOpen || showRawUrlsModal || showRawResponseModal || sopEditing,
+  )
+
+  const selectedPrimaryId = primarySelectedId(selection)
+  const currentOutputImageId = selectedPrimaryId || currentOutputSlot?.imageId || ''
   const currentOutputImageIndex = currentOutputSlot?.outputImageIndex ?? -1
   const currentOutputError = currentOutputSlot?.error || ''
   // 「原图」按钮的取图顺序：透明背景任务取扣底前那张（用户眼里的原图），
@@ -447,6 +525,27 @@ export default function DetailModal() {
       .map((index) => ({ slot: visibleOutputSlots[index]!, index })),
     [visibleOutputSlots, galleryFilter, verdictOf, duplicateOf, clipLimit],
   )
+
+  /** 多选用的顺序：屏幕上实际看得见的那批（筛选后），连选与框选都按它算 */
+  const selectionOrder = useMemo(
+    () => filteredOutputSlots.map((item) => item.slot.imageId).filter(Boolean),
+    [filteredOutputSlots],
+  )
+
+  /**
+   * 当前选中的图，按界面顺序排；批量操作都以它为作用域。
+   * 用普通计算而不是 useMemo：依赖就是本渲染的两个局部变量，memo 没有收益。
+   */
+  const selectedImageIds = selectionOrder.filter((id) => selection.ids.includes(id))
+
+  // Ctrl+A 全选用的是「屏幕上这批」的顺序，这里同步给键盘监听（它挂得早，拿不到最新的 memo）
+  selectAllOrderRef.current = selectionOrder
+
+  // 筛选变化、图片被移入回收站后，选择里可能残留已不存在的 id：收敛掉，
+  // 否则批量操作会作用到用户以为没选的东西上
+  useEffect(() => {
+    setSelection((prev) => pruneSelection(prev, selectionOrder))
+  }, [selectionOrder])
 
   // 换了筛选条件后，当前选中的那张可能已经不在列表里，自动跳到第一张
   useEffect(() => {
@@ -765,7 +864,70 @@ export default function DetailModal() {
   }
 
   /**
-   * 移入图片回收站（工具栏按钮与 Delete 键共用）。
+   * 框选：在画廊空白处按下并拖动，把矩形碰到的图都选中。
+   *
+   * 和文件管理器一致：不按 Ctrl 时框选替换掉原来的选择，按住 Ctrl 则并进去。
+   * 用 pointer events 而不是 mousedown，触屏 / 触控板也能用。
+   */
+  const marqueePoint = (event: React.PointerEvent) => {
+    const container = galleryScrollRef.current
+    if (!container) return null
+    const rect = container.getBoundingClientRect()
+    return {
+      // 转成相对滚动容器的内容坐标，滚动时才不会错位
+      x: event.clientX - rect.left + container.scrollLeft,
+      y: event.clientY - rect.top + container.scrollTop,
+    }
+  }
+
+  const handleMarqueeDown = (event: React.PointerEvent) => {
+    // 只认左键；点在图片上时交给缩略图自己的点击处理
+    if (event.button !== 0) return
+    const point = marqueePoint(event)
+    if (!point) return
+    const additive = event.ctrlKey || event.metaKey
+    marqueeStartRef.current = { ...point, additive }
+    marqueeBaseRef.current = additive ? selection.ids : []
+    setMarquee({ left: point.x, top: point.y, width: 0, height: 0 })
+    // 捕获指针：手指/鼠标滑出滚动容器也能继续框（否则一拖快就断了）
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  const handleMarqueeMove = (event: React.PointerEvent) => {
+    const start = marqueeStartRef.current
+    const container = galleryScrollRef.current
+    if (!start || !container) return
+    const point = marqueePoint(event)
+    if (!point) return
+    const rect = rectFromPoints(start.x, start.y, point.x, point.y)
+    setMarquee(rect)
+
+    // 逐块比对：每个缩略图的位置换成同一套内容坐标，再和矩形求交
+    const hit: string[] = []
+    for (const tile of container.querySelectorAll<HTMLElement>('[data-gallery-image-id]')) {
+      const imageId = tile.dataset.galleryImageId
+      if (!imageId) continue
+      const tileRect = tile.getBoundingClientRect()
+      const box = {
+        left: tileRect.left - container.getBoundingClientRect().left + container.scrollLeft,
+        top: tileRect.top - container.getBoundingClientRect().top + container.scrollTop,
+        width: tileRect.width,
+        height: tileRect.height,
+      }
+      if (rectIntersects(rect, box) && !hit.includes(imageId)) hit.push(imageId)
+    }
+    setSelection(boxSelect(start.additive ? marqueeBaseRef.current : [], hit))
+  }
+
+  const handleMarqueeUp = () => {
+    if (!marqueeStartRef.current) return
+    marqueeStartRef.current = null
+    marqueeBaseRef.current = []
+    setMarquee(null)
+  }
+
+  /**
+ * 移入图片回收站（工具栏按钮与 Delete 键共用）。
    *
    * 灯箱开着时不能因为这张图从画廊消失就退出去：
    * 图片本体还在库里，把「目前看着的那张」留在灯箱列表里，用户能继续看图、继续按 →
@@ -795,6 +957,14 @@ export default function DetailModal() {
    */
   const handleDeleteKey = () => {
     if (!task || reapplying) return
+    // 多选时 Delete 删掉选中的所有图（和文件管理器一致），单张逻辑保持不变
+    if (selectionRef.current.ids.length > 1) {
+      const ids = selectionRef.current.ids.filter((id) => !(task.trashedOutputImages ?? []).includes(id))
+      if (!ids.length) return
+      void trashOutputImages(task.id, ids)
+      setSelection(EMPTY_SELECTION)
+      return
+    }
     const target = lightboxImageId || currentOutputImageId
     if (!target) return
     // 已经进了回收站就不再重复处理
@@ -927,6 +1097,104 @@ export default function DetailModal() {
     }
   }
 
+
+  /** 批量移入回收站：和单张一样可还原，只是不弹确认（回收站本身就是安全网） */
+  const handleTrashSelected = () => {
+    if (!task || !selectedImageIds.length) return
+    setConfirmDialog({
+      title: `移入图片回收站（${selectedImageIds.length} 张）`,
+      message: '这些图会从画廊和交付里移除，原图仍保留，可在「回收站」里还原。',
+      action: () => { void trashOutputImages(task.id, selectedImageIds) },
+    })
+  }
+
+  /** 批量下载：和「下载全部」同一条链路，只是范围换成选中的那几张 */
+  const handleDownloadSelected = async () => {
+    if (!task || !selectedImageIds.length) return
+    try {
+      const fileNameBase = `task-${task.id}`
+      const directionNode = task.sopDirectionId ? sopDirections.find((node) => node.id === task.sopDirectionId) : undefined
+      const productNode = directionNode
+        ? sopDirections.find((node) => node.id === directionNode.parentId && node.kind === 'product')
+        : undefined
+      const folderOptions = {
+        template: settings.taskFolderTemplate,
+        custom: settings.taskFolderCustom,
+        product: productNode?.name,
+        direction: directionNode?.name,
+      }
+      let result: Awaited<ReturnType<typeof downloadImageIds>>
+      if (selectedImageIds.length === 1) {
+        result = await downloadImageIds(selectedImageIds, fileNameBase)
+      } else if (settings.zipDownloadRoutes.includes('task-detail-all')) {
+        result = await downloadImageEntriesAsZip(getImageZipEntries(selectedImageIds, fileNameBase), fileNameBase)
+      } else if (isTauri) {
+        result = await downloadTaskImagesToFolder({ ...task, outputImages: selectedImageIds }, folderOptions)
+      } else {
+        const folderResult = await downloadTaskImagesToWebFolder({ ...task, outputImages: selectedImageIds }, folderOptions)
+        result = folderResult.webUnsupported ? await downloadImageIds(selectedImageIds, fileNameBase) : folderResult
+      }
+      if (result.canceled) return
+      if (result.successCount === 0) {
+        showToast(getDownloadErrorMessage(result.error), 'error')
+      } else if (result.failCount > 0) {
+        showToast(`部分下载失败：成功 ${result.successCount}，失败 ${result.failCount}`, 'error')
+      } else {
+        showToast(withSaveLocation(`下载成功：${result.successCount} 张图片`, result.location), 'success')
+      }
+    } catch (err) {
+      console.error(err)
+      showToast(getDownloadErrorMessage(err), 'error')
+    }
+  }
+
+  /**
+   * 批量交付：只交选中的那几张。
+   *
+   * 交付本身是按整卡走的，所以这里反过来做 —— 把「没选的」作为排除项传进去。
+   * 这样文件名序号、文件夹归属、质检排除都沿用原有逻辑，不必另写一套。
+   */
+  const handleDeliverSelected = async () => {
+    if (!task || !selectedImageIds.length || delivering) return
+    if (!isTauri) {
+      showToast('网页版请用「批量下载」', 'info')
+      return
+    }
+    setDelivering(true)
+    try {
+      await deliverTaskNow(task.id, selectedImageIds)
+    } finally {
+      setDelivering(false)
+    }
+  }
+
+  /** 批量重新检查：只把选中的图送去质检，不动其它图 */
+  const handleInspectSelected = async () => {
+    if (!task || !selectedImageIds.length || inspecting) return
+    setInspecting(true)
+    try {
+      const entries: Array<{ imageId: string; dataUrl: string }> = []
+      for (const id of selectedImageIds) {
+        const dataUrl = await ensureImageCached(id)
+        if (dataUrl) entries.push({ imageId: id, dataUrl })
+      }
+      if (!entries.length) {
+        showToast('选中的图读不出来了（可能已被清理）', 'error')
+        return
+      }
+      await inspectImages(entries, {
+        expect: groupTasks.length > 1 ? expectFromPrompt('') : expectForTask(task),
+        manual: true,
+        scope: duplicateScope,
+        group: duplicateScopeKey(task, duplicateScope),
+      })
+    } catch (err) {
+      showToast(`检查失败：${err instanceof Error ? err.message : '未知原因'}`, 'error')
+    } finally {
+      setInspecting(false)
+    }
+  }
+
   const handleDownloadPartialImages = async () => {
     if (!task || !streamPartialImageIds.length) return
 
@@ -1041,7 +1309,27 @@ export default function DetailModal() {
           )}
           {task.status === 'done' && outputLen > 0 && (
             <>
-              <div className="absolute inset-0 overflow-y-auto px-3 pb-12 pt-12">
+              <div
+                ref={galleryScrollRef}
+                className="absolute inset-0 overflow-y-auto px-3 pb-12 pt-12"
+                onPointerDown={(event) => {
+                  // 点在缩略图上不框选（那是选图/放大），只从空白处开始拖
+                  if ((event.target as HTMLElement).closest('[data-gallery-image-id]')) return
+                  handleMarqueeDown(event)
+                }}
+                onPointerMove={handleMarqueeMove}
+                onPointerUp={handleMarqueeUp}
+                onPointerLeave={handleMarqueeUp}
+                onPointerCancel={handleMarqueeUp}
+              >
+                {/* 框选矩形：绝对定位在滚动容器的内容坐标上（容器是 absolute，直接作基准），跟着滚动走 */}
+                {marquee && (
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute z-10 rounded border border-blue-400/70 bg-blue-400/20"
+                    style={{ left: marquee.left, top: marquee.top, width: marquee.width, height: marquee.height }}
+                  />
+                )}
                 {/* 行优先：先从左到右排满一行再换行。CSS 多列是列优先，读起来是纵向跳的 */}
                 <div className="flex flex-wrap items-start gap-2">
                   {filteredOutputSlots.map(({ slot, index }) => {
@@ -1062,9 +1350,13 @@ export default function DetailModal() {
                       <button
                         key={slot.imageId}
                         type="button"
-                        onClick={() => {
-                          // 单击只选中：右侧参数、工具条都跟着这张走
+                        onClick={(event) => {
+                          // 照文件管理器：单击单选，Ctrl 加选 / 取消，Shift 连选
                           setImageIndex(index)
+                          setSelection((prev) => clickSelect(prev, selectionOrder, slot.imageId, {
+                            toggle: event.ctrlKey || event.metaKey,
+                            range: event.shiftKey,
+                          }))
                         }}
                         onDoubleClick={() => {
                           // 双击才是看大图；筛选中时只在这类图里翻页
@@ -1087,9 +1379,12 @@ export default function DetailModal() {
                             setLightboxImageId(slot.imageId, ids)
                           }
                         }}
-                        title="单击选中 · 双击看大图"
+                        data-gallery-image-id={slot.imageId}
+                        title="单击选中 · Ctrl 单击加选 · Shift 单击连选 · 双击看大图"
                         style={{ width: galleryTileSize }}
-                        className={`group relative block shrink-0 overflow-hidden rounded-lg transition-shadow ${index === imageIndex ? 'ring-2 ring-blue-500' : ''}`}
+                        className={`group relative block shrink-0 overflow-hidden rounded-lg transition-shadow ${
+                          isSelected(selection, slot.imageId) ? 'ring-2 ring-blue-500' : ''
+                        }`}
                       >
                         <img
                           src={src}
@@ -1113,6 +1408,18 @@ export default function DetailModal() {
                         <span className="absolute bottom-1 right-1 rounded bg-black/55 px-1 py-0.5 font-mono text-[9px] leading-none text-white">
                           {index + 1}
                         </span>
+                        {/* 多选时左上角打勾：一眼看出哪些会被批量操作命中 */}
+                        {selection.ids.length > 1 && (
+                          <span
+                            className={`absolute left-1 top-1 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold leading-none ${
+                              isSelected(selection, slot.imageId)
+                                ? 'bg-blue-500 text-white'
+                                : 'border border-white/70 bg-black/25 text-transparent'
+                            }`}
+                          >
+                            ✓
+                          </span>
+                        )}
                         {(verdictOf(slot.imageId) || clipScores[slot.imageId]) && (
                           <div className="absolute bottom-1 left-1 flex items-center gap-1">
                             {verdictOf(slot.imageId) && (
@@ -1211,6 +1518,58 @@ export default function DetailModal() {
                   </button>
                 </div>
               </div>
+              {/*
+                批量操作条：多选（2 张以上）才出现。
+                单独占底部一行，不挤进「张数 / 筛选 / 缩放」那一排 —— 那排已经很满了。
+              */}
+              {selection.ids.length > 1 && (
+                <div className="pointer-events-none absolute inset-x-0 bottom-12 z-20 flex justify-center px-4">
+                  <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-full bg-black/65 px-3 py-1.5 text-white shadow-lg backdrop-blur-sm">
+                    <span className="text-xs font-medium tabular-nums">已选 {selectedImageIds.length} 张</span>
+                    <span className="h-3 w-px bg-white/25" />
+                    <button
+                      type="button"
+                      onClick={handleDownloadSelected}
+                      className="rounded-full px-2 py-0.5 text-xs transition hover:bg-white/20"
+                    >
+                      下载
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void handleDeliverSelected() }}
+                      disabled={delivering || !isTauri}
+                      title={isTauri ? '把选中的图交付到交付文件夹' : '网页版没有交付文件夹，请用下载'}
+                      className="rounded-full px-2 py-0.5 text-xs transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {delivering ? '交付中…' : '交付'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void handleInspectSelected() }}
+                      disabled={inspecting}
+                      className="rounded-full px-2 py-0.5 text-xs transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {inspecting ? '检查中…' : '重新检查'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTrashSelected}
+                      className="rounded-full px-2 py-0.5 text-xs text-red-200 transition hover:bg-red-500/40"
+                    >
+                      删入回收站
+                    </button>
+                    <span className="h-3 w-px bg-white/25" />
+                    <button
+                      type="button"
+                      onClick={() => setSelection(EMPTY_SELECTION)}
+                      title="取消选择（Esc）"
+                      className="rounded-full px-2 py-0.5 text-xs text-white/70 transition hover:bg-white/20 hover:text-white"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              )}
               <div data-selectable-text className="absolute left-4 top-[15px] flex items-center gap-1.5">
                 {currentImageRatio && currentImageSize ? (
                   <>

@@ -195,3 +195,34 @@ describe('进回收站时删哪个交付文件', () => {
     expect(await deliveredFileRefsOf(t, 'img-a', { ...context([t]), deliveryDirs: {} })).toEqual([])
   })
 })
+
+describe('多选交付：只交选中的那几张', () => {
+  /**
+   * 多选交付在 store 里是把「没选的图」作为排除项传下去的（见 deliverTaskNow 的 onlyImageIds）。
+   * 这里验这条核心规则：排除项与已选集合互补，选中的都能交出去、没选的都被挡掉。
+   */
+  it('选中的全部保留，没选的一律排除', () => {
+    const all = ['a', 'b', 'c']
+    const picked = new Set(['a', 'c'])
+    const exclude = new Set(all.filter((id) => !picked.has(id)))
+    const delivered = deliverableOutputImages(task({ outputImages: [...all] }), exclude)
+    expect(delivered).toEqual(['a', 'c'])
+  })
+
+  it('只选一张时也只交那一张', () => {
+    const exclude = new Set(['b', 'c'])
+    expect(deliverableOutputImages(task({ outputImages: ['a', 'b', 'c'] }), exclude)).toEqual(['a'])
+  })
+
+  it('全选时排除集为空，等价于整卡交付', () => {
+    const all = ['a', 'b', 'c']
+    expect(deliverableOutputImages(task({ outputImages: [...all] }), new Set())).toEqual(all)
+  })
+
+  it('选中的图里如果有在回收站的，仍然不交（回收站优先级更高）', () => {
+    const exclude = new Set(['c'])
+    const t = task({ outputImages: ['a', 'b', 'c'], trashedOutputImages: ['a'] })
+    // a 虽然被选中（不在排除集里），但它在回收站，不该被交出去
+    expect(deliverableOutputImages(t, exclude)).toEqual(['b'])
+  })
+})

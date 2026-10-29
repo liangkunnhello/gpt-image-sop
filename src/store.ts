@@ -2892,7 +2892,14 @@ function reportDeliverResult(result: DeliverResult) {
 }
 
 /** 手动「立即交付」：把整张卡（同 sopJobId 的所有任务）一次写全 */
-export async function deliverTaskNow(taskId: string): Promise<DeliverResult> {
+/**
+ * 立刻交付这张卡。
+ *
+ * @param onlyImageIds 只交这几张（多选交付用）。不传就是整卡按原有规则交。
+ *   实现上是把「其余图」作为排除项传给整卡交付 —— 文件名序号、文件夹归属、
+ *   质检排除这些逻辑都不用重写一份。
+ */
+export async function deliverTaskNow(taskId: string, onlyImageIds?: string[]): Promise<DeliverResult> {
   const task = useStore.getState().tasks.find((item) => item.id === taskId)
   if (!task) return { ok: false, written: 0, error: '任务不存在' }
   if (!isTauri) return { ok: false, written: 0, error: '网页版请用「下载到文件夹」' }
@@ -2904,16 +2911,31 @@ export async function deliverTaskNow(taskId: string): Promise<DeliverResult> {
    */
   const qc = useClipStore.getState().qc
   const excludeImageIds = new Set<string>()
+  /** 因质检不合格被排除的张数：单独计数，别把「没选的图」也算进这句提示里 */
+  let qcSkipped = 0
   for (const item of tasksOfCard(context.tasks, task)) {
     for (const id of item.outputImages ?? []) {
-      if (qc[id]?.verdict === 'fail') excludeImageIds.add(id)
+      if (qc[id]?.verdict === 'fail') {
+        excludeImageIds.add(id)
+        qcSkipped += 1
+      }
+    }
+  }
+  // 多选交付：把没选的图排除掉（已选的才交）
+  if (onlyImageIds?.length) {
+    const keep = new Set(onlyImageIds)
+    for (const item of tasksOfCard(context.tasks, task)) {
+      for (const id of item.outputImages ?? []) {
+        if (!keep.has(id)) excludeImageIds.add(id)
+      }
     }
   }
   const result = await deliverCardGroup(task, context, { excludeImageIds })
   recordDeliveredFiles(result.files)
   reportDeliverResult(result)
-  if (excludeImageIds.size && result.ok) {
-    useStore.getState().showToast(`已跳过 ${excludeImageIds.size} 张质检不合格的图`, 'info')
+  // 只报质检跳过的那部分：多选交付时排除的是「没选的图」，说成质检不合格会误导
+  if (qcSkipped && result.ok) {
+    useStore.getState().showToast(`已跳过 ${qcSkipped} 张质检不合格的图`, 'info')
   }
   return result
 }
