@@ -5932,6 +5932,37 @@ describe('reused task API profile', () => {
     })
   })
 
+  it('reuses the task size instead of keeping the current one', async () => {
+    useStore.setState({ params: { ...DEFAULT_PARAMS, size: '1024x1024' } })
+    await reuseConfig(task({ params: { ...DEFAULT_PARAMS, size: '2304x1728' } }))
+    expect(useStore.getState().params.size).toBe('2304x1728')
+  })
+
+  /**
+   * 方舟会把不满足像素下限的尺寸换算一发（2K 的 3:4 → 1728×2304）。
+   * 复用时要还原「真正出图的尺寸」，否则输入栏停在 1536×2048，跟卡上的对不上，
+   * 用户会以为尺寸没复用上。
+   */
+  it('reuses the actual ark size instead of the requested one', async () => {
+    useStore.setState({ params: { ...DEFAULT_PARAMS, size: '1536x2048' } })
+    await reuseConfig(task({
+      apiProvider: 'ark',
+      params: { ...DEFAULT_PARAMS, size: '1536x2048' },
+      actualParams: { size: '1728x2304', output_format: 'jpeg' },
+    }))
+    expect(useStore.getState().params.size).toBe('1728x2304')
+  })
+
+  it('keeps the requested size for other providers (actual may be an upscaled value)', async () => {
+    useStore.setState({ params: { ...DEFAULT_PARAMS, size: '1024x1024' } })
+    await reuseConfig(task({
+      apiProvider: 'openai',
+      params: { ...DEFAULT_PARAMS, size: '1536x2048' },
+      actualParams: { size: '2048x2048' },
+    }))
+    expect(useStore.getState().params.size).toBe('1536x2048')
+  })
+
   it('reuses the task API profile temporarily without switching the active profile', async () => {
     await reuseConfig(task({
       apiProvider: 'fal',

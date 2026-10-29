@@ -5571,6 +5571,25 @@ export async function retryTask(task: TaskRecord) {
 }
 
 /** 复用配置 */
+/**
+ * 复用配置时该还原哪个尺寸。
+ *
+ * 方舟（Seedream）会把不满足像素下限的尺寸换算一发：选 2K 的 3:4（1536×2048，314 万像素）
+ * 实际发出去的是 1728×2304。这时 params.size 记的是「选的」，actualParams.size 才是「真正出的」。
+ * 只还原「选的」，复用后输入栏还是 1536×2048，跟卡上的 1728×2304 对不上 ——
+ * 看起来就像「复用没带上尺寸」。
+ *
+ * 只对 ark 生效：其它渠道的 actualParams.size 可能是「放大生成再缩回」用的中间尺寸，
+ * 拿它还原会连带改变出图大小。
+ */
+function resolveReuseSize(task: TaskRecord): string {
+  if (task.apiProvider === 'ark') {
+    const actual = task.actualParams?.size
+    if (actual && /^\d+x\d+$/.test(actual)) return actual
+  }
+  return task.params.size
+}
+
 export async function reuseConfig(task: TaskRecord) {
   const { settings, setPrompt, setCustomCopy, setParams, setInputImages, setFixedImages, setVariableImages, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile } = useStore.getState()
   const normalizedSettings = normalizeSettings(settings)
@@ -5590,7 +5609,12 @@ export async function reuseConfig(task: TaskRecord) {
   const reuseSettings = normalizeSettings(useStore.getState().settings)
   const paramsSettings = shouldTemporarilyReuseProfile && matchedProfile ? createSettingsForApiProfile(reuseSettings, matchedProfile) : reuseSettings
 
-  setParams(normalizeParamsForSettings(task.params, paramsSettings, { hasInputImages: task.inputImageIds.length > 0 }))
+  // 尺寸单独取一次：方舟换过像素的卡要还原成真正出图的尺寸，而不是当初选的
+  setParams(normalizeParamsForSettings(
+    { ...task.params, size: resolveReuseSize(task) },
+    paramsSettings,
+    { hasInputImages: task.inputImageIds.length > 0 },
+  ))
   setReusedTaskApiProfile(
     shouldTemporarilyReuseProfile && matchedProfile ? matchedProfile.id : null,
     missingReusedProfile,

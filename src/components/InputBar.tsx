@@ -44,7 +44,7 @@ import { hasImageTag, imageFilesFromHtmlAsync, imageFilesFromText } from '../lib
 import SopExtraPicker from './SopExtraPicker'
 import CustomCopyPicker from './CustomCopyPicker'
 import { buildCopyPrefix, mergeTaskCopy } from '../lib/customCopy'
-import { arkSizeHint } from '../lib/arkSize'
+import { arkSizeHint, toArkSize } from '../lib/arkSize'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import PromptOptimizeModal from './PromptOptimizeModal'
@@ -2126,7 +2126,13 @@ export default function InputBar() {
       {showSizePicker && (
         <SizePickerModal
           currentSize={isFalTextToImage && params.size === 'auto' ? DEFAULT_FAL_IMAGE_SIZE : params.size}
-          onSelect={(size) => setParams({ size })}
+          /**
+           * 方舟要的是「同比例的最大尺寸」：预设里的 2K 3:4 是 1536×2048（314 万像素），
+           * 不满足它的像素下限，发出去照样会被换成 1728×2304。
+           * 所以这里直接把选中的预设换算成真正会用的尺寸，输入栏和卡上就都是同一个值，
+           * 不会再出现「选了一个尺寸、出图另一个尺寸、复用还回不到」的来回。
+           */
+          onSelect={(size) => setParams({ size: isArkProvider && /^\d+x\d+$/.test(size) ? toArkSize(size) : size })}
           onClose={() => setShowSizePicker(false)}
           allowAuto={!isFalTextToImage}
           codexCli={activeProfile.codexCli}
