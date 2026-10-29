@@ -39,11 +39,13 @@ const DEFAULT_BASE_URL = DEFAULT_API_URL_PATCH?.baseUrl ?? ''
 export { DEFAULT_IMAGES_MODEL } from './imageModels'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-6.1-sol'
 export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
+// 火山方舟（即梦 Seedream）：地址到 /api/v3，模型默认 4.5
+export { DEFAULT_ARK_BASE_URL, DEFAULT_ARK_MODEL } from './arkImageApi'
 export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
 export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 600
 
-const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'sb2api-async', 'fal'])
+const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'sb2api-async', 'fal', 'ark'])
 const DEFAULT_CUSTOM_PROVIDER_PATHS = {
   generationPath: 'images/generations',
   editPath: 'images/edits',
@@ -149,7 +151,7 @@ function normalizeZipDownloadRoutes(value: unknown) {
 function normalizeProviderOrder(value: unknown, customProviders: CustomProviderDefinition[]): string[] | undefined {
   if (!Array.isArray(value)) return undefined
 
-  const providerIds = ['openai', 'sb2api-async', 'fal', ...customProviders.map((provider) => provider.id)]
+  const providerIds = ['openai', 'sb2api-async', 'fal', 'ark', ...customProviders.map((provider) => provider.id)]
   const knownIds = new Set(providerIds)
   const ordered = value
     .map(String)
@@ -432,6 +434,27 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
     },
   }
   const savedDraft = providerDrafts[provider]
+
+  if (provider === 'ark') {
+    return {
+      ...profile,
+      provider,
+      baseUrl: savedDraft?.baseUrl ?? 'https://ark.cn-beijing.volces.com/api/v3',
+      model: savedDraft?.model ?? 'doubao-seedream-4-5-251128',
+      imageGenerationModel: savedDraft?.imageGenerationModel ?? 'doubao-seedream-4-5-251128',
+      // 方舟只有同步 images 接口，没有 responses / codex 那套
+      apiMode: 'images',
+      reasoningEffort: undefined,
+      codexCli: false,
+      // 国内直连，不走开发代理
+      apiProxy: false,
+      responseFormatB64Json: true,
+      streamImages: false,
+      streamPartialImages: savedDraft?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
+      transparentBackgroundMethod: 'local',
+      providerDrafts,
+    }
+  }
 
   if (provider === 'fal') {
     return {
@@ -800,6 +823,7 @@ export function getCustomProviderDefinition(settings: Partial<AppSettings> | unk
 
 export function getApiProviderLabel(settings: Partial<AppSettings> | unknown, provider: ApiProvider): string {
   if (provider === 'fal') return 'fal.ai'
+  if (provider === 'ark') return '火山方舟（即梦）'
   if (provider === 'openai') return 'OpenAI'
   if (provider === 'sb2api-async') return SUB2API_PROVIDER.name
   return getCustomProviderDefinition(settings, provider)?.name ?? provider

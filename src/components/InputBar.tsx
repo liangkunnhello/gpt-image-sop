@@ -44,6 +44,7 @@ import { hasImageTag, imageFilesFromHtmlAsync, imageFilesFromText } from '../lib
 import SopExtraPicker from './SopExtraPicker'
 import CustomCopyPicker from './CustomCopyPicker'
 import { buildCopyPrefix, mergeTaskCopy } from '../lib/customCopy'
+import { arkSizeHint } from '../lib/arkSize'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import PromptOptimizeModal from './PromptOptimizeModal'
@@ -801,9 +802,17 @@ export default function InputBar() {
     () => planGenerationSize(params.size, { postProcess: postProcessOn, allowResize: !activeProfile.codexCli }),
     [params.size, postProcessOn, activeProfile.codexCli],
   )
-  const sizeScaleHint = sizePlan.scaled
-    ? `渠道不支持 ${sizePlan.targetSize.replace('x', '×')}，实际按 ${sizePlan.requestSize.replace('x', '×')} 生成，出图后缩回`
-    : ''
+  const isArkProvider = activeProfile.provider === 'ark'
+  /**
+   * 尺寸提示：
+   * - 火山方舟（Seedream）有自己的像素下限，会被换算成标准尺寸，用它的提示；
+   * - 其它服务商沿用原来的「渠道不支持 → 放大生成再缩回」。
+   */
+  const sizeScaleHint = isArkProvider
+    ? arkSizeHint(params.size)
+    : sizePlan.scaled
+      ? `渠道不支持 ${sizePlan.targetSize.replace('x', '×')}，实际按 ${sizePlan.requestSize.replace('x', '×')} 生成，出图后缩回`
+      : ''
 
   const qualityOptions = [
     ...(!isFalProvider ? [{ label: 'auto', value: 'auto' }] : []),

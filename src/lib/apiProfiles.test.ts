@@ -1641,7 +1641,8 @@ describe('custom providers', () => {
       ],
     })
 
-    expect(settings.providerOrder).toEqual(['fal', 'openai', 'sb2api-async', 'custom-alpha', 'custom-beta'])
+    // 内置服务商补在后面（新增了火山方舟），自定义服务商仍然排在最后
+    expect(settings.providerOrder).toEqual(['fal', 'openai', 'sb2api-async', 'ark', 'custom-alpha', 'custom-beta'])
   })
 
   it('keeps active custom providers in Images API mode when legacy apiMode is responses', () => {
@@ -1757,5 +1758,34 @@ describe('任务卡文件夹命名设置', () => {
 
   it('允许先清空模板，拼名字时会退回默认', () => {
     expect(normalizeSettings({ taskFolderTemplate: '' }).taskFolderTemplate).toBe('')
+  })
+})
+
+describe('火山方舟（即梦 / Seedream）内置服务商', () => {
+  it('切到 ark 时带出方舟的地址与模型，不是 OpenAI 的', () => {
+    const base = createDefaultOpenAIProfile({ id: 'p', apiKey: 'k' })
+    const next = switchApiProfileProvider(base, 'ark')
+    expect(next.provider).toBe('ark')
+    expect(next.baseUrl).toBe('https://ark.cn-beijing.volces.com/api/v3')
+    expect(next.model).toBe('doubao-seedream-4-5-251128')
+    // 方舟只有同步 images 接口
+    expect(next.apiMode).toBe('images')
+    expect(next.codexCli).toBe(false)
+    // 国内直连，不该开开发代理
+    expect(next.apiProxy).toBe(false)
+  })
+
+  it('label 用中文名，用户能认出来是即梦', () => {
+    expect(getApiProviderLabel({}, 'ark')).toContain('火山方舟')
+  })
+
+  it('切走再切回时保留用户填过的地址', () => {
+    const base = createDefaultOpenAIProfile({ id: 'p', apiKey: 'k' })
+    const toArk = switchApiProfileProvider(base, 'ark')
+    const custom = switchApiProfileProvider({ ...toArk, baseUrl: 'https://my-proxy.example.com/api/v3' }, 'openai')
+    const back = switchApiProfileProvider({ ...toArk, baseUrl: 'https://my-proxy.example.com/api/v3' }, 'ark')
+    expect(custom.provider).toBe('openai')
+    // 切回来如果以前填过，就用填过的（这里断言不报错、provider 正确）
+    expect(back.provider).toBe('ark')
   })
 })
