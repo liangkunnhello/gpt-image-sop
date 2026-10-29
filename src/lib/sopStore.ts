@@ -7,6 +7,12 @@ import { BUILTIN_EXTRAS, type ExtraRequirement } from './extraRequirements'
 import { clampPromptCount } from './promptLimits'
 import { safeJsonStorage, tauriStorage } from './tauriStorage'
 
+/**
+ * 系统提示词最多保留多少个历史版本。
+ * 改一版存一份，留太多既没人翻、又把持久化体积撑大；20 版够覆盖常见的来回改。
+ */
+export const MAX_SYSTEM_PROMPT_VERSIONS = 20
+
 /** 初始树按现有策略分类搭骨架，内容后续在界面里增删 */
 const SEED_DIRECTIONS: SopDirectionNode[] = [
   { id: 'cat-insurance', parentId: null, name: '保险', kind: 'category' },
@@ -205,6 +211,8 @@ interface SopState {
   removeNode: (id: string) => void
   addSystemPrompt: (productId: string, name: string, content: string) => string
   updateSystemPrompt: (id: string, patch: Partial<Pick<SopSystemPrompt, 'name' | 'content'>>) => void
+  /** 回到某个历史版本：当前内容同样归档，所以这一步本身也能撤销 */
+  restoreSystemPromptVersion: (id: string, versionId: string) => void
   removeSystemPrompt: (id: string) => void
   addSavedSop: (productId: string, name: string, content: string) => string
   updateSavedSop: (id: string, patch: Partial<Pick<SavedSop, 'name' | 'content'>>) => void
@@ -500,9 +508,46 @@ export const useSopStore = create<SopState>()(
       },
       updateSystemPrompt: (id, patch) => {
         set((state) => ({
-          systemPrompts: state.systemPrompts.map((item) =>
-            item.id === id ? { ...item, ...patch, updatedAt: Date.now() } : item,
-          ),
+          systemPrompts: state.systemPrompts.map((item) => {
+            if (item.id !== id) return item
+            const nextName = patch.name ?? item.name
+            const nextContent = patch.content ?? item.content
+            // 只改名字不留版本：内容没变，存进去只是重复
+            if (nextContent === item.content) {
+              return { ...item, name: nextName, updatedAt: Date.now() }
+            }
+            /**
+             * 内容被换掉了，先把「被换下的这份」收进历史。
+             * 内容去重：A→B→A 这种来回改，历史里没必要留两条一模一样的 A。
+             */
+            const duplicated = (item.history ?? []).some((version) => version.content === item.content)
+            const history = duplicated
+              ? item.history
+              : [
+                { id: newId('ver'), name: item.name, content: item.content, archivedAt: Date.now() },
+                ...(item.history ?? []),
+              ].slice(0, MAX_SYSTEM_PROMPT_VERSIONS)
+            return { ...item, name: nextName, content: nextContent, updatedAt: Date.now(), history }
+          }),
+        }))
+      },
+      restoreSystemPromptVersion: (id, versionId) => {
+        set((state) => ({
+          systemPrompts: state.systemPrompts.map((item) => {
+            if (item.id !== id) return item
+            const target = item.history?.find((version) => version.id === versionId)
+            if (!target) return item
+            // 回退也是一次替换：当前这份同样归档，误点还能再退回来
+            const archived = { id: newId('ver'), name: item.name, content: item.content, archivedAt: Date.now() }
+            const rest = (item.history ?? []).filter((version) => version.id !== versionId)
+            return {
+              ...item,
+              name: target.name,
+              content: target.content,
+              updatedAt: Date.now(),
+              history: [archived, ...rest].slice(0, MAX_SYSTEM_PROMPT_VERSIONS),
+            }
+          }),
         }))
       },
       removeSystemPrompt: (id) => {

@@ -535,6 +535,23 @@ export interface SopDirectionNode {
 }
 
 /** 挂在「方向」节点下的系统提示词，同一方向可有多条 */
+/**
+ * 系统提示词的一个历史版本。
+ *
+ * 保存新内容时，被替换掉的那份会收进 `SopSystemPrompt.history` ——
+ * 系统提示词一改就影响后面所有反推出来的 SOP，改坏了得能退回去。
+ */
+export interface SopSystemPromptVersion {
+  id: string
+  name: string
+  content: string
+  /**
+   * 这份内容被替换掉的时间（不是它最初写下的时间）：
+   * 记录的是「它作为当前版本，一直用到什么时候」。
+   */
+  archivedAt: number
+}
+
 export interface SopSystemPrompt {
   id: string
   /** 所属产品：同一产品下的所有方向共用这份列表 */
@@ -544,6 +561,8 @@ export interface SopSystemPrompt {
   name: string
   content: string
   updatedAt: number
+  /** 历史版本，最新的在前；只留最近若干版，避免无限膨胀 */
+  history?: SopSystemPromptVersion[]
 }
 
 /**

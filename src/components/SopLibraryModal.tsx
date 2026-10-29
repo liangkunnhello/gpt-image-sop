@@ -8,6 +8,7 @@ import { firstTextFile, isFileDrag } from '../lib/fileDrop'
 import AiRewriteBar from './AiRewriteBar'
 import MarkdownEditor from './MarkdownEditor'
 import SopLibraryImportModal from './SopLibraryImportModal'
+import SystemPromptHistoryModal from './SystemPromptHistoryModal'
 
 /** 系统提示词和卖点/风格的字段形状一致，抽平了好统一渲染 */
 interface LibraryItem {
@@ -64,6 +65,7 @@ export default function SopLibraryModal() {
   const addSystemPrompt = useSopStore((s) => s.addSystemPrompt)
   const updateSystemPrompt = useSopStore((s) => s.updateSystemPrompt)
   const removeSystemPrompt = useSopStore((s) => s.removeSystemPrompt)
+  const restoreSystemPromptVersion = useSopStore((s) => s.restoreSystemPromptVersion)
   const addVariablePrompt = useSopStore((s) => s.addVariablePrompt)
   const updateVariablePrompt = useSopStore((s) => s.updateVariablePrompt)
   const removeVariablePrompt = useSopStore((s) => s.removeVariablePrompt)
@@ -150,6 +152,8 @@ export default function SopLibraryModal() {
   const [draftContent, setDraftContent] = useState('')
   const [newName, setNewName] = useState('')
   const [importOpen, setImportOpen] = useState(false)
+  /** 系统提示词的历史版本面板：只有 prompt 这一类有版本管理 */
+  const [historyOpen, setHistoryOpen] = useState(false)
   /** md 文件拖到右侧空白区（比如「不使用系统提示词」时）也能导入 */
   const [paneFileOver, setPaneFileOver] = useState(false)
 
@@ -186,6 +190,12 @@ export default function SopLibraryModal() {
   }, [tab, activeDirectionId, currentItem?.id])
 
   const editingItem = items.find((item) => item.id === editingId)
+  /**
+   * 历史版本只在系统提示词上有，而 items 是抽平后的四字段结构（带不上 history），
+   * 所以这里按 id 回到原始列表里找一次。
+   */
+  const editingPrompt = tab === 'prompt' ? systemPrompts.find((item) => item.id === editingId) : undefined
+  const versionCount = editingPrompt?.history?.length ?? 0
   const dirty = Boolean(editingItem) && (draftName !== editingItem?.name || draftContent !== editingItem?.content)
 
   const applyItem = (id: string) => {
@@ -631,6 +641,19 @@ export default function SopLibraryModal() {
                   <p className="min-w-0 flex-1 truncate text-[10px] text-gray-400">
                     右键列表项可设为这个方向的默认{label}
                   </p>
+                  {tab === 'prompt' && (
+                    <button
+                      type="button"
+                      onClick={() => setHistoryOpen(true)}
+                      disabled={versionCount === 0}
+                      title={versionCount
+                        ? '查看历史版本，可挑任意一版恢复'
+                        : '保存过新内容之后才会有历史版本'}
+                      className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-gray-500 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent dark:text-gray-400 dark:hover:bg-white/10 dark:disabled:text-gray-600"
+                    >
+                      历史版本{versionCount ? ` (${versionCount})` : ''}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => loadDraft(editingItem)}
@@ -669,6 +692,21 @@ export default function SopLibraryModal() {
         targetProductName={productName}
         defaultTab={tab === 'variable' ? 'variable' : tab}
         onClose={() => setImportOpen(false)}
+      />
+    )}
+
+    {historyOpen && editingPrompt && (
+      <SystemPromptHistoryModal
+        prompt={editingPrompt}
+        onClose={() => setHistoryOpen(false)}
+        onRestore={(versionId) => {
+          restoreSystemPromptVersion(editingPrompt.id, versionId)
+          // 恢复后把编辑器草稿同步成新内容，否则会显示成「未保存」还带着旧正文
+          const next = useSopStore.getState().systemPrompts.find((item) => item.id === editingPrompt.id)
+          if (next) loadDraft(next)
+          setHistoryOpen(false)
+          showToast('已恢复该版本，恢复前的内容也存成历史版本了', 'success')
+        }}
       />
     )}
     </>
