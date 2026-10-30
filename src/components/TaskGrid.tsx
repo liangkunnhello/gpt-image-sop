@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashTask } from '../store'
+import { useStore, countResumableTasks, resumeInterruptedTasks, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashTask } from '../store'
 import { taskMatchesChannel } from '../lib/channel'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { isTauri } from '../lib/platform'
@@ -28,6 +28,15 @@ export default function TaskGrid() {
   const rootRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const [selectionBox, setSelectionBox] = useState<{ startPageX: number; startPageY: number; currentPageX: number; currentPageY: number } | null>(null)
+  /**
+   * 断点继续：中断 / 软件被意外关掉之后，列表顶部给一条「接着跑完」的入口。
+   * 按全量任务算（不受筛选影响），否则筛到「已完成」就看不到入口了。
+   */
+  const resumableCount = useStore((s) => countResumableTasks(s.tasks))
+  /** 用户点了「忽略」就把当时那批记下来，本次会话不再反复提醒 */
+  const [dismissedResumeKey, setDismissedResumeKey] = useState('')
+  const resumableKey = useStore((s) => s.tasks.filter((task) => task.status === 'error' && !task.outputImages?.length).map((task) => task.id).join(','))
+  const showResumeBar = resumableCount > 0 && dismissedResumeKey !== resumableKey
   const dragStart = useRef<{ pageX: number; pageY: number } | null>(null)
   const lastClientPoint = useRef<{ x: number; y: number } | null>(null)
   const hasDragged = useRef(false)
@@ -348,6 +357,31 @@ export default function TaskGrid() {
       data-task-grid-root
       className="relative min-h-[50vh] pb-10"
     >
+      {/* 断点继续：中断 / 软件被关掉后没跑完的那批，一条也不用自己找 */}
+      {showResumeBar && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+          <svg className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l2.5 2.5M3.05 11a9 9 0 1118 0 9 9 0 01-18 0z" />
+          </svg>
+          <span className="min-w-0 flex-1">
+            有 {resumableCount} 个任务没跑完（中途停止，或软件被关掉），可以接着跑
+          </span>
+          <button
+            type="button"
+            onClick={() => { void resumeInterruptedTasks() }}
+            className="shrink-0 rounded-lg bg-amber-500 px-2.5 py-1 font-medium text-white transition-colors hover:bg-amber-600"
+          >
+            继续
+          </button>
+          <button
+            type="button"
+            onClick={() => setDismissedResumeKey(resumableKey)}
+            className="shrink-0 rounded-lg px-2 py-1 text-amber-700/80 transition-colors hover:bg-amber-100 dark:text-amber-300/80 dark:hover:bg-white/[0.06]"
+          >
+            忽略
+          </button>
+        </div>
+      )}
       <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" style={{ paddingTop, paddingBottom }}>
         {displayTasks.slice(startIndex, endIndex).map((task) => (
           <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>

@@ -5491,21 +5491,41 @@ export async function stopTask(taskId: string): Promise<boolean> {
   return true
 }
 
-export async function retryTask(task: TaskRecord) {
+export async function retryTask(task: TaskRecord, options: { overwrite?: boolean; keepProfile?: boolean } = {}) {
   const { settings, tasks } = useStore.getState()
   const source = tasks.find((item) => item.id === task.id)
   if (!source || source.status === 'running' || source.falRecoverable || source.customRecoverable) return
   const activeProfile = getActiveApiProfile(settings)
-  const normalizedParams = normalizeParamsForSettings(source.params, settings, { hasInputImages: source.inputImageIds.length > 0 })
+  /**
+   * 用哪个 API 配置跑这一条。
+   *
+   * 手动「重试」用当前配置（用户可能就是想换个配置再试一次）；
+   * 「断点继续」要沿用这张卡原来那份 —— 中途切过配置的话，接着跑出来的画风
+   * 会跟前面几张对不上。原配置被删了才退回当前配置。
+   */
+  const runProfile = options.keepProfile
+    ? (settings.profiles.find((item) => item.id === source.apiProfileId) ?? activeProfile)
+    : activeProfile
+  const runSettings = createSettingsForApiProfile(settings, runProfile)
+  const normalizedParams = normalizeParamsForSettings(source.params, runSettings, { hasInputImages: source.inputImageIds.length > 0 })
   const shouldUseTransparentOutput = (normalizedParams.output_format === 'png' || normalizedParams.output_format === 'webp') && normalizedParams.transparent_output
   const taskParams = shouldUseTransparentOutput
     ? getTransparentRequestParams(normalizedParams)
     : { ...normalizedParams, transparent_output: false }
-  const transparentMeta = taskParams.transparent_output && activeProfile.transparentBackgroundMethod === 'local'
+  const transparentMeta = taskParams.transparent_output && runProfile.transparentBackgroundMethod === 'local'
     ? createTransparentOutputMeta(source.prompt.trim())
     : null
+  /**
+   * 覆盖还是新建：
+   * - 默认听设置里的「重试方式」，用户在界面上点重试就按他的偏好来；
+   * - 「断点继续」这种场景要原地接着跑，所以调用方可以显式传 overwrite，
+   *   否则默认设置是 new，会把一条中断的任务变成「旧的失败卡 + 新的一张卡」。
+   * agent 任务永远不覆盖：它挂在对话的某一轮上，换了 id 就对不上了。
+   */
   const overwrite = !isAgentTask(source) && (
-    settings.retryMode === 'overwriteAll' || (settings.retryMode === 'overwriteFailed' && source.status === 'error')
+    options.overwrite ?? (
+      settings.retryMode === 'overwriteAll' || (settings.retryMode === 'overwriteFailed' && source.status === 'error')
+    )
   )
   const taskId = overwrite ? source.id : genId()
   const startedAt = Date.now()
@@ -5514,11 +5534,11 @@ export async function retryTask(task: TaskRecord) {
     id: taskId,
     prompt: source.prompt,
     params: taskParams,
-    apiProvider: activeProfile.provider,
-    apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiMode: activeProfile.apiMode,
-    apiModel: activeProfile.model,
+    apiProvider: runProfile.provider,
+    apiProfileId: runProfile.id,
+    apiProfileName: runProfile.name,
+    apiMode: runProfile.apiMode,
+    apiModel: runProfile.model,
     inputImageIds: [...source.inputImageIds],
     maskTargetImageId: source.maskTargetImageId ?? null,
     maskImageId: source.maskImageId ?? null,
@@ -5568,6 +5588,63 @@ export async function retryTask(task: TaskRecord) {
   }
 
   executeTask(taskId)
+}
+
+/** 「断点继续」同时跑几条：和出图队列一个量级，别一次把接口打满 */
+const RESUME_CONCURRENCY = 3
+
+/**
+ * 可以「继续」的任务：失败 / 中断，且一张图都没出来。
+ *
+ * - 出过图的不算：那一条已经拿到结果了，再跑一遍是重做，不是接着上次；
+ * - fal / 自定义异步任务有 job id，重启后会自己接着查结果，不在这里重复提交；
+ * - agent 任务挂在一轮对话上，重跑会打乱对话记录，也不算。
+ */
+export function isResumableTask(task: TaskRecord): boolean {
+  if (task.deletedAt || task.sopPlaceholder) return false
+  if (task.status !== 'error') return false
+  if (task.outputImages?.length) return false
+  if (task.falRecoverable || task.customRecoverable) return false
+  if (isAgentTask(task)) return false
+  return true
+}
+
+/** 有多少条可以继续（列表顶部那条提示用） */
+export function countResumableTasks(tasks: TaskRecord[]): number {
+  let count = 0
+  for (const task of tasks) if (isResumableTask(task)) count += 1
+  return count
+}
+
+/**
+ * 断点继续：把中断 / 意外关掉软件后没跑完的任务，在原地接着跑。
+ *
+ * 提示词、参数、输入图都沿用原来那份，跑出来的还是同一批东西；
+ * 用 overwrite 续在原任务上，不会多出一张重复的卡。
+ *
+ * 后台跑：几十条要跑很久，界面不该卡在这里等它跑完。
+ */
+export async function resumeInterruptedTasks(): Promise<number> {
+  const pending = useStore.getState().tasks.filter(isResumableTask)
+  if (!pending.length) {
+    useStore.getState().showToast('没有需要继续的任务', 'info')
+    return 0
+  }
+  let cursor = 0
+  const run = async () => {
+    while (cursor < pending.length) {
+      const target = pending[cursor]
+      cursor += 1
+      // 期间可能被删掉、或已经手动重试过，跑之前再确认一次
+      const latest = useStore.getState().tasks.find((item) => item.id === target.id)
+      if (!latest || !isResumableTask(latest)) continue
+      await retryTask(latest, { overwrite: true, keepProfile: true })
+      await waitForTaskSettled(latest.id, () => false)
+    }
+  }
+  void Promise.all(Array.from({ length: Math.min(RESUME_CONCURRENCY, pending.length) }, run))
+  useStore.getState().showToast(`正在继续 ${pending.length} 个没跑完的任务`, 'success')
+  return pending.length
 }
 
 /** 复用配置 */

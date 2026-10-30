@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { TASK_STOPPED_MESSAGE, addImagesFromFiles, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, countResumableTasks, isResumableTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -6837,5 +6837,53 @@ describe('本次文案的持久化', () => {
 
     const restored = normalizePersistedState(persisted, state)
     expect(restored?.state.customCopy).toBe('要留着的文案')
+  })
+})
+
+/**
+ * 断点继续：中断（手动停止）或软件被意外关掉之后，把没跑完的任务接着跑。
+ * 判断标准要严：出过图的、正在跑的、已经在自动重连的、agent 的都不算。
+ */
+describe('断点继续的候选判断', () => {
+  const failed = (patch: Partial<TaskRecord> = {}) => task({
+    status: 'error',
+    error: '请求中断',
+    outputImages: [],
+    ...patch,
+  })
+
+  it('中断且一张图都没出来的任务可以继续', () => {
+    expect(isResumableTask(failed())).toBe(true)
+    expect(isResumableTask(failed({ error: TASK_STOPPED_MESSAGE }))).toBe(true)
+  })
+
+  it('已经出过图的不算断点（那是重做，不是接着跑）', () => {
+    expect(isResumableTask(failed({ outputImages: ['img-1'] }))).toBe(false)
+  })
+
+  it('正在跑 / 已完成的都不算', () => {
+    expect(isResumableTask(task({ status: 'running' }))).toBe(false)
+    expect(isResumableTask(task({ status: 'done' }))).toBe(false)
+  })
+
+  it('已经在自动重连的不重复提交', () => {
+    expect(isResumableTask(failed({ falRecoverable: true }))).toBe(false)
+    expect(isResumableTask(failed({ customRecoverable: true }))).toBe(false)
+  })
+
+  it('agent 任务、占位卡、回收站里的都不算', () => {
+    expect(isResumableTask(failed({ agentRoundId: 'round-1' }))).toBe(false)
+    expect(isResumableTask(failed({ sopPlaceholder: true }))).toBe(false)
+    expect(isResumableTask(failed({ deletedAt: 123 }))).toBe(false)
+  })
+
+  it('计数按整批算', () => {
+    const list = [
+      failed({ id: 'a' }),
+      failed({ id: 'b', outputImages: ['img-1'] }),
+      task({ id: 'c', status: 'running' }),
+      failed({ id: 'd' }),
+    ]
+    expect(countResumableTasks(list)).toBe(2)
   })
 })
