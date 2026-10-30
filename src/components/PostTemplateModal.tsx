@@ -792,15 +792,34 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                         />
                       )}
                       {element.kind === 'text' ? (
-                        <div className="relative">
+                        <div
+                          className="relative"
+                          /**
+                           * 对齐位移必须放在这一层（描边层和正文层的共同父级）。
+                           *
+                           * 画布上 x 是锚点：居中时整块往左展开半格。
+                           * 以前把它挂在正文层上，描边层没跟着走 —— 白描边画在原位、
+                           * 正文却左移了半个宽度，两层错开，看着就是「对齐歪了」。
+                           * width: max-content 让这层宽度等于最长那一行，
+                           * 描边层才能用 inset:0 严丝合缝铺在文字底下。
+                           */
+                          style={{
+                            width: 'max-content',
+                            textAlign: element.align,
+                            transform: element.align === 'center'
+                              ? 'translateX(-50%)'
+                              : element.align === 'right'
+                                ? 'translateX(-100%)'
+                                : undefined,
+                          }}
+                        >
                           {/* 外描边：底层用双倍居中线宽铺色，上层文字盖住内侧一半 */}
                           {element.strokeWidth > 0 && (
                             <div
                               aria-hidden
                               style={{
                                 position: 'absolute',
-                                left: 0,
-                                top: 0,
+                                inset: 0,
                                 fontFamily: POST_FONT_STACK,
                                 fontSize: `${Math.max(1, element.fontSize * scale)}px`,
                                 fontWeight: element.fontWeight,
@@ -846,12 +865,6 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                               letterSpacing: `${(element.letterSpacing ?? 0) * scale}px`,
                               whiteSpace: 'pre',
                               cursor: isEditing ? 'text' : 'inherit',
-                              // 画布上 x 是锚点：居中/右对齐时文字往左展开，预览要跟绘制一致
-                              transform: element.align === 'center'
-                                ? 'translateX(-50%)'
-                                : element.align === 'right'
-                                  ? 'translateX(-100%)'
-                                  : undefined,
                             }}
                           >
                             {element.text}

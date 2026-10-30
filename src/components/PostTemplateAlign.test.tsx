@@ -83,12 +83,19 @@ function saveThenRead(container: HTMLElement) {
   return useSopStore.getState().postTemplates['prod-1']![0]!.elements[0]!
 }
 
-/** 预览里那个主标题文字层（带 textAlign 的那层） */
+/**
+ * 对齐容器：包住描边层 + 正文层的那一层。
+ * 对齐位移（translateX）就在它身上 —— 挂在正文层上会让描边层不跟着走。
+ */
+function previewWrapper(container: HTMLElement) {
+  return [...container.querySelectorAll('div')]
+    .find((el) => (el as HTMLElement).style.width === 'max-content' && el.textContent?.includes('主标题')) as HTMLElement
+}
+
+/** 正文层：字号 / 行距 / 字间距都挂在这（描边层没有 contenteditable，用它区分） */
 function previewText(container: HTMLElement) {
   return [...container.querySelectorAll('div')]
-    .find((el) => (el as HTMLElement).style.textAlign === 'center' && el.textContent?.includes('主标题'))
-    ?? [...container.querySelectorAll('div')]
-      .find((el) => el.textContent?.includes('主标题') && (el as HTMLElement).style.whiteSpace === 'pre') as HTMLElement
+    .find((el) => el.hasAttribute('contenteditable') && el.textContent?.includes('主标题')) as HTMLElement
 }
 
 function buttonByText(container: HTMLElement, text: string) {
@@ -112,17 +119,50 @@ describe('后处理模板的对齐与间距', () => {
   it('选左中右会写到元素上，预览按锚点位移', () => {
     const container = render()
     selectFirstLayer(container)
-    expect(previewText(container).style.textAlign).toBe('left')
-    expect(previewText(container).style.transform).toBe('')
+    expect(previewWrapper(container).style.textAlign).toBe('left')
+    expect(previewWrapper(container).style.transform).toBe('')
 
     act(() => { buttonByText(container, '中').click() })
     // 画布上 x 是锚点：居中要往左展开半格，预览得跟着走
-    expect(previewText(container).style.textAlign).toBe('center')
-    expect(previewText(container).style.transform).toBe('translateX(-50%)')
+    expect(previewWrapper(container).style.textAlign).toBe('center')
+    expect(previewWrapper(container).style.transform).toBe('translateX(-50%)')
     expect(saveThenRead(container).align).toBe('center')
 
     act(() => { buttonByText(container, '右').click() })
-    expect(previewText(container).style.transform).toBe('translateX(-100%)')
+    expect(previewWrapper(container).style.transform).toBe('translateX(-100%)')
+  })
+
+  /**
+   * 描边层必须和正文层铺在同一块上。
+   * 以前描边层是 left:0 自己排版，正文层却带着 translateX(-50%)，
+   * 白描边留在原位、正文左移半个宽度 —— 看着就是「文字错位 / 对齐歪了」。
+   */
+  it('描边层与正文层同宽同对齐，不会两层错开', () => {
+    // 默认模板的标题没有描边，这里先给它加一道，才测得到两层叠在一起
+    const base = template()
+    useSopStore.setState({
+      postTemplates: {
+        'prod-1': [{
+          ...base,
+          elements: base.elements.map((item, index) => (index === 0 ? { ...item, strokeWidth: 3 } : item)),
+        }],
+      },
+    })
+
+    const container = render()
+    selectFirstLayer(container)
+    act(() => { buttonByText(container, '中').click() })
+
+    const wrapper = previewWrapper(container)
+    const layers = [...wrapper.children] as HTMLElement[]
+    expect(layers.length).toBe(2)
+    const [stroke, body] = layers
+    // 描边层铺满容器，不再自己从 left:0 开始排
+    expect(stroke.style.position).toBe('absolute')
+    expect(stroke.style.inset).toBe('0px')
+    // 两层都跟随父级的 textAlign，不再各排各的
+    expect(wrapper.style.textAlign).toBe('center')
+    expect(body.style.whiteSpace).toBe('pre')
   })
 
   it('「居中到画布」把 x 拉到 50% 并改成居中对齐', () => {
@@ -130,10 +170,10 @@ describe('后处理模板的对齐与间距', () => {
     selectFirstLayer(container)
     act(() => { buttonByText(container, '居中到画布').click() })
 
-    const text = previewText(container)
-    expect(text.style.transform).toBe('translateX(-50%)')
-    const wrapper = text.closest('div[style*="left"]') as HTMLElement
-    expect(wrapper.style.left).toBe('50%')
+    const wrapper = previewWrapper(container)
+    expect(wrapper.style.transform).toBe('translateX(-50%)')
+    const anchor = wrapper.closest('div[style*="left"]') as HTMLElement
+    expect(anchor.style.left).toBe('50%')
     expect(saveThenRead(container).x).toBe(0.5)
   })
 
