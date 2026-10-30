@@ -6,6 +6,16 @@ import { enqueueSopJobs, supplementCardWithSop } from '../lib/sopPipeline'
 import { ensureImageCached } from '../lib/imageCache'
 import { clampPromptCount, MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from '../lib/promptLimits'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { imageFidelityLabel } from '../lib/sopImages'
+
+/** 从图片缓存里按 id 取回一批输入图；取不到的跳过（可能已被清理） */
+async function loadCachedImages(ids: string[]): Promise<Array<{ id: string; dataUrl: string }>> {
+  const loaded = await Promise.all(ids.map(async (id) => {
+    const dataUrl = await ensureImageCached(id)
+    return dataUrl ? { id, dataUrl } : null
+  }))
+  return loaded.filter((item): item is { id: string; dataUrl: string } => item !== null)
+}
 
 interface Props {
   /** 详情页当前这张卡（已按 sopJobId 聚合过） */
@@ -70,6 +80,10 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
   const sopText = useCardSop ? (task.sopText ?? '') : (pickedLibrarySop?.content ?? '')
   // 新建卡不需要原卡有 sopJobId，只要有一份能用的 SOP 就够
   const canRun = Boolean(sopText.trim()) && !busy && (mode === 'new' || Boolean(task.sopJobId))
+  /** 这张卡出图时用的底图：两种生成方式都会带上，只是去向不同 */
+  const carriedFixedCount = task.variableFixedImageIds?.length ?? 0
+  const carriedVariableCount = task.inputSnapshot?.variableImageIds?.length ?? 0
+  const carriedBaseCount = carriedFixedCount + carriedVariableCount
 
   /**
    * 另起一张卡：参考图沿用这张卡的，图被清理过就纯按 SOP 文字写提示词。
@@ -79,19 +93,34 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
    */
   const createNewCard = async (total: number) => {
     const referenceIds = task.sopReferenceImageIds ?? task.inputImageIds ?? []
-    const loaded = await Promise.all(referenceIds.map(async (id) => {
-      const dataUrl = await ensureImageCached(id)
-      return dataUrl ? { id, dataUrl } : null
-    }))
-    const images = loaded.filter((item): item is { id: string; dataUrl: string } => item !== null)
+    /**
+     * 底图也要跟着过来。
+     *
+     * 不带的话新卡就退回纯文生图，和老卡完全不是一套基底 ——
+     * 用户点「新建一张卡」想的是「同样的图再生一版」，不是「换个风格重画」。
+     */
+    const fixedIds = task.variableFixedImageIds ?? []
+    const variableIds = task.inputSnapshot?.variableImageIds ?? []
+    const [images, fixedImages, variableImages] = await Promise.all([
+      loadCachedImages(referenceIds),
+      loadCachedImages(fixedIds),
+      loadCachedImages(variableIds),
+    ])
     if (referenceIds.length && !images.length) {
       showToast('这张卡的参考图已被清理，只能按 SOP 文字写提示词', 'info')
+    }
+    const missingBase = fixedIds.length + variableIds.length - fixedImages.length - variableImages.length
+    if (missingBase > 0) {
+      showToast(`有 ${missingBase} 张底图已被清理，这批只用剩下的`, 'info')
     }
     enqueueSopJobs([{
       label: '第 1/1 张卡',
       params: useStore.getState().params,
       imageDataUrls: images.map((item) => item.dataUrl),
       imageIds: images.map((item) => item.id),
+      fixedImages,
+      variableImages,
+      imageFidelity: task.imageFidelity,
       systemPromptText: task.sopSystemPrompt ?? '',
       sopText,
       savedSopName: pickedLibrarySop?.name,
@@ -177,6 +206,12 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
                 </button>
               ))}
             </div>
+            {carriedBaseCount > 0 && (
+              <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                底图一起带上：固定图 {carriedFixedCount} 张 · 变量图 {carriedVariableCount} 张
+                {task.imageFidelity ? `（${imageFidelityLabel(task.imageFidelity)}）` : ''}
+              </p>
+            )}
           </div>
 
           <div>

@@ -123,3 +123,44 @@ describe('再次生成图片：补充 or 新建卡', () => {
     expect(buttonWithText(container, '新建并生成')?.hasAttribute('disabled')).toBe(true)
   })
 })
+/**
+ * 新建卡也要把底图带过去。
+ *
+ * 不带的话新卡退回纯文生图，和原卡不是一套基底 ——
+ * 用户点「新建一张卡」想的是「同样的图再生一版」。
+ */
+describe('新建卡带上原卡的底图', () => {
+  const baseTask = () => task({
+    inputImageIds: ['fixed-1', 'var-1'],
+    variableFixedImageIds: ['fixed-1'],
+    imageFidelity: 'product',
+    inputSnapshot: {
+      mode: 'sop',
+      fixedImageIds: ['fixed-1'],
+      variableImageIds: ['var-1'],
+    },
+  })
+
+  it('固定图与变量图都传给新卡，保真档一起带', async () => {
+    const { container } = render(baseTask())
+    act(() => buttonWithText(container, '新建一张卡')?.click())
+    act(() => buttonWithText(container, '新建并生成')?.click())
+    await act(async () => {})
+
+    const jobs = firstArg(enqueueSopJobs) as Array<Record<string, unknown>>
+    expect((jobs[0].fixedImages as unknown[]).length).toBe(1)
+    expect((jobs[0].variableImages as unknown[]).length).toBe(1)
+    expect(jobs[0].imageFidelity).toBe('product')
+  })
+
+  it('弹窗里写明会带上几张底图', () => {
+    const { container } = render(baseTask())
+    act(() => buttonWithText(container, '新建一张卡')?.click())
+    expect(container.textContent).toContain('底图一起带上：固定图 1 张 · 变量图 1 张')
+  })
+
+  it('没有底图的卡不显示这一行', () => {
+    const { container } = render(task())
+    expect(container.textContent).not.toContain('底图一起带上')
+  })
+})
