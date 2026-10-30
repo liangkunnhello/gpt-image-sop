@@ -2,16 +2,21 @@
 
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
+import { useStore } from '../store'
 
 // 两条去向各走一个函数：这里只关心点了哪个按钮走的是哪条，不真的去写提示词
 const enqueueSopJobs = vi.fn<(jobs: unknown) => void>()
 const supplementCardWithSop = vi.fn<(input: unknown) => Promise<string[]>>(async () => ['task-new'])
+const rewriteSopText = vi.fn<(profile: unknown, original: string, instruction: string) => Promise<string>>(
+  async () => '## 改后的 SOP\n\n- 主标题改成两行',
+)
 vi.mock('../lib/sopPipeline', () => ({
   enqueueSopJobs: (jobs: unknown) => enqueueSopJobs(jobs),
   supplementCardWithSop: (input: unknown) => supplementCardWithSop(input),
+  rewriteSopText: (profile: unknown, original: string, instruction: string) => rewriteSopText(profile, original, instruction),
 }))
 vi.mock('../lib/imageCache', () => ({
   ensureImageCached: async () => 'data:image/png;base64,AAA',
@@ -29,6 +34,7 @@ afterEach(() => {
   document.body.replaceChildren()
   enqueueSopJobs.mockReset()
   supplementCardWithSop.mockClear()
+  rewriteSopText.mockClear()
 })
 
 function task(patch: Partial<TaskRecord> = {}): TaskRecord {
@@ -162,5 +168,68 @@ describe('新建卡带上原卡的底图', () => {
   it('没有底图的卡不显示这一行', () => {
     const { container } = render(task())
     expect(container.textContent).not.toContain('底图一起带上')
+  })
+})
+/**
+ * 「新建一张卡」可以先让 AI 改一版 SOP 再用。
+ *
+ * 关键点：改完必须真的用改后的那份去写提示词，而不是只是界面上改了一下；
+ * 撤销要能退回原文；补充模式不提供这个入口（同一张卡里两份 SOP 会打架）。
+ */
+describe('新建卡时用 AI 改 SOP', () => {
+  /** 受控 input 要手写 setter 再派发 input 事件，React 才认 */
+  const typeInto = (el: HTMLInputElement, value: string) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    setter?.call(el, value)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+
+  const openNewCard = (container: HTMLElement) => {
+    act(() => buttonWithText(container, '新建一张卡')?.click())
+  }
+
+  const reviseInput = (container: HTMLElement) =>
+    [...container.querySelectorAll('input')].find((el) => el.placeholder.includes('主标题')) as HTMLInputElement
+
+  beforeEach(() => {
+    // getActiveApiProfile 读顶层 apiKey；没有 Key 会直接提示去设置，不会调模型
+    useStore.setState({ settings: { ...useStore.getState().settings, apiKey: 'test-key' } })
+  })
+
+  it('只有「新建一张卡」才显示改写入口', () => {
+    const { container } = render()
+    expect(container.textContent).not.toContain('用 AI 改一版')
+    openNewCard(container)
+    expect(container.textContent).toContain('用 AI 改一版')
+  })
+
+  it('改写后新建用的是改后的 SOP', async () => {
+    const { container } = render()
+    openNewCard(container)
+    act(() => typeInto(reviseInput(container), '主标题改成两行'))
+    act(() => buttonWithText(container, '改一版')?.click())
+    await act(async () => {})
+
+    expect(rewriteSopText).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('已改过')
+
+    act(() => buttonWithText(container, '新建并生成')?.click())
+    await act(async () => {})
+    const jobs = firstArg(enqueueSopJobs) as Array<Record<string, unknown>>
+    expect(jobs[0].sopText).toBe('## 改后的 SOP\n\n- 主标题改成两行')
+  })
+
+  it('撤销后退回原文', async () => {
+    const { container } = render()
+    openNewCard(container)
+    act(() => typeInto(reviseInput(container), '随便改'))
+    act(() => buttonWithText(container, '改一版')?.click())
+    await act(async () => {})
+
+    act(() => buttonWithText(container, '撤销')?.click())
+    act(() => buttonWithText(container, '新建并生成')?.click())
+    await act(async () => {})
+    const jobs = firstArg(enqueueSopJobs) as Array<Record<string, unknown>>
+    expect(jobs[0].sopText).toBe('## SOP 正文')
   })
 })

@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { TaskRecord } from '../types'
 import { useStore } from '../store'
 import { directionPath, useSopStore } from '../lib/sopStore'
-import { enqueueSopJobs, supplementCardWithSop } from '../lib/sopPipeline'
+import { enqueueSopJobs, rewriteSopText, supplementCardWithSop } from '../lib/sopPipeline'
+import { getActiveApiProfile } from '../lib/apiProfiles'
 import { ensureImageCached } from '../lib/imageCache'
 import { clampPromptCount, MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from '../lib/promptLimits'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
@@ -78,8 +79,51 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
   const pickedLibrarySop = sourceId === 'card' ? undefined : savedSops.find((item) => item.id === sourceId)
   const useCardSop = sourceId === 'card'
   const sopText = useCardSop ? (task.sopText ?? '') : (pickedLibrarySop?.content ?? '')
+
+  /**
+   * 「新建一张卡」可以先让 AI 改一版 SOP 再用。
+   *
+   * 改动只作用于这一次新建，不回写原卡、也不写回库里那份 ——
+   * 想永久改，去详情页的「编辑 SOP」。换了一份 SOP 时旧改动自动作废，
+   * 否则会拿 A 的改稿去跑 B。
+   */
+  const settings = useStore((s) => s.settings)
+  const [reviseInput, setReviseInput] = useState('')
+  const [revising, setRevising] = useState(false)
+  const [revisedSop, setRevisedSop] = useState<string | null>(null)
+  useEffect(() => setRevisedSop(null), [sourceId])
+  /** 实际拿去写提示词的 SOP：新建模式下优先用改过的那版 */
+  const effectiveSop = mode === 'new' ? (revisedSop ?? sopText) : sopText
+
   // 新建卡不需要原卡有 sopJobId，只要有一份能用的 SOP 就够
-  const canRun = Boolean(sopText.trim()) && !busy && (mode === 'new' || Boolean(task.sopJobId))
+  const canRun = Boolean(effectiveSop.trim()) && !busy && !revising && (mode === 'new' || Boolean(task.sopJobId))
+
+  const runRevise = async () => {
+    const ask = reviseInput.trim()
+    if (!ask || revising) return
+    if (!effectiveSop.trim()) {
+      showToast('这份 SOP 是空的，先有正文再让 AI 改', 'info')
+      return
+    }
+    const profile = getActiveApiProfile(settings)
+    if (!profile?.apiKey) {
+      showToast('当前接口配置没有 Key，先在设置里填好', 'error')
+      return
+    }
+    setRevising(true)
+    try {
+      // 基于「当前这版」改：连着提几次要求时，是在上一次的结果上继续，而不是回到原文
+      const next = await rewriteSopText(profile, effectiveSop, ask)
+      if (!next.trim()) throw new Error('模型返回了空内容')
+      setRevisedSop(next)
+      setReviseInput('')
+      showToast('已按你的要求改好，确认后点「新建并生成」', 'success')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'AI 修改失败', 'error')
+    } finally {
+      setRevising(false)
+    }
+  }
   /** 这张卡出图时用的底图：两种生成方式都会带上，只是去向不同 */
   const carriedFixedCount = task.variableFixedImageIds?.length ?? 0
   const carriedVariableCount = task.inputSnapshot?.variableImageIds?.length ?? 0
@@ -122,8 +166,11 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
       variableImages,
       imageFidelity: task.imageFidelity,
       systemPromptText: task.sopSystemPrompt ?? '',
-      sopText,
-      savedSopName: pickedLibrarySop?.name,
+      sopText: effectiveSop,
+      // 改过就标一下，详情页才不会显示成「库里那份原样 SOP」
+      savedSopName: pickedLibrarySop
+        ? `${pickedLibrarySop.name}${revisedSop ? '（AI 改）' : ''}`
+        : undefined,
       promptsPerGroup: total,
       directionId: task.sopDirectionId,
       ignoreCompliance,
@@ -244,6 +291,62 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
               </p>
             )}
           </div>
+
+          {/* 只有新建卡才给「AI 改一版」：补充是在同一张卡里加图，SOP 一改就跟卡上那份对不上了 */}
+          {mode === 'new' && (
+            <div>
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="text-xs font-medium text-gray-500 dark:text-gray-400">用 AI 改一版（可选）</span>
+                {revisedSop && (
+                  <>
+                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                      已改过
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setRevisedSop(null)}
+                      className="text-[11px] text-gray-500 hover:underline dark:text-gray-400"
+                    >
+                      撤销
+                    </button>
+                  </>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={reviseInput}
+                  onChange={(event) => setReviseInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void runRevise()
+                  }}
+                  disabled={revising}
+                  placeholder="例如：主标题改成两行，去掉价格角标"
+                  className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 placeholder:text-gray-300 focus:border-teal-400 focus:outline-none disabled:opacity-60 dark:border-white/10 dark:bg-gray-800 dark:text-gray-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => void runRevise()}
+                  disabled={revising || !reviseInput.trim() || !effectiveSop.trim()}
+                  className="shrink-0 rounded-lg bg-teal-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
+                >
+                  {revising ? '修改中…' : '改一版'}
+                </button>
+              </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                改完的 SOP 只用于这次新建，不写回原卡，也不改库里那份。
+              </p>
+              {revisedSop && (
+                <details className="mt-1.5 rounded-lg bg-gray-50 px-2 py-1 dark:bg-white/[0.04]">
+                  <summary className="cursor-pointer text-[11px] text-gray-500 dark:text-gray-400">
+                    查看改后的 SOP（{revisedSop.length} 字）
+                  </summary>
+                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[10px] leading-relaxed text-gray-500 dark:text-gray-400">
+                    {revisedSop}
+                  </pre>
+                </details>
+              )}
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
