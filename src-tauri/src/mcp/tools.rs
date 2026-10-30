@@ -256,7 +256,8 @@ pub fn definitions() -> Vec<Value> {
                     "variable_image_ids": { "type": "array", "items": { "type": "string" }, "description": "变量图 id：图生图逐条轮换" },
                     "image_fidelity": { "type": "string", "enum": ["layout", "product", "style"], "description": "底图保真档：layout 保版式只换文案 / product 保产品 / style 只借风格，默认 layout" },
                     "direction_id": { "type": "string", "description": "归属方向 id" },
-                    "copy_text": { "type": "string", "description": "本次文案（排在该方向卖点前面）" }
+                    "copy_text": { "type": "string", "description": "本次文案（排在该方向卖点前面）" },
+                    "requirement": { "type": "string", "description": "本次要求（一句话，写进每条提示词；与 SOP 冲突时以它为准）" }
                 }
             }
         }),

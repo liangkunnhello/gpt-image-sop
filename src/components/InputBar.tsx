@@ -571,9 +571,9 @@ export default function InputBar() {
     ? `批量进行中：提交会排队，当前批结束后自动开始${queuedSubmitCount > 0 ? `（已有 ${queuedSubmitCount} 个在排队）` : ''}`
     : '提交任务'
   const promptPlaceholder = variableMode
-    ? '变量模式：可留空，拖入参考图后直接发送...'
+    ? '变量模式：这里写的会被当作「本次要求」带进策略与填词；留空也能发...'
     : sopMode
-    ? 'SOP 模式：可留空，拖入参考图或直接靠卖点发送...'
+    ? 'SOP 模式：这里写的会被当作「本次要求」写进每条提示词；留空也能发...'
     : batchEnabled
     ? '每条提示词之间空两行分隔，可输入 @ 来指定参考图...'
     : '描述你想生成的图片，可输入 @ 来指定参考图...'
@@ -655,6 +655,9 @@ export default function InputBar() {
     const avoidCta = hasExtra(sopSnapshot.extraRequirements, extraIds, 'strip-cta')
     const skipOverlay = !hasExtra(sopSnapshot.extraRequirements, extraIds, 'avoid-overlay')
     const bundle = buildPromptBundle({
+      // 输入框原文：SOP 模式下它不进最终提示词（提示词由模型写），
+      // 但它是用户这次的具体要求，必须并进反推材料、并在写词时再喂一次
+      inputPrompt: useStore.getState().prompt,
       systemPrompt: options.systemPromptText,
       // 自定义文案在前、所选卖点在后；没填自定义文案时就是卖点原文
       point: taskCopyText(),
@@ -691,8 +694,9 @@ export default function InputBar() {
       useImageSellingPoints: true,
       avoidCta,
       skipOverlay,
-      // 输入框原文：这两种模式不拿它生成，但「复用配置」要能原样还原回输入框
+      // 输入框原文：同样是本次要求，写提示词阶段会再喂一次给模型
       inputPrompt: useStore.getState().prompt,
+      userRequirement: bundle.inputPrompt,
       // 本次文案那一栏：已经合进 copyText，这里只供「复用配置」还原
       customCopy: useStore.getState().customCopy,
     })))
@@ -710,8 +714,12 @@ export default function InputBar() {
     const varExtraIds = resolveExtraIds(varSnapshot.extraPick, options.directionId || varSnapshot.activeDirectionId)
     const varExtras = extraContents(varSnapshot.extraRequirements, varExtraIds)
     const avoidCta = hasExtra(varSnapshot.extraRequirements, varExtraIds, 'strip-cta')
+    // 输入框原文：变量模式下它不进最终提示词（提示词由骨架填词得到），
+    // 但它是这次的具体要求，必须带进提策略 / 填词，否则写了字看不到影响
+    const inputRequirement = useStore.getState().prompt.trim()
     const variablePromptText = [
       options.variablePromptText.trim(),
+      inputRequirement ? `本次要求（用户输入框里写的，优先级最高）：\n${inputRequirement}` : '',
       varExtras.length
         ? `额外要求（硬性约束，必须遵守）：\n${varExtras.map((line, index) => `${index + 1}. ${line}`).join('\n')}`
         : '',

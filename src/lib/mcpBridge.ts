@@ -143,6 +143,8 @@ async function runAction(action: string, args: Record<string, unknown>): Promise
       sopText: sopText || undefined,
       savedSopName: savedSop?.name,
       copyText: [str(args.copy_text), point?.content ?? ''].filter(Boolean).join('\n\n'),
+      // MCP 给的要求同样当成本次要求，一路带到写提示词阶段
+      userRequirement: str(args.requirement),
       promptsPerGroup: num(args.prompts_per_group) ?? 1,
       directionId: directionId || undefined,
     }])

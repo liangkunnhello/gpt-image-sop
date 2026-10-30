@@ -157,3 +157,61 @@ describe('额外要求并进提示词', () => {
     expect(merged).toContain('不画按钮')
   })
 })
+/**
+ * 输入框原文必须进生成链路。
+ *
+ * SOP / 变量模式下输入框不直接成为提示词（由模型按 SOP 写），
+ * 所以以前在这里写的字完全没作用 —— 用户写了「把固定图完整植入图片」，
+ * 出来的图里一点体现都没有。
+ */
+describe('输入框原文（本次要求）', () => {
+  it('并进合成结果，排在系统提示词之后', () => {
+    const { merged } = buildPromptBundle({
+      inputPrompt: '把固定图完整植入图片',
+      systemPrompt: '画面要求',
+    })
+    const systemAt = merged.indexOf('# 系统提示词')
+    const inputAt = merged.indexOf('本次要求')
+    expect(inputAt).toBeGreaterThan(systemAt)
+    expect(merged).toContain('把固定图完整植入图片')
+  })
+
+  it('标明优先级高于系统提示词，避免与通用要求冲突时被盖掉', () => {
+    const { merged } = buildPromptBundle({ inputPrompt: '只保留产品主体' })
+    expect(merged).toContain('优先级高于系统提示词')
+    expect(merged).toContain('只保留产品主体')
+  })
+
+  it('留空时不产生空小节', () => {
+    const { merged } = buildPromptBundle({ inputPrompt: '   ', systemPrompt: '画面要求' })
+    expect(merged).not.toContain('本次要求')
+  })
+
+  it('同时返回原文，供写提示词阶段再喂一次', () => {
+    expect(buildPromptBundle({ inputPrompt: ' 带底图出  ' }).inputPrompt).toBe('带底图出')
+  })
+})
+
+/**
+ * 写提示词阶段的第二次投喂：模型按 SOP 写二十条时，
+ * 很容易把「这次要怎么做」当背景信息忽略，所以要单独成块放在末尾。
+ */
+describe('本次要求在写词消息里的位置', () => {
+  it('单独成块，并强调与 SOP 冲突时以它为准', () => {
+    const { user, system } = buildPromptMessages({
+      sopText: '## SOP',
+      count: 2,
+      userRequirement: '把固定图完整植入图片',
+    })
+    expect(user).toContain('【本次要求（用户输入框里写的，优先级最高）】')
+    expect(user).toContain('把固定图完整植入图片')
+    expect(user).toContain('与 SOP 冲突时以它为准')
+    expect(system).toContain('【本次要求必须落到每一条】')
+  })
+
+  it('没写时不出现这一段', () => {
+    const { user, system } = buildPromptMessages({ sopText: '## SOP', count: 2 })
+    expect(user).not.toContain('本次要求')
+    expect(system).not.toContain('本次要求必须落到每一条')
+  })
+})

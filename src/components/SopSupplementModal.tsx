@@ -175,6 +175,8 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
       directionId: task.sopDirectionId,
       ignoreCompliance,
       avoidCta: avoidCtaDesign,
+      // 新卡是同一批需求的延续，原卡写的本次要求一起带过去
+      userRequirement: task.inputSnapshot?.prompt,
       // 本次文案跟着走：新卡也是同一批需求；卖点内容在 SOP 里，不重复喂
       customCopy: task.inputSnapshot?.customCopy,
     }])
@@ -197,6 +199,8 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
         ignoreCompliance,
         avoidCta: avoidCtaDesign,
         existingCount,
+        // 沿用原卡当时写的本次要求：否则补出来的图和前面几条不是同一套要求
+        userRequirement: task.inputSnapshot?.prompt,
       })
         .catch((err) => {
           // 提示词阶段失败要明确告诉用户，否则只看到「什么都没发生」

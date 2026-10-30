@@ -408,7 +408,7 @@ export async function generateSop(
   ])
 }
 
-function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false, hasImage = false) {
+function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false, hasImage = false, hasRequirement = false) {
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
     hasImage
@@ -419,6 +419,9 @@ function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false
       : '',
     hasImage
       ? '【用户要求优先于底图】用户给出的文案、额外要求与保真档优先级最高：与底图冲突时以用户要求为准，不要为了贴合底图牺牲用户要求。'
+      : '',
+    hasRequirement
+      ? '【本次要求必须落到每一条】用户会在末尾给出【本次要求】，那是他这次亲自写的、优先级最高的一条：每条提示词都要体现它，与 SOP 的既有写法冲突时以它为准。'
       : '',
     '发散按 SOP 里的「变量池」和「互斥规则」执行：每条从变量池里取用取值，同一批之间按互斥规则避重；不要自己另立一套维度，也不要把互斥规则当成建议。',
     avoidHint
@@ -474,6 +477,13 @@ export interface PromptMessagesInput {
    * 写词规则要跟着变（不重复描述底图已有的东西、用户要求优先）。
    */
   imageHint?: string
+  /**
+   * 输入框里写的本次要求。
+   *
+   * 单独再喂一次而不只靠 SOP：反推出来的 SOP 是「通用套路」，
+   * 用户这句是「这次要怎么做」，后者更容易在写多条时被忽略。
+   */
+  userRequirement?: string
 }
 
 /** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
@@ -502,6 +512,7 @@ export function buildPromptMessages({
   avoidCta = false,
   existing = [],
   imageHint = '',
+  userRequirement = '',
 }: PromptMessagesInput): { system: string; user: string } {
   const copy = copyText.trim()
   const tail = ignoreCompliance
@@ -521,9 +532,13 @@ export function buildPromptMessages({
     : ''
   // 底图说明单独成块放在最后：模型对末尾的约束更敏感，写到一半忘了这层是最常见的情况
   const imageBlock = imageHint.trim() ? `\n\n${imageHint.trim()}` : ''
+  // 本次要求排在 SOP 之后、图片说明之前：先读 SOP 的套路，再看这次的额外指定
+  const requirement = userRequirement.trim()
+    ? `\n\n【本次要求（用户输入框里写的，优先级最高）】\n${userRequirement.trim()}\n每条提示词都必须体现这条要求；与 SOP 冲突时以它为准。`
+    : ''
   return {
-    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta, Boolean(imageBlock)),
-    user: `【生图 SOP】\n${(avoidCta ? stripButtonPlaceholders(sopText) : sopText).trim()}${copyBlock}${previous}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${ctaBlock}${reserve}${imageBlock}`,
+    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta, Boolean(imageBlock), Boolean(requirement)),
+    user: `【生图 SOP】\n${(avoidCta ? stripButtonPlaceholders(sopText) : sopText).trim()}${copyBlock}${previous}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${ctaBlock}${reserve}${requirement}${imageBlock}`,
   }
 }
 
@@ -545,6 +560,8 @@ export async function generatePrompts(
   onProgress?: (written: number, total: number) => void,
   /** 底图说明：非空时写词规则切到「在底图上改」，见 buildSopImageHint */
   imageHint = '',
+  /** 输入框里写的本次要求：每条提示词都要体现 */
+  userRequirement = '',
 ): Promise<string[]> {
   const total = clampPromptCount(count)
   const prompts: string[] = []
@@ -564,6 +581,7 @@ export async function generatePrompts(
       copyText,
       avoidCta,
       imageHint,
+      userRequirement,
       // 只带最近几批：全量贴进去会把上下文顶爆，而最近写的最容易撞车
       existing: prompts.slice(-PROMPTS_PER_BATCH * 3),
     })
@@ -735,6 +753,13 @@ export interface SopJobRequest {
   variableImageOffset?: number
   /** 底图保真档，默认「保版式」 */
   imageFidelity?: ImageFidelity
+  /**
+   * 输入框里写的本次要求（已 trim）。
+   *
+   * 反推阶段它已经并进 systemPromptText 出现过一次，但写提示词阶段还要再喂一次 ——
+   * 模型按 SOP 写二十条时，很容易把「这次要怎么做」当成背景信息忽略掉。
+   */
+  userRequirement?: string
 }
 
 /** 同时在跑的任务卡数量 */
@@ -831,6 +856,7 @@ async function runJob(job: SopJobRequest) {
         })
         : undefined,
       imageHint,
+      job.userRequirement,
     )
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
     // 模型少写几条时按实际条数截断：多出来的计划条目没有提示词可用
@@ -980,6 +1006,11 @@ export interface SopSupplementInput {
   avoidCta?: boolean
   /** 这张卡现有多少条提示词：新条目编号从这里往后顺延 */
   existingCount: number
+  /**
+   * 原卡当时在输入框里写的本次要求。
+   * 补充生图没有输入框，但这批图要和卡上前几条是同一套要求，所以得沿用。
+   */
+  userRequirement?: string
 }
 
 /**
@@ -1054,6 +1085,7 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
       }
       : undefined,
     imageHint,
+    input.userRequirement,
   )
   if (!prompts.length) throw new Error('没有得到提示词')
   const assignments = imagePlan.assignments.slice(0, prompts.length)
