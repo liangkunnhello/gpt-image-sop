@@ -5,6 +5,7 @@
 
 mod http;
 mod rpc;
+pub mod bridge;
 mod tools;
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};

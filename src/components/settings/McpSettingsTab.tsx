@@ -245,7 +245,8 @@ export default function McpSettingsTab() {
       <section className="space-y-3">
         <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">Skill</h4>
         <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-          SKILL.md 说明这些工具怎么用、参数怎么填。装到 Coding 工具的技能目录后，Agent 会在合适的时机自己调用。
+          SKILL.md 说明这些工具怎么用、参数怎么填，含普通 / SOP / 变量三种模式的用法与选择建议。
+          装到 Coding 工具的技能目录后，Agent 会在合适的时机自己调用。
         </p>
         <div className="flex flex-wrap gap-2">
           <button type="button" className={buttonClass} onClick={() => setShowSkill((v) => !v)}>

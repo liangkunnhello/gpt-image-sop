@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
+
+use crate::mcp::bridge::Bridge;
 
 use crate::storage::{ext_for_mime, file_stem, now_ms, FileMeta, Kind, Storage, TASKS};
 
@@ -217,6 +219,90 @@ pub fn definitions() -> Vec<Value> {
                 "required": ["prompt"]
             }
         }),
+        // ===== 走界面流水线的操作 =====
+        //
+        // 下面这几个不是后端直接改库，而是让界面照常跑一遍（等价于人工点按钮）：
+        // 会建任务卡、走同一套提示词拼装与渠道校验，用户在界面上能看到全过程。
+        json!({
+            "name": "submit_plain_image",
+            "description": "普通模式出图：把提示词和参考图塞进输入框然后点发送（等价人工操作）。任务卡会出现在界面上，返回任务 id，出图结果用 list_tasks 查。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "description": "提示词原文；图上文字用「」包裹" },
+                    "image_ids": { "type": "array", "items": { "type": "string" }, "description": "参考图在图库里的 id；不传就是纯文生图" },
+                    "count": { "type": "integer", "minimum": 1, "maximum": 10, "description": "一次要几张，默认 1" },
+                    "size": { "type": "string", "description": "尺寸，例如 1536x2048；不传用应用当前设置" },
+                    "direction_id": { "type": "string", "description": "归属方向 id，出图会落到这个方向下" },
+                    "copy_text": { "type": "string", "description": "本次文案（图上文字的唯一来源），会排进提示词" }
+                },
+                "required": ["prompt"]
+            }
+        }),
+        json!({
+            "name": "submit_sop_images",
+            "description": "SOP 模式出图：按一份 SOP 先写 N 条提示词再逐条出图（等价人工点发送）。可以给存档 SOP 的 id，也可以直接传 SOP 正文；返回任务 id 列表，进度用 list_tasks 看。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "saved_sop_id": { "type": "string", "description": "SOP 库里某份存档的 id（get_library 能拿到）" },
+                    "sop_text": { "type": "string", "description": "直接给 SOP 正文；和 saved_sop_id 二选一" },
+                    "system_prompt_id": { "type": "string", "description": "用哪个系统提示词来反推（不给存档 SOP 时才用）" },
+                    "point_preset_id": { "type": "string", "description": "卖点预设 id：卖点会逐字进提示词" },
+                    "prompts_per_group": { "type": "integer", "minimum": 1, "maximum": 50, "description": "这一批写几条提示词，默认 1" },
+                    "group_count": { "type": "integer", "minimum": 1, "maximum": 10, "description": "参考图分成几张卡，默认 1" },
+                    "image_ids": { "type": "array", "items": { "type": "string" }, "description": "参考图 id" },
+                    "direction_id": { "type": "string", "description": "归属方向 id" },
+                    "copy_text": { "type": "string", "description": "本次文案（排在该方向卖点前面）" }
+                }
+            }
+        }),
+        json!({
+            "name": "submit_variable_images",
+            "description": "变量模式出图：按变量提示词提取骨架与取值，逐条填词后出图（等价人工点发送）。图生图可同时给固定图与变量图。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "variable_prompt_id": { "type": "string", "description": "变量提示词 id（get_library 能拿到）" },
+                    "variable_prompt_text": { "type": "string", "description": "直接给变量提示词正文；和 id 二选一" },
+                    "prompts_per_card": { "type": "integer", "minimum": 1, "maximum": 50, "description": "每张卡几条，默认 1" },
+                    "group_count": { "type": "integer", "minimum": 1, "maximum": 10, "description": "分几张卡，默认 1" },
+                    "image_ids": { "type": "array", "items": { "type": "string" }, "description": "参考图 id（只用于提取策略）" },
+                    "fixed_image_ids": { "type": "array", "items": { "type": "string" }, "description": "固定图 id：每条提示词都带上" },
+                    "variable_image_ids": { "type": "array", "items": { "type": "string" }, "description": "变量图 id：逐条轮换" },
+                    "direction_id": { "type": "string", "description": "归属方向 id" },
+                    "copy_text": { "type": "string", "description": "本次文案" }
+                }
+            }
+        }),
+        json!({
+            "name": "retry_task",
+            "description": "重试一张失败/中断的任务卡（走界面的重试逻辑，按设置里「重试方式」决定覆盖还是新建）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "task_id": { "type": "string", "description": "任务 id" } },
+                "required": ["task_id"]
+            }
+        }),
+        json!({
+            "name": "stop_task",
+            "description": "停止一张正在生成的任务卡（真掐断请求，和界面上点停止一致）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "task_id": { "type": "string", "description": "任务 id" } },
+                "required": ["task_id"]
+            }
+        }),
+        json!({
+            "name": "resume_tasks",
+            "description": "断点继续：把中断 / 软件被关掉后没跑完的任务按原提示词、原参数接着跑（和列表顶部那条「继续」一致）。",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "get_skill",
+            "description": "取这个工作台的 SKILL.md：三种模式（普通 / SOP / 变量）的使用方法、工具清单与踩坑提醒。第一次接入时先读它。",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
     ]
 }
 
@@ -233,8 +319,36 @@ pub fn call(ctx: &Ctx, name: &str, args: &Value) -> Result<String, String> {
         "upsert_preset" => upsert_preset(ctx, args),
         "delete_task" => delete_task(ctx, args),
         "generate_image" => generate_image(ctx, args),
+        // 下面几个都交给界面执行：等价于人工在界面上点一遍，任务卡、日志、进度都留得下
+        "submit_plain_image" => call_front(ctx, "submit_plain", args.clone()),
+        "submit_sop_images" => call_front(ctx, "submit_sop", args.clone()),
+        "submit_variable_images" => call_front(ctx, "submit_variable", args.clone()),
+        "retry_task" => {
+            let task_id = required(args, "task_id")?;
+            call_front(ctx, "retry_task", json!({ "task_id": task_id }))
+        }
+        "stop_task" => {
+            let task_id = required(args, "task_id")?;
+            call_front(ctx, "stop_task", json!({ "task_id": task_id }))
+        }
+        "resume_tasks" => call_front(ctx, "resume_tasks", json!({})),
+        "get_skill" => call_front(ctx, "get_skill", json!({})),
         other => Err(format!("未知工具：{other}")),
     }
+}
+
+/// 交给界面执行（等价于人工在界面上点一遍），返回界面给的结果。
+///
+/// 走这条路的工具都要依赖前端流水线：建任务卡、拼提示词、按渠道校验、落库。
+/// 后端自己在 Rust 里重建一套，行为就会和界面慢慢分叉，用户也没法复盘。
+fn call_front(ctx: &Ctx, action: &str, args: Value) -> Result<String, String> {
+    let app = ctx
+        .app
+        .as_ref()
+        .ok_or_else(|| "这个操作需要应用窗口在运行（当前没有界面可用）".to_string())?;
+    let bridge = app.state::<Bridge>();
+    let value = bridge.call(app, action, args)?;
+    Ok(serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()))
 }
 
 // ===== 读 =====

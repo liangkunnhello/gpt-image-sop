@@ -98,6 +98,7 @@ pub fn run() {
             mcp::mcp_status,
             mcp::mcp_set_enabled,
             mcp::mcp_set_port,
+            mcp::bridge::mcp_invoke_reply,
             mcp::mcp_rotate_token,
         ])
         .on_window_event(|window, event| {
@@ -111,6 +112,7 @@ pub fn run() {
         .manage(data_dir::PickedDir::default())
         .manage(http::Requests::default())
         .manage(mcp::McpServer::default())
+        .manage(mcp::bridge::Bridge::default())
         // 页面重载（含开发时的热重载）后旧页面的请求已无人读取，立即断开；未提交的保存也无人继续，删除临时文件
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {

@@ -1,9 +1,10 @@
 [[permission]]
 identifier = "mcp"
-description = "允许主窗口开关 MCP 服务、修改监听端口、重置访问令牌"
+description = "允许主窗口开关 MCP 服务、修改监听端口、重置访问令牌，并回传 MCP 触发的界面操作结果"
 commands.allow = [
   "mcp_status",
   "mcp_set_enabled",
   "mcp_set_port",
   "mcp_rotate_token",
+  "mcp_invoke_reply",
 ]
