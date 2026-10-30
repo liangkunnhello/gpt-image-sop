@@ -8,6 +8,7 @@
 import { useState } from 'react'
 import { useStore, addImagesFromFiles } from '../../store'
 import type { InputImage } from '../../types'
+import InputThumbImage from './inputThumbImage'
 
 type Slot = 'reference' | 'fixed' | 'variable'
 
@@ -113,22 +114,52 @@ function useSlotImages(slot: Slot) {
   return { images, remove, clear }
 }
 
-/** 缩略图：只读、可删；点击放大交给外层，这里不做预览 */
+/**
+ * 缩略图：点开大图（走全局 Lightbox）、可删。
+ *
+ * 三个池的图都会进生图接口或参与反推，光看 40×40 的分不清哪张是哪张 ——
+ * 点一下就放大是最好用的确认方式，和普通模式的参考图保持一致。
+ * 删按钮要 stopPropagation，否则点「×」会顺手把大图也打开。
+ */
 function SlotThumbs({ images, onRemove }: { images: InputImage[]; onRemove: (idx: number) => void }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {images.map((img, idx) => (
         <div
           key={img.id}
-          className="group relative h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-gray-200 dark:border-white/10"
+          role="button"
+          tabIndex={0}
+          title="查看大图"
+          onClick={() => useStore.getState().setLightboxImageId(img.id, images.map((item) => item.id))}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return
+            e.preventDefault()
+            useStore.getState().setLightboxImageId(img.id, images.map((item) => item.id))
+          }}
+          className="group relative h-10 w-10 shrink-0 cursor-zoom-in overflow-hidden rounded-lg border border-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 dark:border-white/10"
         >
-          <img src={img.dataUrl} alt={`${idx + 1}`} className="h-full w-full object-cover" />
-          <span className="absolute bottom-0 left-0 rounded-tr bg-black/55 px-1 text-[9px] leading-tight text-white">
+          <InputThumbImage
+            imageId={img.id}
+            fallbackSrc={img.dataUrl}
+            alt={`${idx + 1}`}
+            className="pointer-events-none h-full w-full object-cover transition-opacity group-hover:opacity-80"
+          />
+          {/* 悬停时给个「眼睛」，不然没人知道这张能点开 */}
+          <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">
+            <svg className="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.25 12s3.5-6 9.75-6 9.75 6 9.75 6-3.5 6-9.75 6S2.25 12 2.25 12z" />
+              <circle cx="12" cy="12" r="2.75" strokeWidth={2} />
+            </svg>
+          </span>
+          <span className="pointer-events-none absolute bottom-0 left-0 rounded-tr bg-black/55 px-1 text-[9px] leading-tight text-white">
             {idx + 1}
           </span>
           <button
             type="button"
-            onClick={() => onRemove(idx)}
+            onClick={(e) => {
+              e.stopPropagation()
+              onRemove(idx)
+            }}
             title="移除"
             className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-bl bg-black/60 text-[10px] leading-none text-white opacity-0 transition-opacity group-hover:opacity-100"
           >

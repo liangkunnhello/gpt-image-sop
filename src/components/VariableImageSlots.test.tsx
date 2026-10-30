@@ -26,6 +26,9 @@ function reset() {
     inputImages: [],
     fixedImages: [],
     variableImages: [],
+    // 上一条用例可能开了大图，这里一并复位，否则「点×不会打开」会被上一条的状态骗过
+    lightboxImageId: null,
+    lightboxImageList: [],
   })
 }
 
@@ -142,5 +145,37 @@ describe('变量模式三分区图片入口', () => {
       useStore.getState().addVariableImages([img('v1'), img('v2'), img('v3')], 2)
     })
     expect(useStore.getState().variableImages.map((i) => i.id)).toEqual(['v1', 'v2'])
+  })
+})
+/**
+ * 三个池的缩略图都能点开大图。
+ *
+ * 40×40 的方块分不清是哪张，尤其固定图和变量图经常是同一批素材里挑的；
+ * 这里锁住「点了会打开、列表是当前池、点删除不会顺带打开」。
+ */
+describe('缩略图点开大图', () => {
+  const thumbs = (container: HTMLElement) =>
+    [...container.querySelectorAll('[title="查看大图"]')] as HTMLElement[]
+
+  it('点缩略图打开大图，列表是这个池里的全部图', () => {
+    act(() => {
+      useStore.getState().addFixedImages([img('f1'), img('f2')])
+    })
+    const { container } = render()
+    act(() => thumbs(container)[1]!.click())
+    const state = useStore.getState()
+    expect(state.lightboxImageId).toBe('f2')
+    expect(state.lightboxImageList).toEqual(['f1', 'f2'])
+  })
+
+  it('点「×」只移除，不会顺带打开大图', () => {
+    act(() => {
+      useStore.getState().addFixedImages([img('f1')])
+    })
+    const { container } = render()
+    const remove = [...container.querySelectorAll('button[title="移除"]')][0] as HTMLButtonElement
+    act(() => remove.click())
+    expect(useStore.getState().lightboxImageId).toBeNull()
+    expect(useStore.getState().fixedImages).toHaveLength(0)
   })
 })
