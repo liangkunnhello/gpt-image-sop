@@ -39,6 +39,13 @@ export interface DeliverResult {
   expected?: number
   /** 交付到的绝对路径（网页版为「根目录名/文件夹名」） */
   location?: string
+  /**
+   * 这次写入用的根目录（不含卡文件夹）。
+   *
+   * 记到任务上，图片进回收站时直接按这个目录去删 ——
+   * 否则用户改过保存位置之后，按当前配置算出来的地址会指向别处，文件删不掉。
+   */
+  dir?: string
   /** 文件夹名 */
   folder?: string
   /** 失败原因 */
@@ -420,7 +427,7 @@ export async function deliverTaskCard(
     }
   }
   if (!written) return { ok: false, written: 0, folder: folderInfo.name, error: '图片写入失败' }
-  return { ok: true, written, folder: folderInfo.name, location: folderInfo.path, files }
+  return { ok: true, written, folder: folderInfo.name, location: folderInfo.path, dir: targetDir, files }
 }
 
 /**
@@ -492,13 +499,22 @@ export async function deliveredFileRefsOf(
   imageId: string,
   context: DeliverContext,
 ): Promise<DeliveredFileRef[]> {
-  const dir = resolveDeliveryDir(context.deliveryDirs, context.directions, task.sopDirectionId)?.path
-    ?? context.fallbackDir?.trim()
+  /**
+   * 交付根目录优先用「交付当时记下的那个」。
+   * 按当前配置重新算的话，用户改过默认保存位置或方向交付目录之后就会指到别处，
+   * 文件明明还在交付夹里却删不掉 —— 这正是「放进回收站但文件没消失」的常见原因。
+   */
+  const dir = task.deliverDirPath?.trim()
+    || resolveDeliveryDir(context.deliveryDirs, context.directions, task.sopDirectionId)?.path
+    || context.fallbackDir?.trim()
   const folder = (task.deliverFolder ?? cardFolderName(task, context)).trim()
   if (!dir || !folder) return []
 
+  const candidates: DeliveredFileRef[] = []
+  // 交付当时记过文件名：这是最准的一个候选，但仍然不直接 return ——
+  // 记错了（跨版本、老数据格式）时还要靠下面的推算兜一次
   const recorded = task.deliveredFileNames?.[imageId]
-  if (recorded) return [{ dir, relative: `${folder}/${recorded}` }]
+  if (recorded) candidates.push({ dir, relative: `${folder}/${recorded}` })
 
   const group = tasksOfCard(context.tasks, task)
   let cursor = 0
@@ -513,7 +529,7 @@ export async function deliveredFileRefsOf(
     }
     cursor += images.length
   }
-  if (!seq) return []
+  if (!seq) return candidates
 
   // 扩展名从图片本体取；取不到（网页版没缓存、图已被删）就把常见几种都列出来
   let ext = ''
@@ -523,8 +539,8 @@ export async function deliveredFileRefsOf(
     ext = ''
   }
   const exts = ext ? [ext] : ['jpg', 'jpeg', 'png', 'webp']
-  return exts.map((ext) => ({
-    dir,
-    relative: `${folder}/${deliverImageFileName(seq, task, context, '', ext, folder)}`,
-  }))
+  for (const ext of exts) {
+    candidates.push({ dir, relative: `${folder}/${deliverImageFileName(seq, task, context, '', ext, folder)}` })
+  }
+  return candidates
 }

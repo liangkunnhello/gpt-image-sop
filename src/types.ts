@@ -513,6 +513,13 @@ export interface TaskRecord {
    * 交付当时把名字记下来，删的时候直接按名字删，老数据没记录的才退回按规则推算。
    */
   deliveredFileNames?: Record<string, string>
+  /**
+   * 交付到哪个根目录（绝对路径）。
+   *
+   * 删交付文件时如果按「当前配置」重新算地址，用户改过默认保存位置 / 方向交付目录之后
+   * 就会算到别的目录去，文件明明还在却删不到。交付当时记下实际用的那个根目录最准。
+   */
+  deliverDirPath?: string
 }
 
 // ===== SOP 模式 =====

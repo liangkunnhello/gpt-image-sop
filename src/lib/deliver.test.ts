@@ -165,10 +165,29 @@ describe('进回收站时删哪个交付文件', () => {
     ...extra,
   })
 
-  it('交付时记过文件名就精确删那一个', async () => {
+  it('交付时记过文件名就精确删那一个（后面再跟推算结果兜底）', async () => {
     const t = card('t1', { outputImages: ['img-a'], deliveredFileNames: { 'img-a': '20261027-大字报-01.jpg' } })
     const refs = await deliveredFileRefsOf(t, 'img-a', context([t]))
-    expect(refs).toEqual([{ dir: 'D:/交付', relative: '20261027-大字报/20261027-大字报-01.jpg' }])
+    // 第一条是交付当时记下的那个文件名，最准
+    expect(refs[0]).toEqual({ dir: 'D:/交付', relative: '20261027-大字报/20261027-大字报-01.jpg' })
+    // 记录对不上时还能靠推算兜一次，不至于一条都删不掉
+    expect(refs.length).toBeGreaterThan(1)
+    expect(refs.every((item) => item.dir === 'D:/交付')).toBe(true)
+  })
+
+  /**
+   * 交付根目录要认「交付当时记下的那个」。
+   * 按当前配置重算的话，用户改过默认保存位置 / 方向交付目录后就指到别处，
+   * 文件明明还在交付夹里却删不掉。
+   */
+  it('优先用交付当时记下的根目录，配置改过也删得到', async () => {
+    const t = card('t1', {
+      outputImages: ['img-a'],
+      deliveredFileNames: { 'img-a': '20261027-大字报-01.jpg' },
+      deliverDirPath: 'E:/旧交付夹',
+    })
+    const refs = await deliveredFileRefsOf(t, 'img-a', { ...context([t]), deliveryDirs: {} })
+    expect(refs[0]).toEqual({ dir: 'E:/旧交付夹', relative: '20261027-大字报/20261027-大字报-01.jpg' })
   })
 
   it('老数据没记录时按卡片顺序推算序号，扩展名全部列出来（删的时候不存在的会跳过）', async () => {

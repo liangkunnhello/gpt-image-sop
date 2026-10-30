@@ -2862,7 +2862,7 @@ function scheduleAutoDeliver(task: TaskRecord) {
     try {
       const context = await buildDeliverContext()
       const result = await deliverTaskCard(latest, context)
-      recordDeliveredFiles(result.files)
+      recordDeliveredFiles(result.files, result.dir)
       reportDeliverResult(result)
     } catch (err) {
       console.error('自动交付失败：', err)
@@ -2931,7 +2931,7 @@ export async function deliverTaskNow(taskId: string, onlyImageIds?: string[]): P
     }
   }
   const result = await deliverCardGroup(task, context, { excludeImageIds })
-  recordDeliveredFiles(result.files)
+  recordDeliveredFiles(result.files, result.dir)
   reportDeliverResult(result)
   // 只报质检跳过的那部分：多选交付时排除的是「没选的图」，说成质检不合格会误导
   if (qcSkipped && result.ok) {
@@ -6268,12 +6268,16 @@ export async function trashOutputImage(taskId: string, imageId: string) {
     tasks: state.tasks.map((item) => (item.id === owner.id ? next : item)),
   }))
   await putTask(next)
+  // 交付过的图要把交付夹里的那份也撤掉；撤不掉要说出来，不能让人以为已经删干净
+  const wasDelivered = Boolean(owner.deliveredFileNames?.[imageId] || owner.deliverFolder)
   const removed = await removeDeliveredFiles(owner, [imageId])
   useStore.getState().showToast(
     removed
       ? '已移入图片回收站，交付文件夹里的那一份也删掉了'
-      : '已移入图片回收站，可在回收站里还原',
-    'success',
+      : wasDelivered
+        ? '已移入图片回收站，但交付文件夹里没找到这个文件（可能已被移动或改过交付地址）'
+        : '已移入图片回收站，可在回收站里还原',
+    removed ? 'success' : 'info',
   )
 }
 
@@ -6298,6 +6302,8 @@ export async function trashOutputImages(taskId: string, imageIds: string[]): Pro
   }
 
   let total = 0
+  let removedFiles = 0
+  let deliveredCount = 0
   for (const [ownerId, ids] of byOwner) {
     const owner = useStore.getState().tasks.find((item) => item.id === ownerId)
     if (!owner) continue
@@ -6309,10 +6315,23 @@ export async function trashOutputImages(taskId: string, imageIds: string[]): Pro
       tasks: state.tasks.map((item) => (item.id === ownerId ? next : item)),
     }))
     await putTask(next)
-    await removeDeliveredFiles(owner, adding)
+    for (const id of adding) {
+      if (owner.deliveredFileNames?.[id] || owner.deliverFolder) deliveredCount += 1
+    }
+    removedFiles += await removeDeliveredFiles(owner, adding)
     total += adding.length
   }
-  if (total) useStore.getState().showToast(`已把 ${total} 张移入图片回收站，可在回收站里还原`, 'success')
+  if (total) {
+    const missed = deliveredCount - removedFiles
+    useStore.getState().showToast(
+      missed > 0
+        ? `已把 ${total} 张移入图片回收站，交付文件夹里另有 ${missed} 张没找到（可能已被移动或改过交付地址）`
+        : removedFiles > 0
+          ? `已把 ${total} 张移入图片回收站，交付文件夹里的 ${removedFiles} 张也删掉了`
+          : `已把 ${total} 张移入图片回收站，可在回收站里还原`,
+      missed > 0 ? 'info' : 'success',
+    )
+  }
   return total
 }
 
@@ -6328,18 +6347,46 @@ async function removeDeliveredFiles(task: TaskRecord, imageIds: string[]): Promi
   let removed = 0
   try {
     const context = await buildDeliverContext()
+    /**
+     * 老任务没有 deliverDirPath：交付时用的是哪个根目录已经无从考证。
+     * 把「默认保存目录」也当成一个候选 —— 用户后来改过方向交付目录的话，
+     * 当年那批文件多半还留在默认目录里，只按当前配置算会一直删不到。
+     */
+    const extraDirs: string[] = []
+    try {
+      const defaultDir = (await getDefaultSaveDir())?.trim()
+      if (defaultDir) extraDirs.push(defaultDir)
+    } catch {
+      // 读不到默认目录就算了，不影响主线
+    }
     for (const imageId of imageIds) {
       const refs = await deliveredFileRefsOf(task, imageId, context)
+      let done = false
       for (const ref of refs) {
         try {
           if (await removeDeliveredFile(ref.dir, ref.relative)) {
-            removed += 1
+            done = true
             break
           }
         } catch (err) {
           console.warn('删除交付文件失败：', err)
         }
       }
+      // 主路径全落空时，按同一个相对路径去默认目录里找一次
+      if (!done && refs[0]) {
+        for (const dir of extraDirs) {
+          if (dir === refs[0].dir) continue
+          try {
+            if (await removeDeliveredFile(dir, refs[0].relative)) {
+              done = true
+              break
+            }
+          } catch (err) {
+            console.warn('删除交付文件失败：', err)
+          }
+        }
+      }
+      if (done) removed += 1
     }
   } catch (err) {
     console.warn('删除交付文件失败：', err)
@@ -6404,7 +6451,7 @@ export async function pruneFailedDeliveredImages(imageIds?: string[]): Promise<n
  * 文件名里带序号和尺寸，事后重算容易跟当时的实际写法错开，
  * 由交付结果直接回写最准确；图可能是兄弟任务持有的，按真正持有它的任务分组写。
  */
-function recordDeliveredFiles(files?: Array<{ imageId: string; name: string }>) {
+function recordDeliveredFiles(files?: Array<{ imageId: string; name: string }>, dir?: string) {
   if (!files?.length) return
   const tasks = useStore.getState().tasks
   const byTask = new Map<string, Record<string, string>>()
@@ -6415,8 +6462,13 @@ function recordDeliveredFiles(files?: Array<{ imageId: string; name: string }>) 
     map[file.imageId] = file.name
     byTask.set(owner.id, map)
   }
+  const dirPath = dir?.trim()
   for (const [taskId, names] of byTask) {
-    updateTaskInStore(taskId, { deliveredFileNames: names })
+    // 顺手把「交付到哪个根目录」也记下来：进回收站删文件时按它找，比按当前配置重算准
+    updateTaskInStore(taskId, {
+      deliveredFileNames: names,
+      ...(dirPath ? { deliverDirPath: dirPath } : {}),
+    })
   }
 }
 
@@ -6485,7 +6537,7 @@ export async function restoreOutputImages(taskId: string, imageIds: string[]) {
     try {
       const context = await buildDeliverContext()
       const result = await deliverTaskCard(next, context)
-      recordDeliveredFiles(result.files)
+      recordDeliveredFiles(result.files, result.dir)
     } catch (err) {
       console.warn('还原后补写交付文件失败：', err)
     }
