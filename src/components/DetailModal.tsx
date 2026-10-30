@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, retryTask, updateSopText, trashTask, trashOutputImage, trashOutputImages, deliverTaskNow, openDeliveryFolderForTask, resolveTaskDeliveryTarget } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, isResumableTask, resumeTask, retryTask, updateSopText, trashTask, trashOutputImage, trashOutputImages, deliverTaskNow, openDeliveryFolderForTask, resolveTaskDeliveryTarget } from '../store'
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
@@ -1185,8 +1185,13 @@ export default function DetailModal() {
     }
   }
 
+  /**
+   * 没跑完的卡走「继续」：在这一条上原地接着跑。
+   * 走 retryTask 的话会按设置新建一张卡，用户只是想补回这张，不是想再要一张。
+   */
   const handleRetry = () => {
-    retryTask(task)
+    if (isResumableTask(task)) void resumeTask(task)
+    else retryTask(task)
     setDetailTaskId(null)
   }
 
@@ -1862,14 +1867,14 @@ export default function DetailModal() {
                         handleRetry()
                       }}
                       className="inline-flex items-center justify-center rounded-full border border-blue-200/80 bg-white/80 px-3 py-1.5 text-blue-500 transition hover:bg-blue-50 dark:border-blue-400/20 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
-                      aria-label="重试任务"
+                      aria-label={isResumableTask(task) ? '继续这张卡' : '重试任务'}
                     >
                       <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>
                     </button>
                     <ViewportTooltip visible={retryTooltip.visible} className="whitespace-nowrap">
-                      重试任务
+                      {isResumableTask(task) ? '继续这张卡（接着上次跑完）' : '重试任务'}
                     </ViewportTooltip>
                   </div>
                 )}

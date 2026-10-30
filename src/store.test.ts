@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { TASK_STOPPED_MESSAGE, addImagesFromFiles, clearSubmittedInput, countResumableTasks, isResumableTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, clearSubmittedInput, countResumableTasks, isResumableTask, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -6922,5 +6922,49 @@ describe('提交后清空输入框（三种模式同一口径）', () => {
     expect(state.inputImages).toHaveLength(1)
     expect(state.fixedImages).toHaveLength(1)
     expect(state.variableImages).toHaveLength(1)
+  })
+})
+/**
+ * 单卡「继续」：不管设置里的重试方式是「新建」还是「覆盖」，
+ * 都要在这一条卡上原地接着跑 —— 用户只想补回这张，不想多出一张新卡。
+ */
+describe('任务卡上的继续', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    vi.mocked(callImageApi).mockReset()
+    useStore.setState({
+      // 故意留成默认的「新建」：继续不应该听这个设置
+      settings: { ...DEFAULT_SETTINGS, baseUrl: 'https://api.example.com/v1', apiKey: 'test-key' },
+      tasks: [],
+      showToast: vi.fn(),
+      detailTaskId: null,
+    })
+  })
+
+  it('在原卡上接着跑，不会多出一张重复的卡', async () => {
+    const failed = task({ status: 'error', error: '请求中断' })
+    useStore.setState({ tasks: [failed] })
+    const request = deferred<Awaited<ReturnType<typeof callImageApi>>>()
+    vi.mocked(callImageApi).mockImplementationOnce(() => request.promise)
+
+    const started = await resumeTask(failed)
+    expect(started).toBe(true)
+
+    const tasks = useStore.getState().tasks
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0].id).toBe(failed.id)
+    expect(tasks[0].status).toBe('running')
+
+    request.resolve({ images: [], actualParams: {}, actualParamsList: [], revisedPrompts: [] })
+    await vi.waitFor(() => expect(useStore.getState().tasks[0].status).toBe('done'))
+  })
+
+  it('已经出过图 / 正在跑的任务点继续不做任何事', async () => {
+    const done = task({ status: 'done', outputImages: ['img-1'] })
+    useStore.setState({ tasks: [done] })
+    const started = await resumeTask(done)
+    expect(started).toBe(false)
+    expect(useStore.getState().tasks).toEqual([done])
   })
 })

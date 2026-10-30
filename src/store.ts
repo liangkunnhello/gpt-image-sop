@@ -5684,6 +5684,24 @@ export async function resumeInterruptedTasks(): Promise<number> {
   return pending.length
 }
 
+/**
+ * 单卡断点继续：在原来这条卡上接着跑，不新建卡。
+ *
+ * 和「全部继续」共用同一套判定（isResumableTask），区别只是作用范围 ——
+ * 大多数时候用户只想补回某一张，不想把整批重跑一遍（有些卡可能已经手动处理过）。
+ */
+export async function resumeTask(task: TaskRecord): Promise<boolean> {
+  const latest = useStore.getState().tasks.find((item) => item.id === task.id)
+  if (!latest || !isResumableTask(latest)) {
+    useStore.getState().showToast('这条任务已经不需要继续了', 'info')
+    return false
+  }
+  // overwrite：原地续跑；keepProfile：沿用这张卡当时的接口配置，画风才不会跟前面几张对不上
+  await retryTask(latest, { overwrite: true, keepProfile: true })
+  useStore.getState().showToast('正在接着跑这张卡', 'success')
+  return true
+}
+
 /** 复用配置 */
 /**
  * 复用配置时该还原哪个尺寸。

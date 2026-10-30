@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { TASK_STOPPED_MESSAGE, useStore, retryTask, stopTask } from '../store'
+import { TASK_STOPPED_MESSAGE, useStore, isResumableTask, resumeTask, retryTask, stopTask } from '../store'
 import { useClipStore } from '../lib/clipSimilarity'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { useNearViewport } from '../hooks/useNearViewport'
@@ -830,7 +830,20 @@ export default function TaskCard({
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
-              {((task.status === 'error' && !isFalReconnecting && !isCustomReconnecting) || (task.status === 'done' && settings.alwaysShowRetryButton)) && (
+              {/* 中断 / 没跑完的卡给「继续」：在这张卡上原地接着跑。
+                  不走「重试」——重试会按设置新建一张卡，旧的失败卡还留着，
+                  越点越乱，也看不出哪张是接着上次的。 */}
+              {isResumableTask(task) ? (
+                <TaskActionButton
+                  tooltip="继续这张卡（接着上次跑完，不新建卡）"
+                  onClick={() => { void resumeTask(task) }}
+                  className="p-1.5 rounded-md bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-500/15 dark:text-amber-300 dark:hover:bg-amber-500/25 transition"
+                >
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M8 5.5v13l11-6.5z" />
+                  </svg>
+                </TaskActionButton>
+              ) : ((task.status === 'error' && !isFalReconnecting && !isCustomReconnecting) || (task.status === 'done' && settings.alwaysShowRetryButton)) && (
                 <TaskActionButton
                   tooltip="重试任务"
                   onClick={() => retryTask(task)}
