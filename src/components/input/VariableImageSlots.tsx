@@ -19,6 +19,20 @@ interface SlotConfig {
   badge: string
 }
 
+/** 参考图的说明按模式切换，其余两池的语义两个模式完全一致 */
+function slotsFor(mode: 'variable' | 'sop'): SlotConfig[] {
+  return SLOTS.map((slot) => (
+    slot.key === 'reference'
+      ? {
+        ...slot,
+        hint: mode === 'sop'
+          ? '只用来反推 SOP，不进生图接口；用存档 SOP 时请把图放进固定图区'
+          : slot.hint,
+      }
+      : slot
+  ))
+}
+
 const SLOTS: SlotConfig[] = [
   {
     key: 'reference',
@@ -72,6 +86,13 @@ interface Props {
   referenceLimit: number
   /** 单次请求最多能带几张图：只有「固定图」受它约束，变量图每条只取一张、不占名额 */
   requestLimit: number
+  /**
+   * 当前模式。两个模式的三池结构一样，但参考图的用途不同：
+   * - variable：参考图只用来提取变量策略
+   * - sop：参考图只用来反推 SOP，用存档 SOP 时完全不参与
+   * 不改文案的话，SOP 下会写着「提取策略」，看着像走错了模式。
+   */
+  mode?: 'variable' | 'sop'
 }
 
 /** 三个图片池的统一读写：都是 InputImage[]，只是存的位置不同 */
@@ -119,7 +140,8 @@ function SlotThumbs({ images, onRemove }: { images: InputImage[]; onRemove: (idx
   )
 }
 
-export default function VariableImageSlots({ referenceLimit, requestLimit }: Props) {
+export default function VariableImageSlots({ referenceLimit, requestLimit, mode = 'variable' }: Props) {
+  const slots = slotsFor(mode)
   // dragOverSlot 只用来做高亮：真正落图时由每个区的 drop 处理
   const [dragOverSlot, setDragOverSlot] = useState<Slot | null>(null)
   const [uploading, setUploading] = useState<Slot | null>(null)
@@ -255,7 +277,7 @@ export default function VariableImageSlots({ referenceLimit, requestLimit }: Pro
 
   return (
     <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-      {SLOTS.map(renderSlot)}
+      {slots.map(renderSlot)}
     </div>
   )
 }

@@ -46,6 +46,7 @@ import CustomCopyPicker from './CustomCopyPicker'
 import { buildCopyPrefix, mergeTaskCopy } from '../lib/customCopy'
 import { arkSizeHint, toArkSize } from '../lib/arkSize'
 import { maxSizeForReferenceImage } from '../lib/referenceSize'
+import { sopVariableImageOffset } from '../lib/sopImages'
 import { enqueueVariableJobs } from '../lib/variablePipeline'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
 import PromptOptimizeModal from './PromptOptimizeModal'
@@ -665,11 +666,18 @@ export default function InputBar() {
     const groups = splitReferenceGroups(inputImages, options.groupCount)
     // 先把参数固定下来：反推要跑几分钟，中途改尺寸不该影响这一批
     const enqueueParams = useStore.getState().params
+    // 图生图：固定图整批共用、变量图逐条轮换，跨卡接着往下轮
+    const baseFixed = useStore.getState().fixedImages
+    const baseVariable = useStore.getState().variableImages
     enqueueSopJobs(groups.map((group, index) => ({
       label: `第 ${index + 1}/${groups.length} 张卡`,
       params: enqueueParams,
       imageDataUrls: group.map((img) => img.dataUrl),
       imageIds: group.map((img) => img.id),
+      fixedImages: baseFixed,
+      variableImages: baseVariable,
+      variableImageOffset: sopVariableImageOffset(index, options.promptsPerGroup),
+      imageFidelity: options.imageFidelity ?? sopSnapshot.imageFidelity,
       systemPromptText: bundle.merged,
       systemPromptName: options.systemPromptName,
       // 有存档 SOP 就直接用，任务里也就不再记系统提示词，避免详情页显示得对不上
@@ -2228,13 +2236,17 @@ export default function InputBar() {
             <div className={`w-10 h-1 rounded-full bg-gray-300 dark:bg-white/[0.06] transition-transform duration-200 ${mobileCollapsed ? 'scale-x-75' : ''}`} />
           </div>
 
-          {/* 变量模式：参考图 / 固定图 / 变量图三个独立入口，各自拖入互不串 */}
-          {variableMode && (
-            <VariableImageSlots referenceLimit={imageLimit} requestLimit={MAX_INPUT_IMAGES} />
+          {/* SOP / 变量模式：参考图 / 固定图 / 变量图三个独立入口，各自拖入互不串 */}
+          {(variableMode || sopMode) && (
+            <VariableImageSlots
+              referenceLimit={imageLimit}
+              requestLimit={MAX_INPUT_IMAGES}
+              mode={variableMode ? 'variable' : 'sop'}
+            />
           )}
 
-          {/* 输入图片行（移动端可折叠） */}
-          {!variableMode && inputImages.length > 0 && (
+          {/* 输入图片行（移动端可折叠）。SOP / 变量模式走上面的三分区，这里不再重复渲染 */}
+          {!variableMode && !sopMode && inputImages.length > 0 && (
             isMobile ? (
               <>
                 <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
@@ -2459,6 +2471,8 @@ export default function InputBar() {
             {sopSplitOpen && createPortal(
               <SopSplitModal
                 imageCount={inputImages.length}
+                fixedCount={fixedImages.length}
+                variableCount={variableImages.length}
                 onClose={() => setSopSplitOpen(false)}
                 onConfirm={(options) => void runSop(options)}
               />,

@@ -13,6 +13,7 @@ import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
 import { formatImageRatio } from '../lib/size'
+import { imageFidelityLabel } from '../lib/sopImages'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyImageSourceToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
@@ -1985,6 +1986,15 @@ export default function DetailModal() {
                     {task.variableMode ? '变量策略' : '生图 SOP'}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-xs text-gray-700 dark:text-gray-300">{task.sopName || ''}</span>
+                  {/* 图生图：让人一眼看出这批是带底图出的，以及底图的保真档 */}
+                  {!task.variableMode && task.imageFidelity && task.inputImageIds.length > 0 && (
+                    <span
+                      className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                      title="这批是带底图出的；档位决定底图里哪些元素必须保留"
+                    >
+                      底图 · {imageFidelityLabel(task.imageFidelity)}
+                    </span>
+                  )}
                   {/* 一组提示词对应一组图，这里给一个逐条对照的入口 */}
                   {groupTasks.length > 1 && (
                     <button

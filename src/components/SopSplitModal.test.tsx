@@ -39,6 +39,7 @@ beforeEach(() => {
     avoidCtaDesign: true,
     avoidOverlay: true,
     promptsPerGroup: 5,
+    imageFidelity: 'layout',
   })
 })
 
@@ -48,13 +49,21 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-function render(imageCount = 0) {
+function render(imageCount = 0, pools: { fixedCount?: number; variableCount?: number } = {}) {
   const container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
   const results: SopRunOptions[] = []
   act(() => {
-    root!.render(<SopSplitModal imageCount={imageCount} onClose={() => {}} onConfirm={(options) => results.push(options)} />)
+    root!.render(
+      <SopSplitModal
+        imageCount={imageCount}
+        fixedCount={pools.fixedCount ?? 0}
+        variableCount={pools.variableCount ?? 0}
+        onClose={() => {}}
+        onConfirm={(options) => results.push(options)}
+      />,
+    )
   })
   const selects = () => [...container.querySelectorAll('select')] as HTMLSelectElement[]
   const startButton = () => [...container.querySelectorAll('button')].find((item) => item.textContent?.includes('开始生成')) as HTMLButtonElement
@@ -97,5 +106,35 @@ describe('SOP 生图弹窗的产品 / 方向', () => {
     // 切产品会自动选上第一个方向
     expect(selects()[1].value).toBe('dir-1')
     expect(startButton().disabled).toBe(false)
+  })
+})
+
+/**
+ * 图生图：有固定图 / 变量图时才出现「底图怎么用」，
+ * 选中的档位要随运行选项交出去（写提示词和出图都靠它，丢了就退回默认）。
+ */
+describe('SOP 图生图的保真档', () => {
+  const fidelityButton = (container: HTMLElement, label: string) =>
+    [...container.querySelectorAll('button')].find((item) => item.textContent?.trim() === label) as HTMLButtonElement | undefined
+
+  it('没有底图时不显示这一块', () => {
+    const { container } = render(2)
+    expect(fidelityButton(container, '保产品')).toBeUndefined()
+  })
+
+  it('有固定图或变量图时出现三档，默认保版式', () => {
+    const { container, startButton, results } = render(2, { fixedCount: 1 })
+    expect(fidelityButton(container, '保版式')).toBeTruthy()
+    expect(fidelityButton(container, '保产品')).toBeTruthy()
+    expect(fidelityButton(container, '只借风格')).toBeTruthy()
+    act(() => startButton().click())
+    expect(results[0].imageFidelity).toBe('layout')
+  })
+
+  it('选完的档位跟着运行选项交出去', () => {
+    const { container, startButton, results } = render(2, { variableCount: 3 })
+    act(() => fidelityButton(container, '只借风格')!.click())
+    act(() => startButton().click())
+    expect(results[0].imageFidelity).toBe('style')
   })
 })

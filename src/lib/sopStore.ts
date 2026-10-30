@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
-import type { SavedSop, SopDirectionNode, SopSystemPrompt, VariablePrompt } from '../types'
+import type { ImageFidelity, SavedSop, SopDirectionNode, SopSystemPrompt, VariablePrompt } from '../types'
 import { isTauri } from './platform'
 import type { PostTemplate } from './postTemplate'
 import { BUILTIN_EXTRAS, type ExtraRequirement } from './extraRequirements'
@@ -130,8 +130,14 @@ interface SopState {
   avoidCtaDesign: boolean
   /** 每张任务卡生成几条提示词（=几张图），SOP 模式下唯一的数量来源 */
   promptsPerGroup: number
+  setImageFidelity: (value: ImageFidelity) => void
   /** 变量模式：每张卡最多产出几条提示词，实际条数受组合池容量限制 */
   variablesPerCard: number
+  /**
+   * SOP 模式图生图的保真档：记住上一次的选择，下次打开弹窗不用重选。
+   * 只在有固定图 / 变量图时才有意义。
+   */
+  imageFidelity: ImageFidelity
   /** 生成提示词时自动避让后处理预留区（Logo / 警示语），默认开启 */
   avoidOverlay: boolean
   /**
@@ -249,6 +255,7 @@ export const useSopStore = create<SopState>()(
       avoidCtaDesign: true,
       promptsPerGroup: 5,
       variablesPerCard: 5,
+      imageFidelity: 'layout',
       avoidOverlay: true,
       postTemplates: {},
       postPreviewImages: {},
@@ -270,6 +277,7 @@ export const useSopStore = create<SopState>()(
       setSopMode: (value) => set({ sopMode: value, variableMode: false }),
       setVariableMode: (value) => set({ variableMode: value, sopMode: false }),
       setPromptsPerGroup: (value) => set({ promptsPerGroup: clampPromptCount(value) }),
+      setImageFidelity: (value) => set({ imageFidelity: value }),
       // 与 SOP 模式的条数用同一个上限：变量模式的条数由「骨架 + 变量选项」的数量决定，
       // 不调模型写文案，本来没有单次输出 token 的约束，30 条是当初随手写的兜底，卡死了真正的产能
       setVariablesPerCard: (value) => set({ variablesPerCard: clampPromptCount(value) }),
@@ -729,7 +737,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, savedSops: state.savedSops, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, extraRequirements: state.extraRequirements, extraPick: state.extraPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
+      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, savedSops: state.savedSops, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, extraRequirements: state.extraRequirements, extraPick: state.extraPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, imageFidelity: state.imageFidelity, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
     },
   ),
 )

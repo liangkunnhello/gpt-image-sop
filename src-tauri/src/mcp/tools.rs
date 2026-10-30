@@ -251,7 +251,10 @@ pub fn definitions() -> Vec<Value> {
                     "point_preset_id": { "type": "string", "description": "卖点预设 id：卖点会逐字进提示词" },
                     "prompts_per_group": { "type": "integer", "minimum": 1, "maximum": 50, "description": "这一批写几条提示词，默认 1" },
                     "group_count": { "type": "integer", "minimum": 1, "maximum": 10, "description": "参考图分成几张卡，默认 1" },
-                    "image_ids": { "type": "array", "items": { "type": "string" }, "description": "参考图 id" },
+                    "image_ids": { "type": "array", "items": { "type": "string" }, "description": "参考图 id（只用于反推 SOP，不进生图接口）" },
+                    "fixed_image_ids": { "type": "array", "items": { "type": "string" }, "description": "固定图 id：图生图的基底，每条提示词都带" },
+                    "variable_image_ids": { "type": "array", "items": { "type": "string" }, "description": "变量图 id：图生图逐条轮换" },
+                    "image_fidelity": { "type": "string", "enum": ["layout", "product", "style"], "description": "底图保真档：layout 保版式只换文案 / product 保产品 / style 只借风格，默认 layout" },
                     "direction_id": { "type": "string", "description": "归属方向 id" },
                     "copy_text": { "type": "string", "description": "本次文案（排在该方向卖点前面）" }
                 }

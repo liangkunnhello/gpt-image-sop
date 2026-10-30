@@ -12,6 +12,7 @@ import type {
   BatchProgress,
   PresetConfig,
   AppMode,
+  ImageFidelity,
   TaskParams,
   InputImage,
   MaskDraft,
@@ -5798,7 +5799,9 @@ export async function reuseConfig(task: TaskRecord) {
   }
 
   // 变量图区：快照里存的是整池；老任务只能退回「本条用到的那一张」
-  if (isVariableMode) {
+  // SOP 模式现在也用变量图池（图生图），快照里有就一样还原
+  const restoresVariablePool = isVariableMode || snapshot?.mode === 'sop'
+  if (restoresVariablePool) {
     const variableImgs: InputImage[] = []
     if (snapshot) {
       const fixedSet = new Set(fixedIds)
@@ -5836,6 +5839,8 @@ export async function reuseConfig(task: TaskRecord) {
     const sopState = useSopStore.getState()
     if (snapshot.mode === 'sop') {
       sopState.setSopMode(true)
+      // 保真档也一并还原：同一张底图换个档位就是另一种写法，不复原等于让用户重选
+      if (task.imageFidelity) sopState.setImageFidelity(task.imageFidelity)
     } else if (snapshot.mode === 'variable') {
       sopState.setVariableMode(true)
     } else {
@@ -7292,6 +7297,8 @@ export async function submitSopTasks(input: {
   inputImagesPerPrompt?: InputImage[][]
   /** 变量模式图生图：每条提示词各自用到的变量图 id，详情页回看用 */
   variableImageIds?: Array<string | undefined>
+  /** 图生图底图的保真档：写进任务，详情页可回看、复用配置能还原 */
+  imageFidelity?: ImageFidelity
   /**
    * 提示词序号从几开始。补充生图时这张卡已有若干条，
    * 不往后顺延会出现两个「第 1 条」，详情页排序和对照就乱了。
@@ -7366,6 +7373,7 @@ export async function submitSopTasks(input: {
       variableSkeleton: fill?.skeleton,
       variableAssignments: fill?.assignments,
       variableImageId: input.variableImageIds?.[index],
+      imageFidelity: input.imageFidelity,
       // 同一批的固定图都一样；存下来是为了复用配置时能拆回「固定图」区
       variableFixedImageIds: fixedImageIds.length ? fixedImageIds : undefined,
       /**

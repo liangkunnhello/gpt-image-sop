@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { ImageFidelity } from '../types'
 import { useSopStore } from '../lib/sopStore'
 import { splitReferenceGroups } from '../lib/sopPipeline'
 import { collectAvoidZones, pickAvoidTemplate } from '../lib/postReserve'
@@ -10,6 +11,7 @@ import { resolvePostTemplates } from '../lib/applyPostTemplate'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from '../lib/promptLimits'
 import { resolveExtraIds } from '../lib/extraRequirements'
 import { ExtraChecklist } from './ExtraRequirementsModal'
+import { IMAGE_FIDELITY_OPTIONS } from '../lib/sopImages'
 
 export interface SopRunOptions {
   directionId: string
@@ -22,17 +24,26 @@ export interface SopRunOptions {
   savedSopName?: string
   groupCount: number
   promptsPerGroup: number
+  /** 图生图的底图保真档；没有固定图 / 变量图时无意义，可不传 */
+  imageFidelity?: ImageFidelity
 }
 
 interface Props {
   imageCount: number
+  /** 固定图数量：整批共用，每条提示词都带 */
+  fixedCount: number
+  /** 变量图数量：每条轮换一张，跨卡接着轮 */
+  variableCount: number
   onClose: () => void
   onConfirm: (options: SopRunOptions) => void
 }
 
 type SplitMode = 'one' | 'perImage' | 'custom'
 
-export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props) {
+export default function SopSplitModal({ imageCount, fixedCount, variableCount, onClose, onConfirm }: Props) {
+  const hasBaseImages = fixedCount > 0 || variableCount > 0
+  const imageFidelity = useSopStore((s) => s.imageFidelity)
+  const setImageFidelity = useSopStore((s) => s.setImageFidelity)
   const directions = useSopStore((s) => s.directions)
   const systemPrompts = useSopStore((s) => s.systemPrompts)
 
@@ -274,6 +285,40 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
             </p>
           )}
 
+          {/* 图生图：只有固定图 / 变量图存在时才需要选保真档 */}
+          {hasBaseImages && (
+            <div className="rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="text-xs font-medium text-gray-700 dark:text-gray-200">底图怎么用</span>
+                <span className="text-[11px] text-gray-400">
+                  固定图 {fixedCount} 张 · 变量图 {variableCount} 张
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {IMAGE_FIDELITY_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setImageFidelity(option.value)}
+                    className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                      imageFidelity === option.value
+                        ? 'border-blue-500 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'
+                        : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/[0.06]'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-gray-400">
+                {IMAGE_FIDELITY_OPTIONS.find((item) => item.value === imageFidelity)?.hint}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                你填的文案与额外要求优先级最高：和底图冲突时以你的要求为准。
+              </p>
+            </div>
+          )}
+
           {/* 额外要求：不再是写死的勾选，条目在「额外要求」弹窗里能改名 / 改内容 / 增删 */}
           <div className="rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
             <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -300,7 +345,11 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
           <span className="text-[11px] text-gray-400">
             {pickedSop
               ? '按选中的 SOP 直接写提示词，参考图不参与。'
-              : hasImages ? '参考图只用于反推 SOP，不参与最终生图。' : '无参考图：只靠系统提示词与卖点反推 SOP。'}
+              : hasImages
+                ? (hasBaseImages
+                  ? '参考图只用于反推 SOP；出图带固定图与变量图底图。'
+                  : '参考图只用于反推 SOP，不参与最终生图。')
+                : (hasBaseImages ? '无参考图：按系统提示词反推 SOP，出图带底图。' : '无参考图：只靠系统提示词与卖点反推 SOP。')}
           </span>
           <button
             type="button"
@@ -314,6 +363,7 @@ export default function SopSplitModal({ imageCount, onClose, onConfirm }: Props)
               savedSopName: pickedSop?.name,
               groupCount,
               promptsPerGroup,
+              imageFidelity,
 
             })}
             className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"

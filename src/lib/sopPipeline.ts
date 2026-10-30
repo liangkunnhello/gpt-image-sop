@@ -1,4 +1,4 @@
-import type { ApiProfile, TaskParams } from '../types'
+import type { ApiProfile, ImageFidelity, InputImage, TaskParams } from '../types'
 import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, updateTaskInStore, useStore } from '../store'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
@@ -11,6 +11,8 @@ import { checkPromptCopy } from './copyCheck'
 import { describeBlocks, keepIndexes, proofreadPrompts } from './promptProofread'
 import { variationCandidates } from './promptVariation'
 import { clampPromptCount, PROMPTS_PER_BATCH } from './promptLimits'
+import { buildSopImageHint, planSopImages, withSopImageHint } from './sopImages'
+import { ensureImageCached } from './imageCache'
 
 /** 生成 SOP 与提示词所用的文本模型 */
 export const SOP_TEXT_MODEL = 'deepseek-v4.1-flash'
@@ -406,10 +408,18 @@ export async function generateSop(
   ])
 }
 
-function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false) {
+function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false, hasImage = false) {
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
-    '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。',
+    hasImage
+      ? '这批提示词会带底图出图，所以你写的是「在底图上怎么改、怎么加」，不是从零开始画一张新图；每条仍要能独立送进生图模型，写清改完之后的画面应该是什么样。'
+      : '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。',
+    hasImage
+      ? '【底图优先于想象】不要重复描述底图里已经确定的产品外形、包装文字、品牌标识与底纹，也不要写出与底图矛盾的结构（比如底图是竖版就不要写横版通栏）。'
+      : '',
+    hasImage
+      ? '【用户要求优先于底图】用户给出的文案、额外要求与保真档优先级最高：与底图冲突时以用户要求为准，不要为了贴合底图牺牲用户要求。'
+      : '',
     '发散按 SOP 里的「变量池」和「互斥规则」执行：每条从变量池里取用取值，同一批之间按互斥规则避重；不要自己另立一套维度，也不要把互斥规则当成建议。',
     avoidHint
       ? '如果给出了【画面预留区】，每条提示词都要写清主体、主要文字和关键视觉安排在预留区之外，并明确说明这些区域留白或保持干净背景。'
@@ -459,6 +469,11 @@ export interface PromptMessagesInput {
    * 只用于让模型避重 —— 条数多到一次写不完时才用得上。
    */
   existing?: string[]
+  /**
+   * 底图说明。非空表示这批会带底图出图，
+   * 写词规则要跟着变（不重复描述底图已有的东西、用户要求优先）。
+   */
+  imageHint?: string
 }
 
 /** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
@@ -486,6 +501,7 @@ export function buildPromptMessages({
   copyText = '',
   avoidCta = false,
   existing = [],
+  imageHint = '',
 }: PromptMessagesInput): { system: string; user: string } {
   const copy = copyText.trim()
   const tail = ignoreCompliance
@@ -503,9 +519,11 @@ export function buildPromptMessages({
   const ctaBlock = avoidCta
     ? '\n\n【禁止按钮形占位】SOP 里凡是「留出按钮位置 / 按钮槽位 / 按钮文案 / CTA 区」的要求，一律不执行。画面里不要出现空白胶囊、空白长条、带描边的空白圆角块 —— 这种「预留位」在成图里就是一只没有文字的按钮，是废图。'
     : ''
+  // 底图说明单独成块放在最后：模型对末尾的约束更敏感，写到一半忘了这层是最常见的情况
+  const imageBlock = imageHint.trim() ? `\n\n${imageHint.trim()}` : ''
   return {
-    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta),
-    user: `【生图 SOP】\n${(avoidCta ? stripButtonPlaceholders(sopText) : sopText).trim()}${copyBlock}${previous}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${ctaBlock}${reserve}`,
+    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta, Boolean(imageBlock)),
+    user: `【生图 SOP】\n${(avoidCta ? stripButtonPlaceholders(sopText) : sopText).trim()}${copyBlock}${previous}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${ctaBlock}${reserve}${imageBlock}`,
   }
 }
 
@@ -525,6 +543,8 @@ export async function generatePrompts(
   copyText = '',
   avoidCta = false,
   onProgress?: (written: number, total: number) => void,
+  /** 底图说明：非空时写词规则切到「在底图上改」，见 buildSopImageHint */
+  imageHint = '',
 ): Promise<string[]> {
   const total = clampPromptCount(count)
   const prompts: string[] = []
@@ -543,6 +563,7 @@ export async function generatePrompts(
       avoidHint,
       copyText,
       avoidCta,
+      imageHint,
       // 只带最近几批：全量贴进去会把上下文顶爆，而最近写的最容易撞车
       existing: prompts.slice(-PROMPTS_PER_BATCH * 3),
     })
@@ -700,6 +721,20 @@ export interface SopJobRequest {
    * Logo / 警示语的位置就对不上了 —— 所以从入队起就把参数定死，全程用这一份。
    */
   params: TaskParams
+  /**
+   * 图生图：整批共用的固定图，每条提示词都带同一组。
+   * 为空表示纯文生图（参考图仍然只用于反推）。
+   */
+  fixedImages?: InputImage[]
+  /** 图生图：变量图，每条轮换一张 */
+  variableImages?: InputImage[]
+  /**
+   * 变量图从第几张开始轮。跨卡累计用（见 sopVariableImageOffset），
+   * 否则多张卡的这一批永远只用池子最前面那几张。
+   */
+  variableImageOffset?: number
+  /** 底图保真档，默认「保版式」 */
+  imageFidelity?: ImageFidelity
 }
 
 /** 同时在跑的任务卡数量 */
@@ -765,6 +800,22 @@ async function runJob(job: SopJobRequest) {
     // 直接用存档 SOP 时把卖点并进 SOP 文本：卡上、详情页看到的 SOP 就带着卖点，
     // 和「反推」路径一致；不然 SOP 里连卖点一节都找不到，看起来像没生效
     if (presetSop && copyText) sop = appendCopySection(sop, copyText)
+    /**
+     * 图生图：每条提示词带哪些底图，在写词之前就定下来。
+     * 写词阶段要按「有底图」的规则写（不重复描述底图、用户要求优先），
+     * 出图阶段再用同一份计划 —— 两边各算一次的话，提示词和图很容易对不上。
+     */
+    const imagePlan = planSopImages(
+      job.fixedImages ?? [],
+      job.variableImages ?? [],
+      job.promptsPerGroup,
+      job.variableImageOffset ?? 0,
+    )
+    const imageHint = buildSopImageHint({
+      fixedCount: job.fixedImages?.length ?? 0,
+      variableCount: job.variableImages?.length ?? 0,
+      fidelity: job.imageFidelity,
+    })
     let prompts = await generatePrompts(
       profile,
       sop,
@@ -779,8 +830,11 @@ async function runJob(job: SopJobRequest) {
           prompt: `${job.label} · 正在写提示词（${written}/${total}）`,
         })
         : undefined,
+      imageHint,
     )
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
+    // 模型少写几条时按实际条数截断：多出来的计划条目没有提示词可用
+    let assignments = imagePlan.assignments.slice(0, prompts.length)
 
     // 生图前校验：选了卖点就必须逐字一致，不一致先让模型改回原文再验一次
     if (copyText) {
@@ -808,6 +862,8 @@ async function runJob(job: SopJobRequest) {
     if (proofread.blocks.length) {
       const kept = keepIndexes(prompts.length, proofread.blocks)
       prompts = kept.map((index) => prompts[index])
+      // 图要跟着提示词一起留下：只删提示词会把后面每条的底图都顶偏一位
+      assignments = kept.map((index) => assignments[index])
       useStore.getState().showToast(
         `${job.label}：${proofread.blocks.length} 条没通过校对，已跳过（${describeBlocks(proofread.blocks)}）`,
         'error',
@@ -817,6 +873,8 @@ async function runJob(job: SopJobRequest) {
     if (!prompts.length) {
       throw new Error(`提示词没通过校对：${describeBlocks(proofread.blocks, 2)}`)
     }
+    // 底图说明在发送前再拼一次：写词模型常常漏掉这层，漏了就会跟底图打架
+    const promptsToSend = prompts.map((prompt) => withSopImageHint(prompt, imageHint))
 
     await removeSopPlaceholder(placeholderId)
     // 出图任务由 submitSopTasks 内部再限并发，这里不等待，避免占住队列
@@ -836,18 +894,25 @@ async function runJob(job: SopJobRequest) {
       sopText: sop,
       directionId: job.directionId,
       referenceImageIds: job.imageIds,
-      prompts,
+      prompts: promptsToSend,
       /**
-       * 发送前快照：SOP 模式下输入框只有参考图（存在 sopReferenceImageIds），
-       * 固定图 / 变量图不参与，所以两个池都留空。
+       * 图生图：每条提示词带自己的底图。没有池时是空数组，
+       * submitSopTasks 会退回「纯提示词出图」，行为和以前一样。
+       */
+      inputImagesPerPrompt: prompts.map((_, index) => assignments[index]?.images ?? []),
+      variableImageIds: prompts.map((_, index) => assignments[index]?.variableImage?.id),
+      imageFidelity: job.imageFidelity,
+      /**
+       * 发送前快照：SOP 模式下参考图只用于反推，
+       * 固定图 / 变量图才是出图底图，各自回原池，复用配置时不用重新分。
        */
       inputSnapshot: {
         mode: 'sop',
         prompt: job.inputPrompt?.trim() || undefined,
         // 「本次文案」那一栏：复用配置时原样还原回去
         customCopy: job.customCopy?.trim() || undefined,
-        fixedImageIds: [],
-        variableImageIds: [],
+        fixedImageIds: (job.fixedImages ?? []).map((img) => img.id),
+        variableImageIds: (job.variableImages ?? []).map((img) => img.id),
       },
     })
   } catch (err) {
@@ -944,6 +1009,36 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
     ))
 
   const count = clampPromptCount(input.count)
+  /**
+   * 补充生图沿用这张卡原来的底图。
+   *
+   * 不沿用的后果是「同一张卡里前半批是图生图、后半批是纯文生图」，
+   * 画面基底直接对不上，而且用户完全看不出为什么。
+   * 图片可能已被清理，取不到就跳过 —— 少一张底图也比整批补不出来强。
+   */
+  const siblings = state.tasks.filter((item) => item.sopJobId === input.sopJobId && !item.sopPlaceholder)
+  const sample = siblings[0]
+  const fixedIds = sample?.variableFixedImageIds ?? []
+  const variableIds = sample?.inputSnapshot?.variableImageIds ?? []
+  const loadBase = async (ids: string[]): Promise<InputImage[]> => {
+    const out: InputImage[] = []
+    for (const id of ids) {
+      const dataUrl = await ensureImageCached(id)
+      if (dataUrl) out.push({ id, dataUrl })
+    }
+    return out
+  }
+  const fixedImages = await loadBase(fixedIds)
+  const variableImages = await loadBase(variableIds)
+  const imageFidelity = sample?.imageFidelity
+  // 从这张卡已有的条数接着轮，补出来的图和前面几张用的不是同一组底图才怪
+  const imagePlan = planSopImages(fixedImages, variableImages, count, input.existingCount)
+  const imageHint = buildSopImageHint({
+    fixedCount: fixedImages.length,
+    variableCount: variableImages.length,
+    fidelity: imageFidelity,
+  })
+
   const prompts = await generatePrompts(
     profile,
     sopText,
@@ -958,8 +1053,10 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
         useStore.getState().showToast(`正在按 SOP 写提示词：${written}/${total} 条…`, 'info')
       }
       : undefined,
+    imageHint,
   )
   if (!prompts.length) throw new Error('没有得到提示词')
+  const assignments = imagePlan.assignments.slice(0, prompts.length)
 
   return await submitSopTasks({
     sopJobId: input.sopJobId,
@@ -970,9 +1067,19 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
     savedSopName: input.savedSopName,
     sopText,
     directionId: input.directionId,
-    prompts,
+    prompts: prompts.map((prompt) => withSopImageHint(prompt, imageHint)),
+    inputImagesPerPrompt: prompts.map((_, index) => assignments[index]?.images ?? []),
+    variableImageIds: prompts.map((_, index) => assignments[index]?.variableImage?.id),
+    imageFidelity,
     promptIndexOffset: input.existingCount,
-    // 补充生图的入口没有「本次文案」这一栏，快照里不记
-    inputSnapshot: { mode: 'sop', fixedImageIds: [], variableImageIds: [] },
+    /**
+     * 快照要带上底图池：留空的话，复用这类补充出来的卡时
+     * 固定图 / 变量图会全部丢掉，下次出图又退回纯文生图。
+     */
+    inputSnapshot: {
+      mode: 'sop',
+      fixedImageIds: fixedImages.map((img) => img.id),
+      variableImageIds: variableImages.map((img) => img.id),
+    },
   })
 }

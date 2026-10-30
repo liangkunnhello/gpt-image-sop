@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { isTauri } from './platform'
 import { ensureImageCached } from './imageCache'
 import { useSopStore } from './sopStore'
+import { normalizeImageFidelity } from './sopImages'
 import { buildSkillMarkdown } from './mcpSkill'
 
 /** 与 Rust 侧 mcp::bridge::INVOKE_EVENT 一致 */
@@ -121,6 +122,9 @@ async function runAction(action: string, args: Record<string, unknown>): Promise
     const point = pointId ? sop.presets.find((item) => item.id === pointId) : undefined
     if (pointId && !point) throw new Error(`找不到卖点 ${pointId}`)
     const images = await loadImages(ids(args.image_ids))
+    // 图生图：固定图每条都带、变量图逐条轮换；不给就是纯文生图
+    const fixedImages = await loadImages(ids(args.fixed_image_ids))
+    const variableImages = await loadImages(ids(args.variable_image_ids))
     const directionId = str(args.direction_id)
     if (directionId) sop.setActiveDirection(directionId)
 
@@ -131,6 +135,9 @@ async function runAction(action: string, args: Record<string, unknown>): Promise
       params: useStore.getState().params,
       imageDataUrls: images.map((item) => item.dataUrl),
       imageIds: images.map((item) => item.id),
+      fixedImages,
+      variableImages,
+      imageFidelity: normalizeImageFidelity(args.image_fidelity),
       systemPromptText: systemPrompt?.content ?? '',
       systemPromptName: systemPrompt?.name,
       sopText: sopText || undefined,

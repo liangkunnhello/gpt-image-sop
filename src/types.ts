@@ -4,6 +4,16 @@ export type ApiMode = 'images' | 'responses'
 export const REASONING_EFFORT_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number]
 export type AppMode = 'gallery' | 'agent'
+/**
+ * SOP 模式图生图的保真档：决定底图里哪些东西必须保留、哪些允许重画。
+ *
+ * - layout：版式、构图、文字区位置照底图，只换文案
+ * - product：产品与包装照底图，场景/光线/构图重画
+ * - style：只借配色与质感，内容全部重画
+ *
+ * 同一张底图换一种用法，提示词的写法完全不同，所以由用户显式选一档，不靠猜。
+ */
+export type ImageFidelity = 'layout' | 'product' | 'style'
 export type AgentApiConfigMode = 'off' | 'native' | 'hybrid'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
   'task-selection',
@@ -444,6 +454,12 @@ export interface TaskRecord {
   sopPlaceholder?: boolean
   /** SOP 模式：本轮使用的参考图 id，复用配置时回填输入框 */
   sopReferenceImageIds?: string[]
+  /**
+   * SOP 模式图生图：底图的保真档。
+   * 同一张底图，「照版式换文案」和「同产品换场景」是两套写法，
+   * 模型猜不出来，只能由用户在发送时选一档。
+   */
+  imageFidelity?: ImageFidelity
   /** 变量模式：本条提示词由「骨架 + 变量」填词产出，分组仍复用 sopJobId */
   variableMode?: boolean
   /**

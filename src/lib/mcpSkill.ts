@@ -41,6 +41,8 @@ description: 通过 MCP 操作 GPT Image SOP 生图工作台——查方向树�
 - \`prompts_per_group\` 是这一批写几条提示词（每条出一张图），\`group_count\` 是参考图分几张卡。
 - 流程是「先写提示词 → 卖点校对 → 逐条出图」，比普通模式慢，但出图风格一致。
 - 卖点用 \`point_preset_id\` 指定；**卖点是要逐字印在图上的文字**，别让模型改写。
+- 图生图：\`fixed_image_ids\` 每条提示词都带（画面基底），\`variable_image_ids\` 逐条轮换（换场景/机位）。参考图 \`image_ids\` 只用于反推 SOP，不进生图接口 —— 想让成品贴近某张图，必须把它放进固定图或变量图。
+- \`image_fidelity\` 决定底图怎么用：\`layout\` 保版式只换文案（海报默认）、\`product\` 保产品换场景、\`style\` 只借风格。不传按 \`layout\`。
 
 ### 变量模式 \`submit_variable_images\`
 
