@@ -3,6 +3,10 @@ import {
   createUserAbortError,
   isUserAbort,
   linkAbortSignal,
+  maybeAppendSizeHint,
+  maybeAppendStreamingHint,
+  SIZE_UNSUPPORTED_HINT,
+  STREAMING_UNSUPPORTED_HINT,
 } from './imageApiShared'
 
 beforeEach(() => {
@@ -87,5 +91,35 @@ describe('区分「用户停止」与「请求失败」', () => {
 
   it('用户停止的错误名是 AbortError，方便上层按中止处理', () => {
     expect(createUserAbortError().name).toBe('AbortError')
+  })
+})
+
+/**
+ * 「不允许的图片尺寸」是出图尺寸参数被拒，不是参考图太大。
+ * 原来这种 400 会被追加「不支持下流式」的提示，方向完全跑偏。
+ */
+describe('尺寸被拒时给对提示', () => {
+  const sizeError = '不允许的图片尺寸 (cch_session_id: sess_abc)'
+
+  it('识别尺寸错误并追加正确提示', () => {
+    const message = maybeAppendSizeHint(sizeError)
+    expect(message).toContain(SIZE_UNSUPPORTED_HINT)
+    expect(message).toContain('与参考图本身的大小无关')
+  })
+
+  it('不是尺寸错误时原样返回', () => {
+    const other = '模型未开通 (request id: 123)'
+    expect(maybeAppendSizeHint(other)).toBe(other)
+  })
+
+  it('流式开启时也不会被「不支持下流式」的提示盖掉', () => {
+    const message = maybeAppendStreamingHint(sizeError, 400, true)
+    expect(message).toContain(SIZE_UNSUPPORTED_HINT)
+    expect(message).not.toContain(STREAMING_UNSUPPORTED_HINT)
+  })
+
+  it('其它 400 仍然照旧给流式提示', () => {
+    const message = maybeAppendStreamingHint('请求参数有误', 400, true)
+    expect(message).toContain(STREAMING_UNSUPPORTED_HINT)
   })
 })

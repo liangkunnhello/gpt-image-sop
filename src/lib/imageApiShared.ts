@@ -128,6 +128,22 @@ export function appendStreamingFormatHint(message: string): string {
   return message ? `${message}\n${STREAMING_FORMAT_HINT}` : STREAMING_FORMAT_HINT
 }
 
+/**
+ * 「不允许的图片尺寸」是**出图尺寸参数**被拒，不是参考图太大。
+ *
+ * 中转站对 size 的接受范围很窄（实测 3072×3072 也会被拒），
+ * 而界面上的自动尺寸是跟着参考图比例算的，遇到截图这种非标准比例就可能撞上。
+ * 原来这种 400 会被追加「不支持下流式」的提示，方向完全跑偏，所以单独识别。
+ */
+const SIZE_UNSUPPORTED_ERROR = /不允许的图片尺寸|invalid size|unsupported size|size must be/i
+export const SIZE_UNSUPPORTED_HINT = '提示：这是「出图尺寸」不被接口接受，与参考图本身的大小无关。把尺寸改成「自动」，或换一个常用比例（1:1 / 3:4 / 16:9 等）再试。'
+
+export function maybeAppendSizeHint(message: string): string {
+  if (!SIZE_UNSUPPORTED_ERROR.test(message)) return message
+  if (message.includes(SIZE_UNSUPPORTED_HINT)) return message
+  return `${message}\n${SIZE_UNSUPPORTED_HINT}`
+}
+
 export function maybeAppendTransparentBackgroundHint(message: string): string {
   if (!/transparent background is not supported for this model\.?/i.test(message)) return message
   return `${message}\n${TRANSPARENT_BACKGROUND_UNSUPPORTED_HINT}`
@@ -148,6 +164,9 @@ export function createRequestTimeoutError(timeoutSeconds: number) {
 export function maybeAppendStreamingHint(message: string, status: number, streamImages?: boolean): string {
   const transparentMessage = maybeAppendTransparentBackgroundHint(message)
   if (transparentMessage !== message) return transparentMessage
+  // 尺寸被拒跟流式没关系，先给出正确的方向，别再让人去关流式
+  const sizeMessage = maybeAppendSizeHint(message)
+  if (sizeMessage !== message) return sizeMessage
   if (IMAGE_TOOL_DROPPED_ERROR.test(message)) return message
   if (!streamImages) return message
   if (status === 401 || status === 403 || status === 404 || status === 408 || status === 429 || status >= 500) {

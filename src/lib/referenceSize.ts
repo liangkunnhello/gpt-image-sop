@@ -7,7 +7,7 @@
  */
 
 import { imageSizeFromDataUrl } from './imageDimensions'
-import { calculateImageSize, type SizeTier } from './size'
+import { calculateImageSize, nearestPresetRatio, type SizeTier } from './size'
 import { DEFAULT_CAPABILITY, isSizeSupported, maxSizeForRatio, type SizeCapability } from './sizeCapability'
 
 function gcd(a: number, b: number): number {
@@ -31,8 +31,12 @@ export function sizeForReferenceImage(dataUrl: string, tier: SizeTier = '2K'): s
   const divisor = gcd(width, height)
   if (!divisor) return null
 
-  // 先约成最简比，calculateImageSize 才能命中常用比例预设（16:9 → 2560x1440）
-  const size = calculateImageSize(tier, `${width / divisor}:${height / divisor}`)
+  // 先约成最简比再吸附到常用比例：截图这类非标准比例（1.54、1.6）直接换算会得到
+  // 3552×2304 这种接口不认的尺寸，宁可退成 3:2 的 2160×1440
+  const ratio = `${width / divisor}:${height / divisor}`
+  const preset = nearestPresetRatio(ratio)
+  if (!preset) return null
+  const size = calculateImageSize(tier, preset)
   if (!size) return null
   return isSizeSupported(size) ? size : null
 }
@@ -58,11 +62,14 @@ export function maxSizeForReferenceImage(
   const height = Math.round(dims.height)
   if (!(width > 0 && height > 0)) return null
 
-  // 约成最简比，maxSizeForRatio 内部才能命中常用比例预设
+  // 约成最简比再吸附到常用比例：只有预设里的那几档是实测能出的，
+  // 任意 16 倍数尺寸容易被接口判「不允许的图片尺寸」
   const divisor = gcd(width, height)
   if (!divisor) return null
+  const preset = nearestPresetRatio(`${width / divisor}:${height / divisor}`)
+  if (!preset) return null
 
-  return maxSizeForRatio(`${width / divisor}:${height / divisor}`, capability)?.size ?? null
+  return maxSizeForRatio(preset, capability)?.size ?? null
 }
 
 /**

@@ -37,14 +37,15 @@ describe('maxSizeForReferenceImage（SOP 上传图后自动定画幅）', () => 
     expect(maxSizeForReferenceImage('not-a-data-url')).toBeNull()
   })
 
-  it('非常用比例也算得出，且落在渠道允许范围内', () => {
+  it('非常用比例（5:4）吸附到最近的常用比例，且落在渠道允许范围内', () => {
+    // 以前会算出 2288×1824 这种任意尺寸，接口不认；现在吸附到 4:3
     const size = maxSizeForReferenceImage(pngDataUrl(1000, 800))
-    expect(size).toMatch(/^\d+x\d+$/)
+    expect(size).toBe('3200x2400')
     const [width, height] = size!.split('x').map(Number)
     expect(Math.min(width, height)).toBeGreaterThanOrEqual(1024)
     expect(Math.max(width, height)).toBeLessThanOrEqual(4096)
-    // 比例要和原图接近（5:4）
-    expect(Math.abs(width / height - 1.25)).toBeLessThan(0.05)
+    // 比例要和原图接近（5:4 → 4:3，误差 6.7%）
+    expect(Math.abs(width / height - 1.25) / 1.25).toBeLessThan(0.12)
   })
 })
 
@@ -64,9 +65,9 @@ describe('sizeForReferenceImage', () => {
     expect(sizeForReferenceImage(pngDataUrl(1024, 1024))).toBe('2048x2048')
   })
 
-  it('非常用比例也按同比例算出尺寸，且落在渠道允许范围内', () => {
-    // 1000×800 = 5:4，命中不了常用比例预设，走像素预算计算
-    expect(sizeForReferenceImage(pngDataUrl(1000, 800))).toBe('2288x1824')
+  it('非常用比例（5:4）吸附到 4:3 的基准尺寸', () => {
+    // 只有常用比例那几档是接口实测能出的，任意尺寸会被判「不允许的图片尺寸」
+    expect(sizeForReferenceImage(pngDataUrl(1000, 800))).toBe('2048x1536')
   })
 
   it('读不出尺寸时返回 null，保持 auto', () => {
@@ -106,5 +107,32 @@ describe('sizeOverridesForMixedRatios', () => {
 
   it('空列表返回 null', () => {
     expect(sizeOverridesForMixedRatios([])).toBeNull()
+  })
+})
+
+/**
+ * 截图（3024×1964 ≈ 1.54）不是标准比例：直接换算会得到 3552×2304 这种
+ * 接口不认的尺寸。这里锁住「只输出常用比例那几档」。
+ */
+describe('非标准比例要吸附到常用尺寸', () => {
+  const PRESET_SIZES = new Set([
+    '1024x1024', '1536x1024', '1024x1536', '1280x720', '720x1280', '1024x768', '768x1024', '1280x544',
+    '2048x2048', '2160x1440', '1440x2160', '2560x1440', '1440x2560', '2048x1536', '1536x2048', '2560x1088',
+    '2880x2880', '3456x2304', '2304x3456', '3840x2160', '2160x3840', '3200x2400', '2400x3200', '3840x1600',
+  ])
+
+  it('1.54 的截图按 3:2 出尺寸', () => {
+    expect(maxSizeForReferenceImage(pngDataUrl(3024, 1964))).toBe('3456x2304')
+    expect(sizeForReferenceImage(pngDataUrl(3024, 1964))).toBe('2160x1440')
+  })
+
+  it('16:10 的显示器截图也落到常用尺寸上，不会是 3552×2304', () => {
+    const size = maxSizeForReferenceImage(pngDataUrl(2560, 1600))
+    expect(size).toBeTruthy()
+    expect(PRESET_SIZES.has(size as string)).toBe(true)
+  })
+
+  it('长截图（1:3.7）吸附不上，返回 null 让调用方保持 auto', () => {
+    expect(maxSizeForReferenceImage(pngDataUrl(1080, 4000))).toBeNull()
   })
 })

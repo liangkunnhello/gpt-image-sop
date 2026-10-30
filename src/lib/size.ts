@@ -284,6 +284,35 @@ function getPresetRatioKey(ratioWidth: number, ratioHeight: number): PresetRatio
   return key in COMMON_SIZE_PRESETS['1K'] ? key as PresetRatio : null
 }
 
+/**
+ * 把任意比例吸附到最近的「常用比例」上。
+ *
+ * 为什么需要：非预设比例（例如截图常见的 1.54、1.6）会被 `calculateImageSize`
+ * 算成 16 倍数的任意尺寸，比如 3552×2304 —— 这种尺寸不少中转站直接拒绝，
+ * 报「不允许的图片尺寸」。实际测过能出的只有 8 个常用比例那几档。
+ *
+ * 误差容忍 12%：16:10（1.6）会吸附到 3:2（6.7%），4:3 与 16:9 之间也能落到最近的一边；
+ * 长截图这种 1:3 以上的极端比例会超出容忍度，返回 null，由调用方保持 auto。
+ */
+export function nearestPresetRatio(ratio: string, maxDelta = 0.12): PresetRatio | null {
+  const parsed = parseRatio(ratio)
+  if (!parsed) return null
+  const target = parsed.width / parsed.height
+  if (!(target > 0) || !Number.isFinite(target)) return null
+
+  const exact = getPresetRatioKey(parsed.width, parsed.height)
+  if (exact) return exact
+
+  let best: { key: PresetRatio; delta: number } | null = null
+  for (const key of Object.keys(COMMON_SIZE_PRESETS['1K']) as PresetRatio[]) {
+    const [w, h] = key.split(':').map(Number)
+    const candidate = w / h
+    const delta = Math.abs(target - candidate) / candidate
+    if (!best || delta < best.delta) best = { key, delta }
+  }
+  return best && best.delta <= maxDelta ? best.key : null
+}
+
 const MAX_RATIO_ERROR = 0.01
 
 export function calculateImageSize(tier: SizeTier, ratio: string) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateImageSize, normalizeCodexCliImageSize, prependCodexCliSizePrompt, stripInjectedCodexCliSizePrompt, withAspectRatioHint } from './size'
+import { calculateImageSize, nearestPresetRatio, normalizeCodexCliImageSize, prependCodexCliSizePrompt, stripInjectedCodexCliSizePrompt, withAspectRatioHint } from './size'
 
 describe('calculateImageSize', () => {
   it('uses common 16:9 display resolutions for the built-in tiers', () => {
@@ -84,5 +84,31 @@ describe('withAspectRatioHint', () => {
 
     // 没有参考图时保持原样
     expect(withAspectRatioHint('Draw a cat.', 'auto', [])).toBe('Draw a cat.')
+  })
+})
+
+/**
+ * 截图这类非标准比例会被换算成任意 16 倍数尺寸（3552×2304），
+ * 中转站直接拒「不允许的图片尺寸」。所以自动尺寸必须先吸附到常用比例。
+ */
+describe('nearestPresetRatio（比例吸附）', () => {
+  it('常用比例原样返回', () => {
+    expect(nearestPresetRatio('16:9')).toBe('16:9')
+    expect(nearestPresetRatio('1024:1536')).toBe('2:3')
+  })
+
+  it('截图常见的 1.54 / 1.6 吸附到 3:2', () => {
+    expect(nearestPresetRatio('3024:1964')).toBe('3:2')
+    expect(nearestPresetRatio('16:10')).toBe('3:2')
+  })
+
+  it('长截图这类极端比例吸附不上，返回 null（保持 auto，不写错尺寸）', () => {
+    expect(nearestPresetRatio('1080:4000')).toBeNull()
+    expect(nearestPresetRatio('1:5')).toBeNull()
+  })
+
+  it('比例写法非法时返回 null', () => {
+    expect(nearestPresetRatio('')).toBeNull()
+    expect(nearestPresetRatio('abc')).toBeNull()
   })
 })
