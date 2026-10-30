@@ -18,16 +18,20 @@ describe('底图说明', () => {
     expect(withSopImageHint('一条提示词', '')).toBe('一条提示词')
   })
 
-  it('固定图 + 变量图讲清两者分工', () => {
+  it('固定图 + 变量图只讲「怎么发」，不讲「图里该有什么」', () => {
     const hint = buildSopImageHint({ fixedCount: 2, variableCount: 3 })
-    expect(hint).toContain('前 2 张是固定图')
-    expect(hint).toContain('最后 1 张是本次变量图')
-    expect(hint).toContain('两张冲突时以固定图为准')
+    expect(hint).toContain('前 2 张是固定图，每条提示词都会带上同一组')
+    expect(hint).toContain('最后 1 张是本次变量图，这条提示词用它')
+    // 这两个池的定义只有「每条都带 / 逐条轮换」，
+    // 「变量图只取场景变化」「以固定图为准」是额外的用法规定，不该由这里强加
+    expect(hint).not.toContain('只取它的场景')
+    expect(hint).not.toContain('以固定图为准')
+    expect(hint).not.toContain('产品外观')
   })
 
-  it('只有变量图时说清「各带 1 张」', () => {
+  it('只有变量图时说清「每条各带 1 张、按顺序轮换」', () => {
     const hint = buildSopImageHint({ fixedCount: 0, variableCount: 4 })
-    expect(hint).toContain('每条提示词会各带 1 张变量图')
+    expect(hint).toContain('每条提示词各带 1 张变量图，按顺序轮换')
     expect(hint).not.toContain('固定图')
   })
 
@@ -40,10 +44,10 @@ describe('底图说明', () => {
       .toContain('产品、场景、版式都按提示词重新设计')
   })
 
-  it('「用户要求优先」必须写在里面：底图是参考，不是命令', () => {
+  it('「用户要求优先」必须写在里面：图片是参考，不是命令', () => {
     const hint = buildSopImageHint({ fixedCount: 1, variableCount: 1, fidelity: 'layout' })
     expect(hint).toContain('用户给出的文案与额外要求优先级最高')
-    expect(hint).toContain('与底图冲突时以用户要求为准')
+    expect(hint).toContain('与图片冲突时以用户要求为准')
   })
 
   it('拼到提示词前面时保留原文', () => {

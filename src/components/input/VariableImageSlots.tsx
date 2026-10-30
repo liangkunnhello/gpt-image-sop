@@ -45,14 +45,14 @@ const SLOTS: SlotConfig[] = [
   {
     key: 'fixed',
     title: '固定图',
-    hint: '每条提示词都带同一组，产品外观与骨架以它为准',
+    hint: '每条提示词都带同一组',
     accent: 'emerald',
     badge: '每次都带',
   },
   {
     key: 'variable',
     title: '变量图',
-    hint: '每条提示词轮换取一张，取它的场景 / 机位变化',
+    hint: '每条提示词轮换取一张',
     accent: 'amber',
     badge: '逐条更换',
   },
