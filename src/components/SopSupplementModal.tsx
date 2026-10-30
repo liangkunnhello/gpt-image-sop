@@ -217,10 +217,10 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-900"
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-900"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center gap-3 border-b border-gray-100 px-5 py-3.5 dark:border-white/[0.08]">
+        <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-5 py-3.5 dark:border-white/[0.08]">
           <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">用 SOP 再次生成图片</h2>
           <div className="flex-1" />
           <button
@@ -232,7 +232,7 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
           </button>
         </div>
 
-        <div className="space-y-4 px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden px-5 py-4">
           <div>
             <div className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">生成方式</div>
             <div className="grid grid-cols-2 gap-2">
@@ -336,13 +336,15 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
                 改完的 SOP 只用于这次新建，不写回原卡，也不改库里那份。
               </p>
               {revisedSop && (
-                <details className="mt-1.5 rounded-lg bg-gray-50 px-2 py-1 dark:bg-white/[0.04]">
+                <details className="mt-1.5 min-w-0 max-w-full rounded-lg bg-gray-50 px-2 py-1 dark:bg-white/[0.04]">
                   <summary className="cursor-pointer text-[11px] text-gray-500 dark:text-gray-400">
                     查看改后的 SOP（{revisedSop.length} 字）
                   </summary>
-                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[10px] leading-relaxed text-gray-500 dark:text-gray-400">
+                  {/* 用 div + break-all 而不是 pre：SOP 里常有长串色值/链接，
+                      pre 的自动换行断不开它们，会把整块内容顶出弹窗 */}
+                  <div className="mt-1 max-h-40 max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all text-[10px] leading-relaxed text-gray-500 dark:text-gray-400">
                     {revisedSop}
-                  </pre>
+                  </div>
                 </details>
               )}
             </div>
@@ -370,7 +372,7 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-gray-100 px-5 py-3 dark:border-white/[0.08]">
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-gray-100 px-5 py-3 dark:border-white/[0.08]">
           <button
             type="button"
             onClick={onClose}
