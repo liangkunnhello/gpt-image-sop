@@ -8,6 +8,7 @@ import { firstTextFile, isFileDrag } from '../lib/fileDrop'
 import AiRewriteBar from './AiRewriteBar'
 import MarkdownEditor from './MarkdownEditor'
 import SopLibraryImportModal from './SopLibraryImportModal'
+import { newestFirst } from '../lib/librarySort'
 import SystemPromptHistoryModal from './SystemPromptHistoryModal'
 
 /** 系统提示词和卖点/风格的字段形状一致，抽平了好统一渲染 */
@@ -114,24 +115,23 @@ export default function SopLibraryModal() {
   const pick = defaultPick[activeDirectionId] ?? lastPick[activeDirectionId] ?? {}
 
   const items: LibraryItem[] = useMemo(() => {
-    if (tab === 'prompt') {
-      return systemPrompts
+    const list: LibraryItem[] = tab === 'prompt'
+      ? systemPrompts
         .filter((item) => item.productId === productId)
         .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
-    }
-    if (tab === 'variable') {
-      return variablePrompts
-        .filter((item) => item.productId === productId)
-        .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
-    }
-    if (tab === 'sop') {
-      return savedSops
-        .filter((item) => item.productId === productId)
-        .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
-    }
-    return presets
-      .filter((item) => item.productId === productId && item.kind === tab)
-      .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
+      : tab === 'variable'
+        ? variablePrompts
+          .filter((item) => item.productId === productId)
+          .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
+        : tab === 'sop'
+          ? savedSops
+            .filter((item) => item.productId === productId)
+            .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
+          : presets
+            .filter((item) => item.productId === productId && item.kind === tab)
+            .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
+    // 最新的放最上面：新建 / 刚保存的那条直接出现在顶部
+    return newestFirst(list)
   }, [tab, systemPrompts, variablePrompts, savedSops, presets, productId])
 
   const counts = useMemo(() => ({
