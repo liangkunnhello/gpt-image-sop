@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImagesFromFiles, createInputImageFromFile, removeMultipleTasks, assignTasksDirection, assignTasksChannel, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
+import { clearSubmittedInput, deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImagesFromFiles, createInputImageFromFile, removeMultipleTasks, assignTasksDirection, assignTasksChannel, taskMatchesFilterStatus, taskMatchesSearchQuery, submitSopTasks } from '../store'
 import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
@@ -632,6 +632,17 @@ export default function InputBar() {
     return mergeTaskCopy(useStore.getState().customCopy, pickedPoint?.content)
   }, [pickedPoint])
 
+  /**
+   * 提交成功后按设置清空输入框。
+   *
+   * 普通模式在 submitTask 里已经清过（同一个函数），
+   * SOP 与变量模式走的是另外两条入队路径，得在这里补上 ——
+   * 否则同一个开关只对一种模式生效，用户切模式后会以为设置丢了。
+   */
+  const clearInputAfterSubmit = useCallback(() => {
+    clearSubmittedInput()
+  }, [])
+
   const runSop = useCallback((options: SopRunOptions) => {
     setSopSplitOpen(false)
     // 三个板块合成一份再发：卖点排最前并写死优先级，避免被系统提示词里的文案盖掉
@@ -677,7 +688,9 @@ export default function InputBar() {
       // 本次文案那一栏：已经合进 copyText，这里只供「复用配置」还原
       customCopy: useStore.getState().customCopy,
     })))
-  }, [inputImages, pickedStyle, taskCopyText])
+    // 入队成功即视为提交成功：按设置清空，和普通模式保持一致
+    clearInputAfterSubmit()
+  }, [clearInputAfterSubmit, inputImages, pickedStyle, taskCopyText])
 
   /** 变量模式：把任务卡推进后台队列，立即返回；参考图只用于提取策略，不参与生图 */
   const runVariable = useCallback((options: VariableRunOptions) => {
@@ -725,7 +738,9 @@ export default function InputBar() {
       // 本次文案那一栏：已经合进 copyText，这里只供「复用配置」还原
       customCopy: useStore.getState().customCopy,
     })))
-  }, [inputImages, fixedImages, variableImages])
+    // 同 SOP：入队成功就按设置清空（含变量图池，否则下一批会带着上一批素材）
+    clearInputAfterSubmit()
+  }, [clearInputAfterSubmit, inputImages, fixedImages, variableImages])
 
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {

@@ -175,7 +175,8 @@ export default function GeneralSettingsTab({
             </button>
           </div>
           <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-            开启后，提交成功创建任务时会清空提示词和参考图。
+            开启后，三种模式（普通 / SOP / 变量）提交成功都会清空提示词和各图池
+            （参考图、固定图、变量图）。「本次文案」不清，它按需要一直留着。
           </div>
         </div>
         <div className="block">

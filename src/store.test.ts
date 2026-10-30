@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { TASK_STOPPED_MESSAGE, addImagesFromFiles, countResumableTasks, isResumableTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, clearSubmittedInput, countResumableTasks, isResumableTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -6885,5 +6885,42 @@ describe('断点继续的候选判断', () => {
       failed({ id: 'd' }),
     ]
     expect(countResumableTasks(list)).toBe(2)
+  })
+})
+
+/**
+ * 「提交任务后清空输入框」这个开关，三种模式必须一样生效。
+ * 以前只在普通模式的某条路径里清，切到 SOP / 变量后就清不动，看着像设置丢了。
+ */
+describe('提交后清空输入框（三种模式同一口径）', () => {
+  const seedInput = () => {
+    useStore.setState({
+      prompt: '一段提示词',
+      inputImages: [{ id: 'in-1', dataUrl: 'data:image/png;base64,AAA' }],
+      fixedImages: [{ id: 'fixed-1', dataUrl: 'data:image/png;base64,BBB' }],
+      variableImages: [{ id: 'var-1', dataUrl: 'data:image/png;base64,CCC' }],
+    })
+  }
+
+  it('开关打开时四个池一起清（不只是提示词）', () => {
+    seedInput()
+    useStore.setState({ settings: { ...useStore.getState().settings, clearInputAfterSubmit: true } })
+    clearSubmittedInput()
+    const state = useStore.getState()
+    expect(state.prompt).toBe('')
+    expect(state.inputImages).toHaveLength(0)
+    expect(state.fixedImages).toHaveLength(0)
+    expect(state.variableImages).toHaveLength(0)
+  })
+
+  it('开关关掉时一个字都不动', () => {
+    seedInput()
+    useStore.setState({ settings: { ...useStore.getState().settings, clearInputAfterSubmit: false } })
+    clearSubmittedInput()
+    const state = useStore.getState()
+    expect(state.prompt).toBe('一段提示词')
+    expect(state.inputImages).toHaveLength(1)
+    expect(state.fixedImages).toHaveLength(1)
+    expect(state.variableImages).toHaveLength(1)
   })
 })

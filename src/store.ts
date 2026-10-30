@@ -2004,15 +2004,27 @@ function syncQueuedSubmitCount() {
   useStore.getState().setQueuedSubmitCount(pendingSubmissions.length)
 }
 
+/**
+ * 提交成功后按设置清空输入框。
+ *
+ * 三种模式（普通 / SOP / 变量）必须走同一份口径：以前只在普通模式清，
+ * 切到 SOP / 变量后同一个开关就不再生效，看着像设置丢了。
+ * 四个池一起清 —— 留一个没清，下一批就会带着上一批的素材。
+ */
+export function clearSubmittedInput(settings?: AppSettings) {
+  const state = useStore.getState()
+  const config = settings ?? state.settings
+  if (!config.clearInputAfterSubmit) return
+  state.setPrompt('')
+  state.clearInputImages()
+  state.clearFixedImages()
+  state.clearVariableImages()
+}
+
 /** 排到队尾后清空输入框，与「提交成功」一致：否则会以为没发出去而反复点 */
 function clearInputAfterQueued(settings: AppSettings) {
-  const state = useStore.getState()
-  if (settings.clearInputAfterSubmit) {
-    state.setPrompt('')
-    state.clearInputImages()
-    state.clearFixedImages()
-  }
-  state.setReusedTaskApiProfile(null)
+  clearSubmittedInput(settings)
+  useStore.getState().setReusedTaskApiProfile(null)
 }
 
 /**
@@ -2360,11 +2372,7 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
         'success',
       )
     }
-    if (settings.clearInputAfterSubmit) {
-      useStore.getState().setPrompt('')
-      useStore.getState().clearInputImages()
-      useStore.getState().clearFixedImages()
-    }
+    clearSubmittedInput(settings)
     useStore.getState().setReusedTaskApiProfile(null)
     return
   }
@@ -2389,10 +2397,7 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
     useStore.getState().showToast('任务已提交', 'success')
   }
 
-  if (settings.clearInputAfterSubmit) {
-    useStore.getState().setPrompt('')
-    useStore.getState().clearInputImages()
-  }
+  clearSubmittedInput(settings)
   useStore.getState().setReusedTaskApiProfile(null)
 
   if (batchPrompts.length) {
