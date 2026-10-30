@@ -10,6 +10,8 @@ import { nearestScopeId } from '../lib/sopScope'
 import { taskMatchesChannel } from '../lib/channel'
 import { isTaskUnread } from '../lib/unread'
 import { generatingNodeIds } from '../lib/generating'
+import { clampSidebarWidth, readSidebarWidth, saveSidebarWidth, SIDEBAR_DEFAULT_WIDTH } from '../lib/sidebarWidth'
+
 import type { PostTemplateScope } from '../lib/applyPostTemplate'
 import LingjingImportModal from './LingjingImportModal'
 import PostTemplateModal from './PostTemplateModal'
@@ -49,6 +51,36 @@ export default function SopDirectionTree() {
   const setTrashOpen = useSopStore((s) => s.setTrashOpen)
   const tasks = useStore((s) => s.tasks)
   const trashedTasks = useStore((s) => s.trashedTasks)
+  /**
+   * 左栏宽度可拖：方向名常常很长（「3D插画-京东硬广」这种），固定 224px 一定截断。
+   * 存在 localStorage 而不是 store：这是纯界面偏好，没必要进持久化的数据模型。
+   */
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth)
+  const sidebarWidthRef = useRef(sidebarWidth)
+  sidebarWidthRef.current = sidebarWidth
+  const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+
+  /** 按下右边缘：记住起点，指针捕获后即使划出细条也继续跟手 */
+  const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    resizeRef.current = { startX: event.clientX, startWidth: sidebarWidthRef.current }
+  }
+  const moveSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = resizeRef.current
+    if (!drag) return
+    setSidebarWidth(clampSidebarWidth(drag.startWidth + (event.clientX - drag.startX)))
+  }
+  const endSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizeRef.current) return
+    resizeRef.current = null
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+    saveSidebarWidth(sidebarWidthRef.current)
+  }
+  const resetSidebarWidth = () => {
+    setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)
+    saveSidebarWidth(SIDEBAR_DEFAULT_WIDTH)
+  }
   /** 回收站里的条目数：删掉的方向节点 + 任务卡 + 详情页单张回收的图 */
   const trashCount = useMemo(() => {
     let count = 0
@@ -681,7 +713,10 @@ export default function SopDirectionTree() {
   )
 
   return (
-    <aside className="hidden w-56 shrink-0 lg:flex lg:flex-col lg:pb-28 lg:pt-6">
+    <aside
+      className="relative hidden shrink-0 lg:flex lg:flex-col lg:pb-28 lg:pt-6"
+      style={{ width: sidebarWidth }}
+    >
       {/* 外层只负责占满可用高度：搜索、当前归属、全部任务这几块固定，滚动条只管下面的方向树 */}
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="shrink-0">
@@ -1014,6 +1049,23 @@ export default function SopDirectionTree() {
         <LingjingImportModal onClose={() => setLingjingOpen(false)} />,
         document.body,
       )}
+
+      {/*
+        拖拽条压在右边缘：方向名太长时往右拖就能看全。
+        双击回到默认宽度 —— 拖歪了不用去翻设置。
+      */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖动调整左栏宽度，双击恢复默认"
+        title="拖动调整宽度，双击恢复默认"
+        onPointerDown={beginSidebarResize}
+        onPointerMove={moveSidebarResize}
+        onPointerUp={endSidebarResize}
+        onPointerCancel={endSidebarResize}
+        onDoubleClick={resetSidebarWidth}
+        className="absolute right-0 top-0 z-10 hidden h-full w-1.5 cursor-col-resize touch-none transition-colors hover:bg-blue-400/50 active:bg-blue-500/60 lg:block"
+      />
     </aside>
   )
 }
