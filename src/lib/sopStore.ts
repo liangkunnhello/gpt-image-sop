@@ -200,6 +200,10 @@ interface SopState {
   trashNode: (id: string, batchId?: string) => string
   /** 移动节点到新的父级；不合法时返回错误文案 */
   moveNode: (id: string, parentId: string | null) => string
+  /** 同级内挪一位：-1 上移、1 下移；到顶/到底时什么都不做 */
+  moveSibling: (id: string, step: -1 | 1) => void
+  /** 拖拽排序：把 id 放到 targetId 前面或后面（只允许同级） */
+  reorderNode: (id: string, targetId: string, position: 'before' | 'after') => void
   /** 重命名 */
   renameNode: (id: string, name: string) => void
   /** 按批次恢复 */
@@ -426,6 +430,45 @@ export const useSopStore = create<SopState>()(
           directions: prev.directions.map((item) => (item.id === id ? { ...item, parentId } : item)),
         }))
         return ''
+      },
+      /**
+       * 同级内挪一位。
+       *
+       * 侧栏的显示顺序就是 directions 数组的顺序（渲染时按 parentId 分组、按数组顺序排），
+       * 所以「换位置」等于在数组里换两个元素的先后；跨父级的移动走 moveNode，别混。
+       */
+      moveSibling: (id, step) => {
+        set((state) => {
+          const node = state.directions.find((item) => item.id === id)
+          if (!node) return state
+          // 只在「活着的同级兄弟」之间挪，回收站里的不占显示位
+          const siblings = state.directions.filter((item) => item.parentId === node.parentId && !item.deletedAt)
+          const at = siblings.findIndex((item) => item.id === id)
+          const target = siblings[at + step]
+          if (!target) return state
+          const list = [...state.directions]
+          const from = list.findIndex((item) => item.id === id)
+          const to = list.findIndex((item) => item.id === target.id)
+          const [moved] = list.splice(from, 1)
+          // 删掉自己之后目标的下标会前移，直接按新的 to 插入即可落在目标后面
+          list.splice(to, 0, moved)
+          return { directions: list }
+        })
+      },
+      reorderNode: (id, targetId, position) => {
+        set((state) => {
+          if (id === targetId) return state
+          const list = [...state.directions]
+          const from = list.findIndex((item) => item.id === id)
+          const to = list.findIndex((item) => item.id === targetId)
+          if (from < 0 || to < 0) return state
+          // 只在同级内换位置：跨层级是「移动」的活，拖错了会把子树挂飞
+          if (list[from].parentId !== list[to].parentId) return state
+          const [moved] = list.splice(from, 1)
+          const targetIndex = list.findIndex((item) => item.id === targetId)
+          list.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, moved)
+          return { directions: list }
+        })
       },
       renameNode: (id, name) => {
         const trimmed = name.trim()

@@ -90,3 +90,71 @@ describe('系统提示词版本管理', () => {
     expect(promptOf(id).content).toBe('正文')
   })
 })
+
+/**
+ * 侧栏排序：显示顺序就是 directions 数组的顺序。
+ * 上移/下移走 moveSibling，拖拽走 reorderNode，两者都只在同级内生效 ——
+ * 跨层级是「移动节点」的活，排序不该顺手把节点挪到别的父级下。
+ */
+describe('产品 / 方向的排序', () => {
+  const seed = () => [
+    { id: 'cat-1', parentId: null, name: '保险', kind: 'category' as const },
+    { id: 'prod-1', parentId: 'cat-1', name: '产品甲', kind: 'product' as const },
+    { id: 'prod-2', parentId: 'cat-1', name: '产品乙', kind: 'product' as const },
+    { id: 'dir-1', parentId: 'prod-1', name: '方向一', kind: 'direction' as const },
+    { id: 'dir-2', parentId: 'prod-1', name: '方向二', kind: 'direction' as const },
+  ]
+
+  const names = (parentId: string | null) => useSopStore
+    .getState()
+    .directions
+    .filter((node) => node.parentId === parentId && !node.deletedAt)
+    .map((node) => node.name)
+
+  it('上移 / 下移换的是同级里的位置', () => {
+    useSopStore.setState({ directions: seed() })
+    useSopStore.getState().moveSibling('dir-2', -1)
+    expect(names('prod-1')).toEqual(['方向二', '方向一'])
+
+    useSopStore.getState().moveSibling('dir-1', -1)
+    expect(names('prod-1')).toEqual(['方向一', '方向二'])
+  })
+
+  it('到顶 / 到底时什么都不做', () => {
+    useSopStore.setState({ directions: seed() })
+    useSopStore.getState().moveSibling('dir-1', -1)
+    expect(names('prod-1')).toEqual(['方向一', '方向二'])
+    useSopStore.getState().moveSibling('dir-2', 1)
+    expect(names('prod-1')).toEqual(['方向一', '方向二'])
+  })
+
+  it('产品之间的顺序同样能调', () => {
+    useSopStore.setState({ directions: seed() })
+    useSopStore.getState().moveSibling('prod-2', -1)
+    expect(names('cat-1')).toEqual(['产品乙', '产品甲'])
+  })
+
+  it('拖拽：放到目标前面 / 后面', () => {
+    useSopStore.setState({ directions: seed() })
+    useSopStore.getState().reorderNode('dir-1', 'dir-2', 'after')
+    expect(names('prod-1')).toEqual(['方向二', '方向一'])
+
+    useSopStore.getState().reorderNode('dir-1', 'dir-2', 'before')
+    expect(names('prod-1')).toEqual(['方向一', '方向二'])
+  })
+
+  it('跨层级拖动不生效（那是「移动到…」的活）', () => {
+    useSopStore.setState({ directions: seed() })
+    useSopStore.getState().reorderNode('dir-1', 'prod-2', 'after')
+    expect(names('prod-1')).toEqual(['方向一', '方向二'])
+    expect(useSopStore.getState().directions.find((node) => node.id === 'dir-1')?.parentId).toBe('prod-1')
+  })
+
+  it('回收站里的节点不占显示位，不影响邻居上移', () => {
+    const list = seed().map((node) => (node.id === 'dir-1' ? { ...node, deletedAt: 1 } : node))
+    useSopStore.setState({ directions: list })
+    // 活着的只剩 dir-2，它已经在顶上了
+    useSopStore.getState().moveSibling('dir-2', -1)
+    expect(names('prod-1')).toEqual(['方向二'])
+  })
+})

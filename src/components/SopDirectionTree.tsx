@@ -78,6 +78,11 @@ export default function SopDirectionTree() {
   /** 导入后处理模板的目标节点：产品 / 方向两级可导入 */
   const [importTarget, setImportTarget] = useState<SopDirectionNode | null>(null)
   const deliveryDirs = useSopStore((s) => s.deliveryDirs)
+  const moveSibling = useSopStore((s) => s.moveSibling)
+  const reorderNode = useSopStore((s) => s.reorderNode)
+  /** 拖拽排序的当前拖动项与落点（落点记的是「放到谁的前/后」） */
+  const [dragNodeId, setDragNodeId] = useState<string | null>(null)
+  const [dropHint, setDropHint] = useState<{ id: string; after: boolean } | null>(null)
 
   // 预览底图由弹窗里自己选（按比例存、默认底色），这里只负责打开。
   // 产品上的是通用模板，方向上的是专属模板 —— 两者各存各的，互不出现在对方的列表里。
@@ -240,6 +245,63 @@ export default function SopDirectionTree() {
         )}
       </span>
     )
+  }
+
+  /** 同级里还有没有位置可以挪：顶/底那条菜单项就不出现了 */
+  const canMoveSibling = (node: SopDirectionNode, step: -1 | 1) => {
+    const siblings = directions.filter((item) => item.parentId === node.parentId && !item.deletedAt)
+    const at = siblings.findIndex((item) => item.id === node.id)
+    return at >= 0 && Boolean(siblings[at + step])
+  }
+
+  /**
+   * 行的拖拽排序绑定。
+   *
+   * 只允许同级之间换位置（跨层级是「移动到…」的活，拖错了会把子树挂飞），
+   * 落点按鼠标在一行里的上半/下半决定插到前面还是后面。
+   */
+  const rowDragProps = (node: SopDirectionNode) => ({
+    draggable: true,
+    onDragStart: (event: React.DragEvent) => {
+      event.dataTransfer.effectAllowed = 'move'
+      // Firefox 不 setData 就不会真正开始拖
+      event.dataTransfer.setData('text/plain', node.id)
+      setDragNodeId(node.id)
+    },
+    onDragOver: (event: React.DragEvent) => {
+      if (!dragNodeId || dragNodeId === node.id) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      const rect = event.currentTarget.getBoundingClientRect()
+      setDropHint({ id: node.id, after: event.clientY > rect.top + rect.height / 2 })
+    },
+    onDragLeave: () => {
+      setDropHint((prev) => (prev?.id === node.id ? null : prev))
+    },
+    onDrop: (event: React.DragEvent) => {
+      event.preventDefault()
+      if (dragNodeId && dropHint && dragNodeId !== dropHint.id) {
+        reorderNode(dragNodeId, dropHint.id, dropHint.after ? 'after' : 'before')
+      }
+      setDragNodeId(null)
+      setDropHint(null)
+    },
+    onDragEnd: () => {
+      setDragNodeId(null)
+      setDropHint(null)
+    },
+  })
+
+  /**
+   * 拖拽时的视觉反馈：落点用内阴影画一条线，不改布局（边框会把这行顶高一下）。
+   * 被拖的那一行本身压暗，让人知道拖的是哪个。
+   */
+  const dragClass = (node: SopDirectionNode) => {
+    if (dragNodeId === node.id) return 'opacity-45'
+    if (dropHint?.id !== node.id) return ''
+    return dropHint.after
+      ? 'shadow-[inset_0_-2px_0_0_rgb(59,130,246)]'
+      : 'shadow-[inset_0_2px_0_0_rgb(59,130,246)]'
   }
 
   const matches = useMemo(() => {
@@ -435,6 +497,13 @@ export default function SopDirectionTree() {
     if (kind !== 'category') {
       items.push({ label: '移动到…', onSelect: () => setMoveTarget(node) })
     }
+    // 排序：同级内上移 / 下移（拖拽也行，这里给个精确的微调方式）
+    if (canMoveSibling(node, -1)) {
+      items.push({ label: '上移一位', onSelect: () => moveSibling(node.id, -1) })
+    }
+    if (canMoveSibling(node, 1)) {
+      items.push({ label: '下移一位', onSelect: () => moveSibling(node.id, 1) })
+    }
     items.push({ label: '删除', danger: true, onSelect: () => trashNode(node) })
     return items
   }
@@ -537,7 +606,7 @@ export default function SopDirectionTree() {
     const isCurrent = node.id === activeDirectionId
     const ownTemplates = postTemplates[node.id] ?? []
     return (
-      <div key={node.id} className="group flex items-center pl-8">
+      <div key={node.id} className={`group flex items-center pl-8 ${dragClass(node)}`} {...rowDragProps(node)}>
         <button
           type="button"
           // data-current 只做「自动滚动到这里」的锚点，跟视觉高亮无关：
@@ -762,7 +831,7 @@ export default function SopDirectionTree() {
                 const isFolded = folded.has(category.id)
                 return (
                   <div key={category.id} className="mb-0.5">
-                    <div className="group flex items-center">
+                    <div className={`group flex items-center ${dragClass(category)}`} {...rowDragProps(category)}>
                       <button type="button" onClick={() => toggle(category.id)} className="flex h-7 w-5 shrink-0 items-center justify-center text-gray-400">
                         <Chevron open={!isFolded} />
                       </button>
@@ -812,7 +881,7 @@ export default function SopDirectionTree() {
                           const productFolded = folded.has(product.id)
                           return (
                             <div key={product.id} className="mb-0.5">
-                              <div className="group flex items-center">
+                              <div className={`group flex items-center ${dragClass(product)}`} {...rowDragProps(product)}>
                                 <button type="button" onClick={() => toggle(product.id)} className="flex h-7 w-5 shrink-0 items-center justify-center text-gray-400">
                                   <Chevron open={!productFolded} />
                                 </button>
