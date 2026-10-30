@@ -105,6 +105,7 @@ import { pickSaveDir, saveFile, saveFileToDir, getDefaultSaveDir, createSaveFold
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
 import { throwIfAborted } from './lib/serverSentEvents'
 import { safeJsonStorage, tauriStorage } from './lib/tauriStorage'
+import { taskGate } from './lib/taskGate'
 
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
@@ -2313,9 +2314,15 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
     const sizeOverrides = planModeLabel === '批量' && taskParams.size === 'auto'
       ? sizeOverridesForMixedRatios(plainPlan.map((item) => item.images[0]?.dataUrl ?? ''))
       : null
-    const limit = normalizedSettings.batchPromptConcurrencyLimited
-      ? Math.max(1, normalizedSettings.batchPromptConcurrency)
-      : plainPlan.length
+    /**
+     * 普通模式一次把这一批全部提交，不再按「并发数」分批等。
+     *
+     * 以前这里是 limit = 并发数，每条 worker 还要等上一条整个跑完才拿下一个 ——
+     * 提交 20 张、并发 10，就变成「前 10 张出完才开始第 11 张」，看着就是在排队。
+     * 现在全部立刻建卡（用户马上能看到整批进度），真正发请求的并发由全局闸门
+     * taskGate 控制，多批同时跑也不会把服务商打爆。
+     */
+    const limit = plainPlan.length
     let settled = 0
     useStore.getState().setBatchProgress({ total: plainPlan.length, started: 0, finished: 0 })
     await runWithConcurrency(
@@ -2389,9 +2396,11 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
   useStore.getState().setReusedTaskApiProfile(null)
 
   if (batchPrompts.length) {
-    const limit = normalizedSettings.batchPromptMode === 'queue'
-      ? 1
-      : normalizedSettings.batchPromptConcurrencyLimited ? normalizedSettings.batchPromptConcurrency : batchPrompts.length
+    /**
+     * queue 是用户显式选的「一条一条来」，保留；
+     * 其余情况一次全提交，并发交给全局闸门（理由同普通模式那段）。
+     */
+    const limit = normalizedSettings.batchPromptMode === 'queue' ? 1 : batchPrompts.length
     await runBatchPrompts(batchId, batchPrompts, limit, startTask)
   }
 }
@@ -5059,11 +5068,33 @@ async function executeAgentRound(
   }
 }
 
+/**
+ * 真正执行一条任务：拿名额 → 发请求 → 释放名额。
+ *
+ * 名额是**整个软件共用**的（普通模式 / SOP / 变量 / 补充生图 / 断点继续 一起算），
+ * 否则同时开几批就等于把并发数叠加，设置里写的 10 变成实际 30。
+ */
 async function executeTask(taskId: string) {
+  const settings = useStore.getState().settings
+  taskGate.setLimit(settings.batchPromptConcurrencyLimited ? settings.batchPromptConcurrency : null)
+  await taskGate.acquire()
+  try {
+    await runTaskExecution(taskId)
+  } finally {
+    taskGate.release()
+  }
+}
+
+async function runTaskExecution(taskId: string) {
   const { settings } = useStore.getState()
   const sopState = useSopStore.getState()
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
+  /**
+   * 等名额期间任务可能已经被停掉 / 删掉 / 改写过了。
+   * 不拦住的话，停止之后过一会儿还会照旧发一次请求出去。
+   */
+  if (task.status !== 'running') return
   const execution = Symbol(taskId)
   taskExecutions.set(taskId, execution)
   // 新一次执行换一个新控制器：旧的已结束，残留的 map 项会在这里被覆盖
@@ -7346,17 +7377,13 @@ export async function submitSopTasks(input: {
   for (const task of tasks) void putTask(task)
 
   // 出图也限并发，避免几十条同时打满接口；界面不受影响
-  const limit = Math.min(10, tasks.length)
-  let cursor = 0
-  const workers = Array.from({ length: limit }, async () => {
-    while (cursor < tasks.length) {
-      const task = tasks[cursor]
-      cursor += 1
-      executeTask(task.id)
-      await waitForTaskSettled(task.id, () => false)
-    }
-  })
-  await Promise.all(workers)
+  /**
+   * 一次全部交给执行层，不再在这里「发一条等一条」。
+   *
+   * 建卡是同步的，用户立刻能看到整批卡片；真正发请求的并发由全局闸门 taskGate 控制。
+   * 以前这里是 10 个 worker 各自等下一条完成才继续，提示词一多就明显在排队。
+   */
+  for (const task of tasks) executeTask(task.id)
 
   useStore.getState().showToast(
     `${input.variable ? '变量模式' : 'SOP'} 已提交 ${tasks.length} 条提示词`,

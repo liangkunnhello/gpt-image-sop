@@ -515,17 +515,17 @@ export default function InputParamsPanel({
               </div>
               {batchMode === 'concurrent' && (
                 <div className={ROW_CLASS}>
-                  <span className={ROW_LABEL_CLASS}>限制并发数</span>
+                  <span className={ROW_LABEL_CLASS}>限制同时在跑</span>
                   <Switch
                     checked={batchConcurrencyLimited}
-                    label="限制并发数"
+                    label="限制同时在跑"
                     onToggle={() => onBatchChange({ batchPromptConcurrencyLimited: !batchConcurrencyLimited })}
                   />
                 </div>
               )}
               {batchMode === 'concurrent' && batchConcurrencyLimited && (
                 <label className={ROW_CLASS}>
-                  <span className={ROW_LABEL_CLASS}>并发数</span>
+                  <span className={ROW_LABEL_CLASS}>同时在跑</span>
                   <ConcurrencyInput
                     value={batchConcurrency}
                     onCommit={(value) => onBatchChange({ batchPromptConcurrency: value })}
@@ -534,11 +534,13 @@ export default function InputParamsPanel({
               )}
               {batchMode === 'concurrent' && !batchConcurrencyLimited && (
                 <p className="rounded-lg bg-amber-500/[0.1] px-2.5 py-2 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-500/[0.14] dark:text-amber-400/90">
-                  不限制并发时会同时发出全部请求，提示词较多时可能导致{isTauri ? '客户端' : '浏览器'}卡顿甚至崩溃，也容易触发服务商限流。
+                  不限制时会同时发出全部请求，提示词较多时可能导致{isTauri ? '客户端' : '浏览器'}卡顿甚至崩溃，也容易触发服务商限流。
                 </p>
               )}
               <p className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
                 提示词之间空两行分隔，当前共 {batchPromptCount} 条；参考图和参数对每条提示词都生效。
+                这里的「同时在跑」是整个软件的上限：普通模式、SOP、变量模式的任务一起算，
+                同时开几批也不会把服务商打爆。
               </p>
             </>
           )}
