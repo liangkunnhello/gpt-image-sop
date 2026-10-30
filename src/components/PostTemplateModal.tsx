@@ -763,6 +763,8 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                 )}
 
                 {active.elements.map((element) => {
+                  // 隐藏的图层不画在画布上，也就点不到、拖不动
+                  if (element.hidden) return null
                   const isActive = selectedId === element.id
                   const isEditing = element.kind === 'text' && editingTextId === element.id
                   return (
@@ -1153,6 +1155,7 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                         ? (element.text.replace(/\s*\n\s*/g, ' ').trim() || '空内容')
                         : `宽 ${Math.round(element.width * 100)}%`
                       const avoid = element.avoid !== false
+                      const hidden = Boolean(element.hidden)
                       return (
                         <div
                           key={element.id}
@@ -1160,7 +1163,7 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                             isActive
                               ? 'border-blue-300/80 bg-blue-50 shadow-sm dark:border-blue-400/40 dark:bg-blue-500/[0.12]'
                               : 'border-gray-200/90 bg-white hover:border-gray-300 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:hover:border-white/20 dark:hover:bg-white/[0.06]'
-                          }`}
+                          } ${hidden ? 'opacity-60' : ''}`}
                         >
                           {/* 选中态左侧蓝条，比纯底色更好认 */}
                           <span className={`absolute inset-y-1 left-0 w-[3px] rounded-full ${isActive ? 'bg-blue-500' : 'bg-transparent'}`} />
@@ -1185,13 +1188,44 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                               )}
                             </span>
                             <span className="min-w-0 flex-1">
-                              <span className={`block truncate text-[11px] font-medium ${isActive ? 'text-blue-700 dark:text-blue-200' : 'text-gray-700 dark:text-gray-200'}`}>
+                              <span className={`block truncate text-[11px] font-medium ${isActive ? 'text-blue-700 dark:text-blue-200' : 'text-gray-700 dark:text-gray-200'} ${hidden ? 'line-through decoration-gray-400/70' : ''}`}>
                                 {title}
                               </span>
                               <span className="block truncate text-[10px] leading-tight text-gray-400 dark:text-gray-500">
-                                {subtitle}
+                                {hidden ? '已隐藏 · 成品里不叠这块' : subtitle}
                               </span>
                             </span>
+                          </button>
+
+                          {/* 眼睛：隐藏后画布不显示、成品也不叠这块；参数都留着，随时切回来 */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextHidden = !hidden
+                              patchElement(element.id, { hidden: nextHidden })
+                              // 隐藏后画布上已经看不到它，选中态留在这儿只会让人以为元素丢了
+                              if (nextHidden && isActive) setSelectedId('')
+                            }}
+                            title={hidden ? '恢复显示：会重新叠到成品上' : '隐藏：画布不显示，成品也不叠这块'}
+                            aria-label={hidden ? '显示图层' : '隐藏图层'}
+                            className={`shrink-0 rounded p-0.5 transition ${
+                              hidden
+                                ? 'text-gray-300 hover:bg-gray-100 hover:text-gray-500 dark:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-300'
+                                : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-white/[0.06] dark:hover:text-gray-200'
+                            }`}
+                          >
+                            {hidden ? (
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M2 12s3.6-6.5 10-6.5c1.5 0 2.9.4 4.1 1M22 12s-3.6 6.5-10 6.5c-1.6 0-3-.4-4.2-1.1" />
+                                <path d="M3 3l18 18" />
+                                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+                              </svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" />
+                                <circle cx="12" cy="12" r="3" />
+                              </svg>
+                            )}
                           </button>
 
                           {/* 「避让」做成小开关：亮蓝=参与避让，灰色=这块是设计的一部分 */}

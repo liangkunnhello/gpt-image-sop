@@ -56,6 +56,19 @@ describe('collectAvoidZones', () => {
     expect(collectAvoidZones(template)).toHaveLength(1)
   })
 
+  /** 隐藏 = 成品里不叠这块，模型没必要为它留白 */
+  it('隐藏的图层不参与避让（哪怕它自己开着避让）', () => {
+    const template = make(1440, 2560, {
+      elements: [
+        text({ text: '要避让', avoid: true, hidden: true }),
+        text({ text: '也在避让', avoid: true }),
+      ],
+    })
+    const zones = collectAvoidZones(template)
+    expect(zones).toHaveLength(1)
+    expect(zones[0].label).not.toBe('')
+  })
+
   it('模板关掉自动避让时返回空', () => {
     const template = make(1440, 2560, { elements: [text({ text: '要避让' })], avoidOverlay: false })
     expect(collectAvoidZones(template)).toHaveLength(0)

@@ -33,6 +33,13 @@ export interface PostElement {
   avoid?: boolean
   /** logo 的高宽比（高 ÷ 宽），上传时记录；没有时按方形估算预留区 */
   aspect?: number
+  /**
+   * 隐藏这个图层：编辑器画布上不显示，成品也不叠它。
+   *
+   * 参数全都留着，等于「临时停用」——比删掉再重建省事，
+   * 也方便做 A/B：同一套模板里换着看哪块该出现。
+   */
+  hidden?: boolean
 }
 
 export interface PostTemplate {

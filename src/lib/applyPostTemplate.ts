@@ -123,6 +123,8 @@ export async function applyPostTemplate(dataUrl: string, template: PostTemplate)
   ctx.drawImage(source, rect.x, rect.y, rect.width, rect.height)
 
   for (const element of template.elements) {
+    // 隐藏的图层不参与合成：参数都在，只是这一版不出它
+    if (element.hidden) continue
     let logo: HTMLImageElement | null = null
     if (element.kind === 'logo') {
       if (!element.text) continue

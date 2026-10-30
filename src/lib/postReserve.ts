@@ -30,9 +30,11 @@ export interface AvoidZone {
 
 const percent = (value: number) => `${Math.round(value * 100)}%`
 
-/** 参与避让的元素：文字要有内容，logo 要真的选过图 */
+/** 参与避让的元素：没被隐藏、文字要有内容、logo 要真的选过图 */
 function avoidableElements(template: PostTemplate): PostElement[] {
   return template.elements.filter((element) => {
+    // 隐藏 = 成品里不叠这块，再让模型为它留白就是白留一片
+    if (element.hidden) return false
     if (element.avoid === false) return false
     return element.kind === 'logo' ? Boolean(element.text) : Boolean(element.text.trim())
   })

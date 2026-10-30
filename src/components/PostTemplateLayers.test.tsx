@@ -134,4 +134,24 @@ describe('后处理模板图层列表', () => {
     expect(rows()).toHaveLength(0)
     expect(document.body.textContent).toContain('还没有元素')
   })
+
+  /**
+   * 眼睛：隐藏 = 画布不显示 + 成品不叠这块（参数都留着，随时切回来）。
+   * 所以副标题会变成「已隐藏」，画布上那一块也跟着消失。
+   */
+  it('眼睛可以隐藏图层，再点一下恢复', () => {
+    const { container, rows } = render()
+    const eye = () => rows()[0]!.querySelector('button[aria-label="隐藏图层"], button[aria-label="显示图层"]') as HTMLElement
+
+    expect(container.textContent).toContain('主标题留白')
+
+    act(() => eye().dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(rows()[0]!.textContent).toContain('已隐藏')
+    // 画布上不再渲染这一层，列表副标题也被「已隐藏」顶掉
+    expect(container.textContent).not.toContain('主标题留白')
+
+    act(() => eye().dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(rows()[0]!.textContent).not.toContain('已隐藏')
+    expect(container.textContent).toContain('主标题留白')
+  })
 })
