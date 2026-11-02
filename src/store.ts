@@ -1387,13 +1387,20 @@ function scheduleOpenAIWatchdog(taskId: string, timeoutSeconds: number, profile?
   const task = useStore.getState().tasks.find((item) => item.id === taskId)
   if (!task || !isRunningOpenAITask(task)) return
 
-  const timeoutMs = Math.max(0, timeoutSeconds * 1000)
-  const remainingMs = Math.max(0, timeoutMs - (Date.now() - (task.startedAt ?? task.createdAt)))
+  /**
+   * 从调度这一刻开始算满 timeout，**不再减去「建卡到现在」的时间**。
+   *
+   * 一次提交 500 张时，闸门只放 10 个请求进来，后面几百条要排队几十分钟；
+   * 原来按建卡时刻扣预算，排到队时已经扣成负数，请求刚发出去就被判超时 ——
+   * 用户看到的就是「设了 500 张，前面还好，后面成片报超时」。
+   *
+   * 下限 1 秒：timeout 填成 0 时也别变成「立刻失败」。
+   */
   const timer = setTimeout(() => {
     openAIWatchdogTimers.delete(taskId)
     const failed = failOpenAITaskIfStillRunning(taskId, createOpenAITimeoutError(timeoutSeconds, profile))
     if (failed) useStore.getState().showToast('OpenAI 任务请求超时', 'error')
-  }, remainingMs)
+  }, Math.max(1000, timeoutSeconds * 1000))
   openAIWatchdogTimers.set(taskId, timer)
 }
 
@@ -5103,7 +5110,7 @@ async function executeTask(taskId: string) {
 async function runTaskExecution(taskId: string) {
   const { settings } = useStore.getState()
   const sopState = useSopStore.getState()
-  const task = useStore.getState().tasks.find((t) => t.id === taskId)
+  let task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
   /**
    * 续跑补图只请求缺口那么多张（500 里已出 183 就只发 317）。
@@ -5142,6 +5149,16 @@ async function runTaskExecution(taskId: string) {
   let customTaskInfo: { taskId: string } | null = task.customTaskId
     ? { taskId: task.customTaskId }
     : null
+
+  /**
+   * 排队结束、真的要发请求了，才开始计「本次耗时」。
+   *
+   * startedAt 原来是建卡时刻，排队几十分钟全算在这条任务头上：
+   * 卡片计时器一开就是半小时，完成时的 elapsed 也虚高。现在从这一刻重算。
+   */
+  const executionStartedAt = Date.now()
+  updateTaskInStore(taskId, { startedAt: executionStartedAt, elapsed: null })
+  task = { ...task, startedAt: executionStartedAt, elapsed: null }
 
   if (
     taskProvider !== 'fal' &&

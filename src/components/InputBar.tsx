@@ -58,6 +58,7 @@ import InputThumbImage from './input/inputThumbImage'
 import InputBatchBars from './input/inputBatchBars'
 import InputParamsPanel from './input/inputParamsPanel'
 import { runAgentCardTurn } from '../lib/agentCardPipeline'
+import { taskGate } from '../lib/taskGate'
 
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[], defaultFavoriteCollectionId: string | null) {
   const favoriteTasks = tasks.filter((task) => task.isFavorite)
@@ -583,6 +584,18 @@ export default function InputBar() {
   })
   /** 一轮对话要调文本模型写提示词，期间不让重复提交 */
   const [agentSending, setAgentSending] = useState(false)
+  /**
+   * 排队数：闸门限 10 并发，一次提交 500 张时后面几百条都在等。
+   * 不定期把「还在排队」说清楚，界面看着就像卡死了。
+   * 走 1 秒轮询，而不是把闸门每次变化都灌进 store —— 那会让整排卡片重渲染。
+   */
+  const [queuedInGate, setQueuedInGate] = useState(0)
+  useEffect(() => {
+    const tick = () => setQueuedInGate(taskGate.waitingCount)
+    tick()
+    const timer = window.setInterval(tick, 1000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const canSubmit = Boolean(
     (sopMode || variableMode || prompt.trim()) && hasSubmitApiConfig && !activeAgentIsRunning && !agentSending,
@@ -600,6 +613,8 @@ export default function InputBar() {
     : '请先配置 API'
   const submitTooltipText = agentSending
     ? '正在理解你的要求、写提示词…'
+    : queuedInGate > 0
+    ? `并发已满：${queuedInGate} 个任务在排队，轮到才发请求`
     : activeAgentIsRunning
     ? '停止生成'
     : !hasSubmitApiConfig
@@ -2678,7 +2693,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0 || queuedInGate > 0) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
@@ -2743,7 +2758,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0 || queuedInGate > 0) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
