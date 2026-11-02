@@ -106,7 +106,6 @@ import { pickSaveDir, saveFile, saveFileToDir, getDefaultSaveDir, createSaveFold
 import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress } from './lib/dataProgress'
 import { throwIfAborted } from './lib/serverSentEvents'
 import { safeJsonStorage, tauriStorage } from './lib/tauriStorage'
-import { gateFor, gateKeyOf, releaseIdleGate } from './lib/taskGate'
 
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
@@ -502,8 +501,6 @@ interface AppState {
    * 排队中的卡片原来显示「生成中 + 计时器」，看起来和「接口卡住」一模一样；
    * 一次交几百张时被误认成出图慢，其实是并发闸门在排队。
    */
-  queuedTaskIds: Set<string>
-  setTaskQueued: (taskId: string, queued: boolean) => void
   toggleTaskSelection: (id: string, force?: boolean) => void
   clearSelection: () => void
   selectedFavoriteCollectionIds: string[]
@@ -1106,8 +1103,6 @@ export const useStore = create<AppState>()(
 
       // Tasks
       tasks: [],
-      // 等并发名额的任务（不持久化，刷新即空）
-      queuedTaskIds: new Set<string>(),
       trashedTasks: [],
       setTrashedTasks: (trashedTasks) => set(() => ({ trashedTasks })),
       setTasks: (tasks) => set(() => ({
@@ -1189,15 +1184,6 @@ export const useStore = create<AppState>()(
       setSelectedTaskIds: (updater) => set((s) => ({
         selectedTaskIds: typeof updater === 'function' ? updater(s.selectedTaskIds) : updater
       })),
-      setTaskQueued: (taskId, queued) => set((s) => {
-        const has = s.queuedTaskIds.has(taskId)
-        if (queued === has) return s
-        // 用 Set 而不是数组：几百张卡各订阅一次，数组 includes 会把入队变成 O(n²)
-        const next = new Set(s.queuedTaskIds)
-        if (queued) next.add(taskId)
-        else next.delete(taskId)
-        return { queuedTaskIds: next }
-      }),
       toggleTaskSelection: (id, force) => set((s) => {
         const isSelected = s.selectedTaskIds.includes(id)
         const shouldSelect = force !== undefined ? force : !isSelected
@@ -2367,7 +2353,7 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
      * 以前这里是 limit = 并发数，每条 worker 还要等上一条整个跑完才拿下一个 ——
      * 提交 20 张、并发 10，就变成「前 10 张出完才开始第 11 张」，看着就是在排队。
      * 现在全部立刻建卡（用户马上能看到整批进度），真正发请求的并发由全局闸门
-     * 本批的闸门控制；每批各自限流，互不占名额。
+     * 直接发出去，本机排队已去掉（见 executeTask）。
      */
     const limit = plainPlan.length
     let settled = 0
@@ -5109,41 +5095,14 @@ async function executeAgentRound(
 }
 
 /**
- * 真正执行一条任务：拿名额 → 发请求 → 释放名额。
+ * 真正执行一条任务。
  *
- * 名额是**按批**算的，不是全局共用：设置里的「同时在跑 N 个」说的是
- * 「一批里同时发多少个请求」。一次提交 500 张，是这一批内部按 10 个往下推；
- * 另外提交的一批属于另一批，不该来抢这 10 个 —— 全局共用会让
- * 「SOP 在跑的时候普通模式几乎不动」，看着就像「一个个出」。
+ * 提交即发请求，本机不再排队：出图速度完全交给接口。
+ * （早先这里有一道「同时在跑 N 个」的闸门，实测它本身就成了瓶颈：
+ * 名额 10 / 上限 10，在途请求也正好卡在 10，所以去掉了。）
  */
 async function executeTask(taskId: string) {
-  const state = useStore.getState()
-  const task = state.tasks.find((item) => item.id === taskId)
-  if (!task) return
-  const settings = state.settings
-  // 批的划分与画廊的卡片口径一致：同 sopJobId 算同一批，单任务卡自成一批
-  const gateKey = gateKeyOf(task)
-  const gate = gateFor(gateKey)
-  gate.setLimit(settings.batchPromptConcurrencyLimited ? settings.batchPromptConcurrency : null)
-  /**
-   * 名额满了就先标成「排队中」。
-   *
-   * 排队的任务原来和「请求已经发出去、只是接口慢」显示得一模一样（生成中 + 计时器），
-   * 一次交几百张时最容易被误判成出图慢。标出来之后，一眼能看出瓶颈在本地并发还是在接口。
-   */
-  const willWait = !gate.hasFreeSlot
-  if (willWait) state.setTaskQueued(taskId, true)
-  await gate.acquire()
-  if (willWait) useStore.getState().setTaskQueued(taskId, false)
-  try {
-    await runTaskExecution(taskId)
-  } finally {
-    gate.release()
-    // 兜底：任何异常路径都别让一条任务永久留在排队集合里
-    useStore.getState().setTaskQueued(taskId, false)
-    // 这批跑完就把闸门摘掉，别让 Map 随提交次数一直长
-    releaseIdleGate(gateKey)
-  }
+  await runTaskExecution(taskId)
 }
 
 async function runTaskExecution(taskId: string) {
@@ -7760,7 +7719,7 @@ export async function submitSopTasks(input: {
   /**
    * 一次全部交给执行层，不再在这里「发一条等一条」。
    *
-   * 建卡是同步的，用户立刻能看到整批卡片；真正发请求的并发由「本批」的闸门控制。
+   * 建卡是同步的，用户立刻能看到整批卡片；请求随即发出去，本机不再限流。
    * 以前这里是 10 个 worker 各自等下一条完成才继续，提示词一多就明显在排队。
    */
   for (const task of tasks) executeTask(task.id)

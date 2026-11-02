@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ApiProfile, AppSettings, BatchProgress, BatchPromptMode, TaskParams } from '../../types'
-import { DEFAULT_BATCH_PROMPT_CONCURRENCY, normalizeBatchPromptConcurrency } from '../../lib/batchPrompts'
 import { isTauri } from '../../lib/platform'
 import { dismissAllTooltips } from '../../lib/tooltipDismiss'
 import Select from '../Select'
@@ -14,7 +13,7 @@ const ROW_CLASS = 'relative flex items-center justify-between gap-3'
 const ROW_LABEL_CLASS = 'text-gray-500 dark:text-gray-400'
 const CONTROL_DISABLED_CLASS = 'px-3 py-1.5 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.04] opacity-50 cursor-not-allowed text-xs transition-all duration-200'
 
-type BatchSettingsPatch = Partial<Pick<AppSettings, 'batchPromptEnabled' | 'batchPromptMode' | 'batchPromptConcurrencyLimited' | 'batchPromptConcurrency'>>
+type BatchSettingsPatch = Partial<Pick<AppSettings, 'batchPromptEnabled' | 'batchPromptMode'>>
 
 function Switch({ checked, disabled, label, onToggle }: { checked: boolean; disabled?: boolean; label: string; onToggle: () => void }) {
   return (
@@ -29,60 +28,6 @@ function Switch({ checked, disabled, label, onToggle }: { checked: boolean; disa
     >
       <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
     </button>
-  )
-}
-
-/** 输入为空或无效时保留原值 */
-function parseConcurrency(input: string, fallback: number) {
-  const parsed = Number(input)
-  return input.trim() && Number.isFinite(parsed) ? normalizeBatchPromptConcurrency(parsed) : fallback
-}
-
-/** 并发数输入框：随弹层挂载，打开时从已保存的值初始化，聚焦输入时实时提示过高的并发数 */
-function ConcurrencyInput({ value, disabled = false, onCommit }: { value: number; disabled?: boolean; onCommit: (value: number) => void }) {
-  const [input, setInput] = useState(String(value))
-  const [focused, setFocused] = useState(false)
-  const latestRef = useRef({ input, value, onCommit })
-  latestRef.current = { input, value, onCommit }
-
-  // 直接关闭弹层时输入框被卸载而不会触发 blur，卸载时补一次提交
-  useEffect(() => () => {
-    const latest = latestRef.current
-    const next = parseConcurrency(latest.input, latest.value)
-    if (next !== latest.value) latest.onCommit(next)
-  }, [])
-
-  const commit = () => {
-    const next = parseConcurrency(input, value)
-    setInput(String(next))
-    if (next !== value) onCommit(next)
-  }
-
-  return (
-    <>
-      <input
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onFocus={() => setFocused(true)}
-        onBlur={() => {
-          setFocused(false)
-          commit()
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') e.currentTarget.blur()
-        }}
-        disabled={disabled}
-        type="number"
-        min={1}
-        className={`w-28 px-3 py-1.5 rounded-xl border border-transparent focus:border-blue-300 dark:focus:border-blue-500/50 focus:outline-none text-xs transition-all duration-200 ${
-          disabled ? 'bg-black/[0.03] dark:bg-white/[0.04] opacity-50 cursor-not-allowed' : 'bg-black/[0.04] dark:bg-white/[0.06]'
-        }`}
-      />
-      <ButtonTooltip
-        visible={focused && Number(input) > DEFAULT_BATCH_PROMPT_CONCURRENCY}
-        text={`并发数超过 ${DEFAULT_BATCH_PROMPT_CONCURRENCY} 可能导致${isTauri ? '客户端' : '浏览器'}卡顿或触发服务商限流`}
-      />
-    </>
   )
 }
 
@@ -142,8 +87,6 @@ export default function InputParamsPanel({
   showBatch,
   batchEnabled,
   batchMode,
-  batchConcurrencyLimited,
-  batchConcurrency,
   batchPromptCount,
   batchProgress,
   queuedSubmitCount,
@@ -203,8 +146,6 @@ export default function InputParamsPanel({
   showBatch: boolean
   batchEnabled: boolean
   batchMode: BatchPromptMode
-  batchConcurrencyLimited: boolean
-  batchConcurrency: number
   batchPromptCount: number
   batchProgress: BatchProgress | null
   /** 排队等待提交的批次数：批量进行中再提交会先排队 */
@@ -513,35 +454,11 @@ export default function InputParamsPanel({
                   />
                 </div>
               </div>
-              {/* 这个开关对所有提交生效（不只是「并发」模式的批量提示词），所以不再挂在 batchMode 下 */}
-              <div className={ROW_CLASS}>
-                <span className={ROW_LABEL_CLASS}>限制同时在跑</span>
-                <Switch
-                  checked={batchConcurrencyLimited}
-                  label="限制同时在跑"
-                  onToggle={() => onBatchChange({ batchPromptConcurrencyLimited: !batchConcurrencyLimited })}
-                />
-              </div>
-              {batchConcurrencyLimited && (
-                <label className={ROW_CLASS}>
-                  <span className={ROW_LABEL_CLASS}>同时在跑</span>
-                  <ConcurrencyInput
-                    value={batchConcurrency}
-                    onCommit={(value) => onBatchChange({ batchPromptConcurrency: value })}
-                  />
-                </label>
-              )}
-              {!batchConcurrencyLimited && (
-                <p className="rounded-lg bg-amber-500/[0.1] px-2.5 py-2 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-500/[0.14] dark:text-amber-400/90">
-                  现在不限制：一次提交的请求会**同时全部发出**，出图速度取决于接口本身。
-                  提示词特别多（几百条）时{isTauri ? '客户端' : '浏览器'}可能吃内存、也更容易撞服务商限流，
-                  真遇到卡顿再回来打开这个开关。
-                </p>
-              )}
               <p className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
                 提示词之间空两行分隔，当前共 {batchPromptCount} 条；参考图和参数对每条提示词都生效。
-                打开「限制同时在跑」后，名额按**一批**算：一次提交（一张任务卡）里同时发这么多个请求，
-                多出来的在这批里排队；另外提交的一批有自己的名额，互不占用。
+                提交后请求全部同时发出，本机不再排队，出图速度取决于接口本身（提示词特别多时
+                {isTauri ? '客户端' : '浏览器'}可能吃内存，也更容易撞服务商限流）。
+                「等待上一条跑完」只在执行方式选「排队」时生效。
               </p>
             </>
           )}

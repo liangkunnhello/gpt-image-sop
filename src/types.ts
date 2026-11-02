@@ -197,9 +197,6 @@ export interface AppSettings {
   /** 多提示词批量提交，提示词之间空两行分隔 */
   batchPromptEnabled: boolean
   batchPromptMode: BatchPromptMode
-  /** 并发模式下是否限制并发数（默认开启），关闭时全部同时提交 */
-  batchPromptConcurrencyLimited: boolean
-  batchPromptConcurrency: number
   referenceImageEditAction: ReferenceImageEditAction
   zipDownloadRoutes: ZipDownloadRoute[]
   /** 仅客户端：默认保存地址本身由 Rust 侧保存，不在设置中 */

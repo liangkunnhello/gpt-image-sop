@@ -57,8 +57,6 @@ import VariableImageSlots from './input/VariableImageSlots'
 import InputThumbImage from './input/inputThumbImage'
 import InputBatchBars from './input/inputBatchBars'
 import InputParamsPanel from './input/inputParamsPanel'
-import { gateTotals } from '../lib/taskGate'
-import { httpStats } from '../lib/httpStats'
 
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[], defaultFavoriteCollectionId: string | null) {
   const favoriteTasks = tasks.filter((task) => task.isFavorite)
@@ -553,45 +551,6 @@ export default function InputBar() {
   // 批量进行中不再锁提交：新提交会排到队尾，当前批结束后自动开始
   const batchRunning = Boolean(batchProgress)
   // SOP / 变量模式靠参考图与提示词驱动，输入框可以为空，发送按钮常亮（缺图时点一下会提示）
-  /**
-   * 实时并发状态。三组数分开看，别混为一谈：
-   *
-   * - running / waiting / limit：**闸门发出去的名额**（引擎条数），按批限流，
-   *   所以 batches 是现在有几批在跑，limit 是「每批」的上限
-   * - inFlight / peak：**网络层实测在途请求数**（platform.apiFetch 里数的）
-   *
-   * 只有后者能回答「是不是真的有 10 个请求在跑」。名额 10 而峰值常年 2~3，
-   * 说明名额被读图 / 算尺寸 / 写库这类非网络工作占着，或者请求根本没发出去。
-   * 1 秒轮询一次，值没变就返回同一个对象，避免 InputBar 每秒重渲染。
-   */
-  const [gateStats, setGateStats] = useState({ running: 0, waiting: 0, limit: 0, batches: 0, inFlight: 0, peak: 0 })
-  useEffect(() => {
-    const tick = () => {
-      const totals = gateTotals()
-      const next = {
-        running: totals.active,
-        waiting: totals.waiting,
-        limit: totals.perBatchLimit,
-        batches: totals.batches,
-        inFlight: httpStats.current,
-        peak: httpStats.peakCount,
-      }
-      setGateStats((prev) => (
-        prev.running === next.running
-        && prev.waiting === next.waiting
-        && prev.limit === next.limit
-        && prev.batches === next.batches
-        && prev.inFlight === next.inFlight
-        && prev.peak === next.peak
-          ? prev
-          : next
-      ))
-    }
-    tick()
-    const timer = window.setInterval(tick, 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-
   const canSubmit = Boolean(
     (sopMode || variableMode || prompt.trim()) && hasSubmitApiConfig && !activeAgentIsRunning,
   )
@@ -604,9 +563,7 @@ export default function InputBar() {
     : hasSubmitApiConfig
     ? maskDraft ? '遮罩编辑' : batchEnabled ? `批量生成 ${batchPromptCount} 条` : '生成图像'
     : '请先配置 API'
-  const submitTooltipText = gateStats.waiting > 0
-    ? `正在跑 ${gateStats.running} 个 · 排队 ${gateStats.waiting} 个${gateStats.limit ? `（并发上限 ${gateStats.limit}）` : ''}`
-    : activeAgentIsRunning
+  const submitTooltipText = activeAgentIsRunning
     ? '停止生成'
     : !hasSubmitApiConfig
     ? '尚未完成 API 配置，请在右上角设置中进行'
@@ -2200,8 +2157,6 @@ export default function InputBar() {
       showBatch={showBatch}
       batchEnabled={batchEnabled}
       batchMode={settings.batchPromptMode}
-      batchConcurrencyLimited={settings.batchPromptConcurrencyLimited}
-      batchConcurrency={settings.batchPromptConcurrency}
       batchPromptCount={batchPromptCount}
       batchProgress={batchProgress}
       queuedSubmitCount={queuedSubmitCount}
@@ -2286,40 +2241,6 @@ export default function InputBar() {
           >
             <div className={`w-10 h-1 rounded-full bg-gray-300 dark:bg-white/[0.06] transition-transform duration-200 ${mobileCollapsed ? 'scale-x-75' : ''}`} />
           </div>
-
-          {/*
-            排队提示：一次提交几百张时，大部分卡都在等名额。
-            不写出来就会被当成「出图很慢」——其实请求一个都还没发出去。
-          */}
-          {/* 只有「多任务同时在跑」或「有人在排队」时才显示：单个任务跑的时候没必要占一行 */}
-          {(gateStats.waiting > 0 || gateStats.running > 1 || gateStats.inFlight > 0) && (
-            <div
-              className={`mb-2 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-1.5 text-xs ${
-                gateStats.waiting > 0
-                  ? 'border-amber-200/80 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
-                  : 'border-blue-200/70 bg-blue-50 text-blue-700 dark:border-blue-500/25 dark:bg-blue-500/10 dark:text-blue-300'
-              }`}
-            >
-              <span className={`flex h-1.5 w-1.5 shrink-0 rounded-full ${gateStats.waiting > 0 ? 'bg-amber-500' : 'bg-blue-500'}`} />
-              <span className="min-w-0 flex-1">
-                {/* 名额按批算：光看总数会被误读，所以把「几批」和「每批上限」都写出来 */}
-                {gateStats.batches > 1 ? `${gateStats.batches} 批在跑（每批上限 ${gateStats.limit || '不限'}）· ` : ''}
-                {gateStats.waiting > 0
-                  // 有排队：说明这批的名额被打满，慢在本地排队
-                  ? `名额 ${gateStats.running}${gateStats.batches > 1 ? '' : `${gateStats.limit ? ` / 上限 ${gateStats.limit}` : ''}`} · 排队 ${gateStats.waiting} 个 · 实际在途请求 ${gateStats.inFlight} 个`
-                  // 无排队：名额没卡住，还是慢就只能是接口/渠道那边串行
-                  : `名额 ${gateStats.running} 个${gateStats.batches > 1 ? '' : `${gateStats.limit ? `（上限 ${gateStats.limit}）` : '（不限）'}`} · 实际在途请求 ${gateStats.inFlight} 个`}
-                {gateStats.peak > 0 && `（峰值 ${gateStats.peak}）`}
-              </span>
-              <button
-                type="button"
-                onClick={() => useStore.getState().setShowSettings(true)}
-                className="shrink-0 rounded-lg bg-white/70 px-2 py-1 font-medium text-amber-700 transition-colors hover:bg-white dark:bg-white/10 dark:text-amber-200 dark:hover:bg-white/[0.16]"
-              >
-                调并发
-              </button>
-            </div>
-          )}
 
           {/* SOP / 变量模式：参考图 / 固定图 / 变量图三个独立入口，各自拖入互不串 */}
           {(variableMode || sopMode) && (
@@ -2616,7 +2537,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0 || gateStats.waiting > 0) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
@@ -2681,7 +2602,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0 || gateStats.waiting > 0) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}

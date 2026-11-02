@@ -1555,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "gpt-image-playground"
-version = "1.2.84"
+version = "1.2.85"
 dependencies = [
  "log",
  "percent-encoding",

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
-import { resetAllGates } from './lib/taskGate'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
 import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
@@ -7086,29 +7085,6 @@ describe('合并卡的缺口', () => {
   })
 })
 /**
- * 排队标记：几百张卡各订阅一次，所以「重复标记」必须是空操作 ——
- * 否则每入队一次就把整排卡片重渲染一遍。
- */
-describe('排队状态', () => {
-  it('标记、清除，重复标记不改引用', () => {
-    useStore.setState({ queuedTaskIds: new Set<string>() })
-    useStore.getState().setTaskQueued('t1', true)
-    expect(useStore.getState().queuedTaskIds.has('t1')).toBe(true)
-
-    const before = useStore.getState().queuedTaskIds
-    useStore.getState().setTaskQueued('t1', true)
-    // 引用没变 = 不会触发订阅者重渲染
-    expect(useStore.getState().queuedTaskIds).toBe(before)
-
-    useStore.getState().setTaskQueued('t1', false)
-    expect(useStore.getState().queuedTaskIds.has('t1')).toBe(false)
-    // 清除不存在的也要是空操作
-    const after = useStore.getState().queuedTaskIds
-    useStore.getState().setTaskQueued('t1', false)
-    expect(useStore.getState().queuedTaskIds).toBe(after)
-  })
-})
-/**
  * 画廊整表一次算好每张卡的应出/缺口。
  *
  * 之前是每张卡自己遍历 s.tasks，卡数 × 任务数 × 每次 store 更新，
@@ -7180,32 +7156,28 @@ describe('停止整张卡', () => {
   })
 })
 /**
- * 提交一批任务后，请求必须是并发发出去的，不能一条一条排。
+ * 提交一批任务后，请求必须全部立刻发出去。
  *
- * 用「三个请求同时在飞」来证明：如果并发真的是 10，三个任务的 callImageApi
- * 会在任何一个返回之前就全部被调用；如果是串行，只会看到 1 次。
+ * 早先这里有一道「同时在跑 N 个」的闸门，实测它本身就是瓶颈
+ * （名额 10 / 上限 10，在途请求也卡在 10），已经去掉。
+ * 现在用「三个请求同时在飞」锁住：任何一条返回之前，三条都必须已经发出。
  */
 describe('出图请求的并发', () => {
   beforeEach(async () => {
     await clearTasks()
     vi.mocked(callImageApi).mockReset()
-    // 上一个用例的请求永不返回，名额不会释放，先清空
-    resetAllGates()
     useStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
         baseUrl: 'https://api.example.com/v1',
         apiKey: 'test-key',
-        // 明确打开限制、并发 10，和默认设置一致
-        batchPromptConcurrencyLimited: true,
-        batchPromptConcurrency: 10,
       },
       tasks: [],
       showToast: vi.fn(),
     })
   })
 
-  it('三条任务同时执行时，三个请求同时在飞', async () => {
+  it('三条任务同时执行时，三个请求同时在飞（本机不再排队）', async () => {
     // 全部挂住不返回：只要有一个被调用了，三个应该紧接着都进来
     vi.mocked(callImageApi).mockImplementation(() => new Promise(() => {}))
 
@@ -7223,27 +7195,18 @@ describe('出图请求的并发', () => {
     expect(running).toHaveLength(3)
   })
 
-  it('并发上限是 1 时才会真的串行', async () => {
-    useStore.setState({
-      settings: {
-        ...useStore.getState().settings,
-        batchPromptConcurrencyLimited: true,
-        batchPromptConcurrency: 1,
-      },
-    })
+  it('提交条数很多的批也不会被本机卡住', async () => {
     vi.mocked(callImageApi).mockImplementation(() => new Promise(() => {}))
 
     await submitSopTasks({
-      sopJobId: 'job-serial',
-      sopName: '串行测试',
+      sopJobId: 'job-no-gate',
+      sopName: '无闸门测试',
       systemPromptName: '测试',
       prompts: ['p1', 'p2', 'p3'],
       params: { ...DEFAULT_PARAMS, n: 1 },
     })
 
-    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledTimes(1))
-    // 给足时间：仍然是 1 次，说明闸门确实按设置卡住了
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(callImageApi).toHaveBeenCalledTimes(1)
+    // 提交即发：三条都立刻出去，没有任何本机闸门
+    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledTimes(3))
   })
 })

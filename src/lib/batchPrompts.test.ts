@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeBatchPromptConcurrency, runWithConcurrency, splitBatchPrompts } from './batchPrompts'
+import { runWithConcurrency, splitBatchPrompts } from './batchPrompts'
 
 describe('splitBatchPrompts', () => {
   it('splits prompts by two or more blank lines', () => {
@@ -14,15 +14,6 @@ describe('splitBatchPrompts', () => {
 
   it('drops empty prompts', () => {
     expect(splitBatchPrompts('\n\n\n a \n\n\n\n\n\n')).toEqual(['a'])
-  })
-})
-
-describe('normalizeBatchPromptConcurrency', () => {
-  it('keeps at least one without an upper limit', () => {
-    expect(normalizeBatchPromptConcurrency(0)).toBe(1)
-    expect(normalizeBatchPromptConcurrency(99)).toBe(99)
-    expect(normalizeBatchPromptConcurrency('3')).toBe(10)
-    expect(normalizeBatchPromptConcurrency(4.6)).toBe(5)
   })
 })
 

@@ -142,16 +142,6 @@ export function migratePersistedState(persistedState: unknown, version?: number)
     ...persistedState,
     agentConversations: stripPersistedAgentConversations(persistedState.agentConversations),
   }
-  /**
-   * v3：默认不再限制出图并发。
-   *
-   * 这个开关原本默认开、默认 10 个，等于给所有用户预置了一道自加的天花板；
-   * 老存档里的 `true` 是被默认值写进去的，不是用户选的，所以这里一次性关掉。
-   * 之后用户自己打开就不再被这次迁移覆盖（version 已经是 3）。
-   */
-  if ((version ?? 0) < 3 && isRecord(persistedState.settings)) {
-    migrated.settings = { ...persistedState.settings, batchPromptConcurrencyLimited: false }
-  }
   return migrated
 }
 

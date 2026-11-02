@@ -24,7 +24,6 @@ import { normalizeReasoningEffort, normalizeStreamPartialImages, parseDefaultApi
 import { readRuntimeEnv } from './runtimeEnv'
 import { isImportableConfigUrl } from './importableConfigUrl'
 import { DEFAULT_IMAGES_MODEL } from './imageModels'
-import { DEFAULT_BATCH_PROMPT_CONCURRENCY, normalizeBatchPromptConcurrency } from './batchPrompts'
 import { normalizeFontMode } from './fonts'
 import { DEFAULT_TASK_FOLDER_TEMPLATE, withCopyToken } from './taskFolderName'
 
@@ -778,9 +777,6 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     showBatchPrompt: typeof record.showBatchPrompt === 'boolean' ? record.showBatchPrompt : false,
     batchPromptEnabled: typeof record.batchPromptEnabled === 'boolean' ? record.batchPromptEnabled : false,
     batchPromptMode: record.batchPromptMode === 'concurrent' ? 'concurrent' : 'queue',
-    // 默认不限流：并发上限是本机自己加的限制，挡的是自己的速度
-    batchPromptConcurrencyLimited: typeof record.batchPromptConcurrencyLimited === 'boolean' ? record.batchPromptConcurrencyLimited : false,
-    batchPromptConcurrency: normalizeBatchPromptConcurrency(record.batchPromptConcurrency),
     referenceImageEditAction: normalizeReferenceImageEditAction(record.referenceImageEditAction),
     zipDownloadRoutes: normalizeZipDownloadRoutes(record.zipDownloadRoutes),
     saveLocationMode: record.saveLocationMode === 'default' ? 'default' : 'ask',
@@ -1373,8 +1369,6 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   showBatchPrompt: false,
   batchPromptEnabled: false,
   batchPromptMode: 'queue',
-  batchPromptConcurrencyLimited: false,
-  batchPromptConcurrency: DEFAULT_BATCH_PROMPT_CONCURRENCY,
   referenceImageEditAction: 'ask',
   zipDownloadRoutes: DEFAULT_ZIP_DOWNLOAD_ROUTES,
   saveLocationMode: 'ask',
