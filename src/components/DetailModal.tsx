@@ -769,8 +769,31 @@ export default function DetailModal() {
         return
       }
     }
-    // 没有对应图片（比如这一格是失败项）时，退回打开所在文件夹
+    /*
+     * 没有对应图片 = 这一格还没出图（生成中 / 失败格）。
+     *
+     * 以前这里直接打开应用内部的成品图目录（按 hash 分桶存），
+     * 那是给排查问题用的位置，用户在生成中想打开的是「这张图将来落到哪」。
+     * 优先打开交付/保存位置；没配交付地址才退回内部目录，并把话说清楚。
+     */
+    const delivered = await openDeliveryFolderForTask(task.id)
+    if (delivered.ok) {
+      showToast(
+        delivered.opened === 'root'
+          ? `这张图还没出完，已打开交付地址：${delivered.path ?? ''}`
+          : '这张图还没出完，已打开交付文件夹',
+        'info',
+      )
+      return
+    }
+    if (delivered.webOnly) {
+      showToast('网页版的图片存在浏览器里，没有本地文件夹；要用这个按钮请用桌面客户端', 'info')
+      return
+    }
     await handleOpenFolder(variant === 'original' ? 'images' : 'finished')
+    if (delivered.noTarget) {
+      showToast('这张卡还没配置交付地址，已打开应用内的图片目录', 'info')
+    }
   }
 
   /**
@@ -1599,7 +1622,9 @@ export default function DetailModal() {
                   type="button"
                   onClick={() => void handleRevealCurrentImage('original')}
                   className="flex h-7 w-7 items-center justify-center rounded bg-black/50 text-white backdrop-blur-sm transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50"
-                  title="打开文件所在位置（当前这张原图）"
+                  title={currentOriginalOutputImageId || currentOutputImageId
+                    ? '打开文件所在位置（当前这张原图）'
+                    : '这张图还没出完：打开它的交付 / 保存位置'}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
                     <rect x="3" y="4" width="18" height="16" rx="2" />
