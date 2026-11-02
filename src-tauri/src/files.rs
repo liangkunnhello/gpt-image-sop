@@ -384,6 +384,117 @@ pub async fn open_directory(
         .map_err(|err| format!("打开目录失败：{err}"))
 }
 
+/// 目录质检：读一个文件夹里的图片，返回 dataUrl 供前端直接送质检模型。
+///
+/// 只读、只认图片扩展名、有条数与单张体积上限；路径要求绝对路径且不在应用数据目录内
+/// （与 open_directory 同一套越界校验）。支持 UNC 网络路径（`\\server\share\...`）。
+#[derive(Serialize)]
+pub struct DirImage {
+    name: String,
+    data_url: String,
+    bytes: usize,
+}
+
+const DIR_IMAGE_EXTS: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
+/// 一次最多读多少张：质检要逐张过视觉模型，再多也没人看完
+const MAX_DIR_IMAGES: usize = 200;
+/// 单张上限：超过的跳过，避免一张 100MB 的 TIFF 撑爆内存
+const MAX_DIR_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = *chunk.get(1).unwrap_or(&0) as usize;
+        let b2 = *chunk.get(2).unwrap_or(&0) as usize;
+        out.push(TABLE[b0 >> 2] as char);
+        out.push(TABLE[((b0 & 0b11) << 4) | (b1 >> 4)] as char);
+        out.push(if chunk.len() > 1 { TABLE[((b1 & 0b1111) << 2) | (b2 >> 6)] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[b2 & 0b111111] as char } else { '=' });
+    }
+    out
+}
+
+fn image_mime(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        _ => "image/jpeg",
+    }
+}
+
+/// 目录里可读的图片文件（按文件名排序，最多 limit 张）
+#[tauri::command]
+pub async fn read_dir_images(
+    state: State<'_, StorageState>,
+    path: String,
+    limit: Option<usize>,
+) -> Result<Vec<DirImage>, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("目录为空。".to_string());
+    }
+    let dir = PathBuf::from(trimmed);
+    if !dir.is_absolute() {
+        return Err("目录必须是绝对路径（网络共享请用 \\\\服务器\\共享名\\... 的形式）。".to_string());
+    }
+    let data_dir = data_root(&state);
+    check_outside(&dir, data_dir.as_deref())?;
+    if !dir.exists() {
+        return Err("目录不存在，或当前没有访问权限（网络共享需要先登录）。".to_string());
+    }
+    if !dir.is_dir() {
+        return Err("这个路径不是文件夹。".to_string());
+    }
+
+    let max = limit.unwrap_or(MAX_DIR_IMAGES).clamp(1, MAX_DIR_IMAGES);
+    tokio::task::block_in_place(|| -> Result<Vec<DirImage>, String> {
+        let entries = fs::read_dir(&dir).map_err(|err| format!("读取目录失败：{err}"))?;
+        let mut files: Vec<PathBuf> = Vec::new();
+        for entry in entries.flatten() {
+            let file = entry.path();
+            if !file.is_file() {
+                continue;
+            }
+            let ext = file
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !DIR_IMAGE_EXTS.contains(&ext.as_str()) {
+                continue;
+            }
+            files.push(file);
+        }
+        files.sort();
+        files.truncate(max);
+
+        let mut images = Vec::new();
+        for file in files {
+            let Ok(bytes) = fs::read(&file) else { continue };
+            if bytes.len() as u64 > MAX_DIR_IMAGE_BYTES {
+                continue;
+            }
+            let ext = file
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            images.push(DirImage {
+                name: file
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("image")
+                    .to_string(),
+                data_url: format!("data:{};base64,{}", image_mime(&ext), base64_encode(&bytes)),
+                bytes: bytes.len(),
+            });
+        }
+        Ok(images)
+    })
+}
+
 /// 在 save_dir_pick 或 download_dir_use 登记的目录中开始一次分块写入，返回写入序号；
 /// 提交时已有同名文件则加序号。folder 为 save_dir_folder 建好的任务卡文件夹名。
 ///

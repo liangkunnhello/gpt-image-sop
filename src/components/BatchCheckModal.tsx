@@ -5,6 +5,7 @@ import { expectFromPrompt, simBatch, simBatchLocal, sidecarAlive, type QcOutcome
 import { useInspectConfig } from '../lib/inspectConfig'
 import { activeQcRules, qcInBrowser, type QcChecks } from '../lib/visionQc'
 import InspectConfigModal from './InspectConfigModal'
+import FolderCheckModal from './FolderCheckModal'
 
 const MAX_TASKS = 24
 const DEFAULT_PICK = 12
@@ -29,6 +30,7 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) { 
   const config = useInspectConfig((s) => s.config)
   const [alive, setAlive] = useState<boolean | null>(null)
   const [showConfig, setShowConfig] = useState(false)
+  const [showFolder, setShowFolder] = useState(false)
   const [busy, setBusy] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [qc, setQc] = useState<Record<string, QcOutcome>>({})
@@ -138,6 +140,14 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) { 
             {alive === null ? '检测中' : alive ? '相似度服务已连接' : '相似度服务未启动'}
           </span>
           <div className="flex-1" />
+          <button
+            type="button"
+            onClick={() => setShowFolder(true)}
+            className="rounded-lg border border-gray-200 px-3 py-1 text-sm text-gray-500 hover:bg-gray-100 dark:border-white/10 dark:text-gray-400 dark:hover:bg-white/[0.06]"
+            title="直接读一个文件夹（支持网络共享路径）里的图片做质检"
+          >
+            文件夹质检
+          </button>
           <button
             type="button"
             onClick={() => setShowConfig(true)}
@@ -278,6 +288,7 @@ export default function BatchCheckModal({ onClose }: { onClose: () => void }) { 
         </div>
       </div>
       {showConfig && <InspectConfigModal onClose={() => setShowConfig(false)} />}
+      {showFolder && <FolderCheckModal onClose={() => setShowFolder(false)} />}
     </div>
   )
 }

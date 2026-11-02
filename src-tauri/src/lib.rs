@@ -75,6 +75,7 @@ pub fn run() {
             files::save_dir_use,
             files::pick_directory,
             files::open_directory,
+            files::read_dir_images,
             files::save_dir_begin,
             files::save_dir_folder,
             files::save_remove,

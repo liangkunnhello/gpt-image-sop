@@ -7,6 +7,7 @@ commands.allow = [
   "save_dir_use",
   "pick_directory",
   "open_directory",
+  "read_dir_images",
   "save_dir_folder",
   "save_remove",
   "save_dir_begin",
