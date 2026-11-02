@@ -5602,7 +5602,7 @@ export const TASK_STOPPED_MESSAGE = '已停止生成。'
  * 已停止」来阻止结果落地 —— 界面立刻显示已停止，但 fal 侧那一次调用可能仍会跑完
  * （不会写进任务、不会进交付）。OpenAI 兼容 / 自定义服务商那两条是真掐断。
  */
-export async function stopTask(taskId: string): Promise<boolean> {
+export async function stopTask(taskId: string, options: { silent?: boolean } = {}): Promise<boolean> {
   const task = useStore.getState().tasks.find((item) => item.id === taskId)
   if (!task || task.status !== 'running') return false
 
@@ -5622,8 +5622,37 @@ export async function stopTask(taskId: string): Promise<boolean> {
     customRecoverable: false,
   })
   useStore.getState().setTaskStreamPreview(taskId)
-  useStore.getState().showToast('已停止生成，可随时重试', 'info')
+  // 整组停止时由 stopCard 出一条汇总提示，逐条弹会刷屏
+  if (!options.silent) useStore.getState().showToast('已停止生成，可随时重试', 'info')
   return true
+}
+
+/**
+ * 停一整张卡。
+ *
+ * 画廊里一张卡可能代表整组任务（一次提交拆出来的几百条）。
+ * 原来卡上的「停止」只停「代表任务」（编号最小的那条），
+ * 而那条往往早就出完了 —— stopTask 第一行判定不是 running 就 return false，
+ * 连提示都没有，用户看到的就是「点了停止没反应」。
+ */
+export async function stopCard(task: TaskRecord): Promise<number> {
+  const tasks = useStore.getState().tasks
+  const members = task.sopJobId
+    ? tasks.filter((item) => item.sopJobId === task.sopJobId && !item.deletedAt && !item.sopPlaceholder)
+    : [task]
+  const running = members.filter((item) => item.status === 'running')
+  if (!running.length) {
+    useStore.getState().showToast('这张卡已经没有在跑的任务了', 'info')
+    return 0
+  }
+  // 并发跑：stopTask 内部只有同步的 setState + 异步写盘，逐条 await 会让几百条串成几秒
+  const results = await Promise.all(running.map((item) => stopTask(item.id, { silent: true })))
+  const stopped = results.filter(Boolean).length
+  useStore.getState().showToast(
+    stopped > 1 ? `已停止这张卡的 ${stopped} 条任务` : '已停止生成，可随时重试',
+    'info',
+  )
+  return stopped
 }
 
 export async function retryTask(

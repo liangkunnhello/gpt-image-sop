@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, cardStatsMap, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, cardStatsMap, stopCard, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -7140,5 +7140,41 @@ describe('画廊整表统计', () => {
       task({ id: 'b', sopJobId: 'job-1', sopPromptIndex: 1, outputImages: ['i1'] }),
     ]
     expect(cardStatsMap(tasks).get('job-1')).toEqual({ expected: 1, gap: 0 })
+  })
+})
+/**
+ * 「停止」要停整张卡，不是只停代表任务。
+ *
+ * 合并卡的代表任务是编号最小的那条，往往早就出完了；
+ * 只调 stopTask(代表任务) 会立刻 return false —— 用户点了完全没反应。
+ */
+describe('停止整张卡', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    useStore.setState({ tasks: [], showToast: vi.fn() })
+  })
+
+  it('组内只停还在跑的那几条，已完成的保持不动', async () => {
+    const done = task({ id: 'a', sopJobId: 'job-1', sopPromptIndex: 1, status: 'done', outputImages: ['i1'] })
+    const run1 = task({ id: 'b', sopJobId: 'job-1', sopPromptIndex: 2, status: 'running' })
+    const run2 = task({ id: 'c', sopJobId: 'job-1', sopPromptIndex: 3, status: 'running' })
+    useStore.setState({ tasks: [done, run1, run2] })
+
+    expect(await stopCard(done)).toBe(2)
+    const after = useStore.getState().tasks
+    expect(after.find((item) => item.id === 'a')?.status).toBe('done')
+    expect(after.find((item) => item.id === 'b')?.status).toBe('error')
+    expect(after.find((item) => item.id === 'c')?.status).toBe('error')
+    // 停下来的要标成用户主动停止，界面上才显示「已停止」而不是「失败」
+    expect(after.find((item) => item.id === 'b')?.error).toBe(TASK_STOPPED_MESSAGE)
+  })
+
+  it('组内没有在跑的任务时给出提示，而不是静默返回', async () => {
+    const done = task({ id: 'a', sopJobId: 'job-1', sopPromptIndex: 1, status: 'done' })
+    useStore.setState({ tasks: [done] })
+    const toast = vi.fn()
+    useStore.setState({ showToast: toast })
+    expect(await stopCard(done)).toBe(0)
+    expect(toast).toHaveBeenCalledOnce()
   })
 })

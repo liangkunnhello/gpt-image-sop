@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { TASK_STOPPED_MESSAGE, useStore, resumeCard, retryTask, stopTask } from '../store'
+import { TASK_STOPPED_MESSAGE, useStore, resumeCard, retryTask, stopCard } from '../store'
 import { useClipStore } from '../lib/clipSimilarity'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { useNearViewport } from '../hooks/useNearViewport'
@@ -572,9 +572,10 @@ export default function TaskCard({
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation()
-                  void stopTask(task.id)
+                  // 停整组：只停代表任务的话，组里其他几百条照跑，看着就是「点了没反应」
+                  void stopCard(task)
                 }}
-                title="停止生成（已出的部分不会保存）"
+                title="停止这张卡里所有在跑的任务（已出的图会保留）"
                 className="flex items-center gap-1 rounded-full border border-gray-300 bg-white/80 px-2 py-0.5 text-[11px] text-gray-600 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600 dark:border-white/20 dark:bg-white/10 dark:text-gray-200 dark:hover:bg-red-500/20 dark:hover:text-red-300"
               >
                 <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
