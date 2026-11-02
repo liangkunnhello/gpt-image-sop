@@ -57,7 +57,7 @@ import VariableImageSlots from './input/VariableImageSlots'
 import InputThumbImage from './input/inputThumbImage'
 import InputBatchBars from './input/inputBatchBars'
 import InputParamsPanel from './input/inputParamsPanel'
-import { taskGate } from '../lib/taskGate'
+import { gateTotals } from '../lib/taskGate'
 import { httpStats } from '../lib/httpStats'
 
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[], defaultFavoriteCollectionId: string | null) {
@@ -554,22 +554,25 @@ export default function InputBar() {
   const batchRunning = Boolean(batchProgress)
   // SOP / 变量模式靠参考图与提示词驱动，输入框可以为空，发送按钮常亮（缺图时点一下会提示）
   /**
-   * 实时并发状态。两组数分开看，别混为一谈：
+   * 实时并发状态。三组数分开看，别混为一谈：
    *
-   * - running / waiting / limit：**闸门发出去的名额**（引擎条数）
+   * - running / waiting / limit：**闸门发出去的名额**（引擎条数），按批限流，
+   *   所以 batches 是现在有几批在跑，limit 是「每批」的上限
    * - inFlight / peak：**网络层实测在途请求数**（platform.apiFetch 里数的）
    *
    * 只有后者能回答「是不是真的有 10 个请求在跑」。名额 10 而峰值常年 2~3，
    * 说明名额被读图 / 算尺寸 / 写库这类非网络工作占着，或者请求根本没发出去。
    * 1 秒轮询一次，值没变就返回同一个对象，避免 InputBar 每秒重渲染。
    */
-  const [gateStats, setGateStats] = useState({ running: 0, waiting: 0, limit: 0, inFlight: 0, peak: 0 })
+  const [gateStats, setGateStats] = useState({ running: 0, waiting: 0, limit: 0, batches: 0, inFlight: 0, peak: 0 })
   useEffect(() => {
     const tick = () => {
+      const totals = gateTotals()
       const next = {
-        running: taskGate.activeCount,
-        waiting: taskGate.waitingCount,
-        limit: Number.isFinite(taskGate.limitCount) ? taskGate.limitCount : 0,
+        running: totals.active,
+        waiting: totals.waiting,
+        limit: totals.perBatchLimit,
+        batches: totals.batches,
         inFlight: httpStats.current,
         peak: httpStats.peakCount,
       }
@@ -577,6 +580,7 @@ export default function InputBar() {
         prev.running === next.running
         && prev.waiting === next.waiting
         && prev.limit === next.limit
+        && prev.batches === next.batches
         && prev.inFlight === next.inFlight
         && prev.peak === next.peak
           ? prev
@@ -2298,12 +2302,14 @@ export default function InputBar() {
             >
               <span className={`flex h-1.5 w-1.5 shrink-0 rounded-full ${gateStats.waiting > 0 ? 'bg-amber-500' : 'bg-blue-500'}`} />
               <span className="min-w-0 flex-1">
+                {/* 名额按批算：光看总数会被误读，所以把「几批」和「每批上限」都写出来 */}
+                {gateStats.batches > 1 ? `${gateStats.batches} 批在跑（每批上限 ${gateStats.limit || '不限'}）· ` : ''}
                 {gateStats.waiting > 0
-                  // 有排队：说明上限被打满，慢在本地排队
-                  ? `名额 ${gateStats.running}${gateStats.limit ? ` / 上限 ${gateStats.limit}` : ''} · 排队 ${gateStats.waiting} 个 · 实际在途请求 ${gateStats.inFlight} 个`
+                  // 有排队：说明这批的名额被打满，慢在本地排队
+                  ? `名额 ${gateStats.running}${gateStats.batches > 1 ? '' : `${gateStats.limit ? ` / 上限 ${gateStats.limit}` : ''}`} · 排队 ${gateStats.waiting} 个 · 实际在途请求 ${gateStats.inFlight} 个`
                   // 无排队：名额没卡住，还是慢就只能是接口/渠道那边串行
-                  : `名额 ${gateStats.running} 个${gateStats.limit ? `（上限 ${gateStats.limit}）` : '（不限）'} · 实际在途请求 ${gateStats.inFlight} 个`}
-                {gateStats.peak > 0 && `（本轮峰值 ${gateStats.peak}）`}
+                  : `名额 ${gateStats.running} 个${gateStats.batches > 1 ? '' : `${gateStats.limit ? `（上限 ${gateStats.limit}）` : '（不限）'}`} · 实际在途请求 ${gateStats.inFlight} 个`}
+                {gateStats.peak > 0 && `（峰值 ${gateStats.peak}）`}
               </span>
               <button
                 type="button"

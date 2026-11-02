@@ -539,8 +539,8 @@ export default function InputParamsPanel({
               )}
               <p className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
                 提示词之间空两行分隔，当前共 {batchPromptCount} 条；参考图和参数对每条提示词都生效。
-                这里的「同时在跑」是整个软件的上限：普通模式、SOP、变量模式的任务一起算，
-                同时开几批也不会把服务商打爆。
+                这里的「同时在跑」按**一批**算：一次提交（一张任务卡）里同时发这么多个请求，
+                多出来的在这批里排队；另外提交的一批有自己的名额，互不占用。
               </p>
             </>
           )}

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
-import { taskGate } from './lib/taskGate'
+import { resetAllGates } from './lib/taskGate'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
 import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
@@ -7190,7 +7190,7 @@ describe('出图请求的并发', () => {
     await clearTasks()
     vi.mocked(callImageApi).mockReset()
     // 上一个用例的请求永不返回，名额不会释放，先清空
-    taskGate.reset()
+    resetAllGates()
     useStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
