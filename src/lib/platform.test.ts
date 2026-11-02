@@ -5,13 +5,14 @@ import { apiFetch, FetchConnectError } from './platform'
 const invoke = vi.hoisted(() => vi.fn())
 // 替换 FinalizationRegistry，用来检查登记、注销，并模拟回收
 const registry = vi.hoisted(() => {
-  const state = { cleanup: (_id: string) => undefined as unknown, live: new Map<object, string>() }
+  // 登记的值是「回收时要收尾的东西」（请求 id + 在途计数收尾），不是一个裸 id
+  const state = { cleanup: (_held: { id: string; finish: () => void }) => undefined as unknown, live: new Map<object, { id: string; finish: () => void }>() }
   globalThis.FinalizationRegistry = class {
     // 其他库也会创建实例，只记下 apiFetch 登记过的那个
-    constructor(private cleanup: (id: string) => unknown) {}
-    register(_target: object, id: string, token: object) {
+    constructor(private cleanup: (held: { id: string; finish: () => void }) => unknown) {}
+    register(_target: object, held: { id: string; finish: () => void }, token: object) {
       state.cleanup = this.cleanup
-      state.live.set(token, id)
+      state.live.set(token, held)
     }
     unregister(token: object) { return state.live.delete(token) }
   } as unknown as typeof FinalizationRegistry
@@ -149,10 +150,10 @@ describe('apiFetch（客户端）', () => {
     fakeBackend({ status: 503 }, [encode('busy')])
     await apiFetch('https://api.example.com')
     expect(registry.live.size).toBe(1)
-    const [id] = registry.live.values()
+    const [held] = registry.live.values()
     registry.live.clear()
-    registry.cleanup(id)
-    expect(invoke).toHaveBeenCalledWith('http_cancel', { id })
+    registry.cleanup(held)
+    expect(invoke).toHaveBeenCalledWith('http_cancel', { id: held.id })
   })
 
   it('已取消的信号不发出请求', async () => {

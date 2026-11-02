@@ -497,10 +497,40 @@ export interface PromptMessagesInput {
  */
 export function stripButtonPlaceholders(sopText: string): string {
   const pattern = /(按钮|CTA|胶囊)[^。\n]*(留出|留白|位置|槽位|占位)|(预留|留出)[^。\n]*(按钮|CTA)/
-  return sopText
+  /**
+   * 按**分句**删，不按整行删。
+   *
+   * 原来按行过滤：一行里只要出现「按钮 + 位置」，整行都没了。
+   * 而 SOP 的一行常常既是按钮要求、又带着真正的版式信息
+   * （「底部留白 40px，按钮位置在右下角，整体版式保持居中」）——整行删掉等于把版式也删了。
+   * 更糟的是整份 SOP 写成一段（没有换行）时，一次命中会把**整份 SOP 删空**，
+   * 提示词就退化成「只按系统提示词自由发挥」，看起来就是「SOP 没生效」。
+   */
+  const cleanedLines = sopText
     .split('\n')
-    .filter((line) => !pattern.test(line))
+    .map((line) => {
+      if (!pattern.test(line)) return line
+      // 分句符不只逗号：SOP 里「。必守：留出按钮位置。标题两行」这种写法很常见，
+      // 只按逗号切会把后半句真正的版式要求一起带走
+      const clauses = line.split(/([，,；;。])/)
+      const kept: string[] = []
+      for (const clause of clauses) {
+        // 分隔符原样保留，只把它前面那句判断一下
+        if (/^[，,；;。]$/.test(clause)) {
+          kept.push(clause)
+          continue
+        }
+        if (pattern.test(clause)) continue
+        kept.push(clause)
+      }
+      return kept.join('')
+    })
+    // 只剩标点 / 分隔符的行等于空行，留着会让模型看到一串孤立的句号
+    .filter((line) => !/^[\s。．.，,；;、:：!！?？\-—]*$/.test(line))
     .join('\n')
+
+  // 兜底：删得太狠（剩不到四成）就当没删 —— 宁可留一句按钮要求，也不能把 SOP 弄丢
+  return cleanedLines.length >= sopText.length * 0.4 ? cleanedLines : sopText
 }
 
 export function buildPromptMessages({

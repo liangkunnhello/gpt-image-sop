@@ -253,6 +253,32 @@ describe('按钮形占位与叠字约束', () => {
     expect(user).not.toContain('仅留出按钮位置')
   })
 
+  /**
+   * 按行删会把版式一起删掉；整份 SOP 写成一段时甚至会被删空。
+   * 这两种都会让出图看起来「SOP 没生效」，所以锁住「只删命中的那一段」。
+   */
+  it('只删命中的那一段，不整行删掉版式信息', () => {
+    const sop = '底部留白 40px，按钮位置在右下角，整体版式保持居中'
+    const cleaned = stripButtonPlaceholders(sop)
+    expect(cleaned).toContain('底部留白 40px')
+    expect(cleaned).toContain('整体版式保持居中')
+    expect(cleaned).not.toContain('按钮位置')
+  })
+
+  it('整份 SOP 写成一段时不会被整段删空', () => {
+    const sop = '必守：留出按钮位置（但不生成按钮）。标题两行，卖点四条竖排，底色深绿，主体居中偏右。'
+    const cleaned = stripButtonPlaceholders(sop)
+    expect(cleaned.trim().length).toBeGreaterThan(0)
+    expect(cleaned).toContain('标题两行')
+    expect(cleaned).toContain('底色深绿')
+  })
+
+  it('删得太狠时宁可整份不动（不拿掉一半以上的篇幅）', () => {
+    const sop = '留出按钮位置。'
+    // 删完几乎不剩东西：退回原文，交给写词阶段的「禁止按钮占位」去约束
+    expect(stripButtonPlaceholders(sop)).toBe(sop)
+  })
+
   it('关掉「不要按钮」时不加这段说明', () => {
     const { user } = buildPromptMessages({ sopText: SOP_WITH_BUTTON, count: 1, avoidCta: false })
     expect(user).not.toContain('禁止按钮形占位')

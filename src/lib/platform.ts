@@ -1,5 +1,6 @@
 import { invoke, isTauri as detectTauri } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { httpStats } from './httpStats'
 
 export const isTauri = detectTauri()
 
@@ -18,7 +19,14 @@ const abortReason = (signal: AbortSignal) => signal.reason ?? new DOMException('
 const cancelRequest = (id: string) => void invoke('http_cancel', { id }).catch((err) => console.warn('取消请求失败：', err))
 
 // 响应体既没读完也没取消就被丢弃时（如只看状态码就返回），回收时通知 Rust 断开连接。网页版不需要，也避免旧浏览器缺少该 API 时加载即报错
-const abandonedBodies = isTauri ? new FinalizationRegistry<string>(cancelRequest) : null
+const abandonedBodies = isTauri
+  ? new FinalizationRegistry<{ id: string; finish: () => void }>((held) => {
+    // 响应体既没读完也没取消就被丢弃：断开连接，并且把「在途」计数收回来，
+    // 否则这条会永远挂在在途统计里，界面上的峰值/在途数就再也归不了零
+    cancelRequest(held.id)
+    held.finish()
+  })
+  : null
 
 /**
  * 请求用户配置的 API 或远程图片；客户端中 http/https 请求由 Rust 侧（src-tauri/src/http.rs）发出，不受 CORS 限制。
@@ -27,7 +35,19 @@ const abandonedBodies = isTauri ? new FinalizationRegistry<string>(cancelRequest
  */
 export async function apiFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
   // data:、blob: 和相对地址继续走原生 fetch；每次调用时读取 globalThis.fetch，测试会替换它
-  if (!isTauri || !/^https?:\/\//i.test(String(input))) return globalThis.fetch(input, init)
+  if (!isTauri || !/^https?:\/\//i.test(String(input))) {
+    /**
+     * 网页版只能在「发出 → 拿到响应头」这段计数：
+     * 浏览器不允许包装响应体的生命周期，流式响应会低估在途数。
+     * 客户端版本量的是完整生命周期（见下面的 httpStats.begin/end）。
+     */
+    httpStats.begin()
+    try {
+      return await globalThis.fetch(input, init)
+    } finally {
+      httpStats.end()
+    }
+  }
 
   const signal = init.signal
   // 借 Request 把字符串、FormData、Blob 等请求体统一成字节，FormData 的 multipart 边界也会写进 Content-Type
@@ -44,9 +64,21 @@ export async function apiFetch(input: string | URL, init: RequestInit = {}): Pro
   signal?.addEventListener('abort', cancel, { once: true })
 
   const meta = { id, method: req.method, url: req.url, headers: [...req.headers] }
+  /**
+   * 网络层实测计数：从这里开始算「在途」。
+   * 后面的 finally 分支保证每条请求正好结束一次（正常读完 / 断流 / 取消）。
+   */
+  httpStats.begin()
+  let counted = false
+  const finishHttp = (ok = true) => {
+    if (counted) return
+    counted = true
+    httpStats.end(ok)
+  }
   // 请求体以二进制传给 Rust，避免大图编辑请求经 JSON 数组放大数倍
   const head = await invoke<HttpHead>('http_send', body, { headers: { 'x-meta': encodeURIComponent(JSON.stringify(meta)) } }).catch((err) => {
     settle()
+    finishHttp(false)
     throw signal?.aborted ? abortReason(signal) : new FetchConnectError(String(err))
   })
 
@@ -55,6 +87,7 @@ export async function apiFetch(input: string | URL, init: RequestInit = {}): Pro
   if (nullBody) {
     settle()
     cancel()
+    finishHttp()
   }
   const pull = async (ctrl: ReadableStreamDefaultController<Uint8Array>) => {
     try {
@@ -62,8 +95,10 @@ export async function apiFetch(input: string | URL, init: RequestInit = {}): Pro
       if (chunk.byteLength) return ctrl.enqueue(chunk)
       settle()
       ctrl.close()
+      finishHttp()
     } catch (err) {
       settle()
+      finishHttp(false)
       ctrl.error(signal?.aborted ? abortReason(signal) : new TypeError(String(err)))
     }
   }
@@ -72,13 +107,15 @@ export async function apiFetch(input: string | URL, init: RequestInit = {}): Pro
     cancel: () => {
       settle()
       cancel()
+      // 主动取消也算这条请求结束：不算失败，但绝不能留在在途计数里
+      finishHttp()
     },
     // 不预读：有人读取时才发起 http_read，否则挂起中的读取会让流一直存活，无法被回收
   }, { highWaterMark: 0 })
   // 登记 pull 函数而不是流：流是 Web API 包装对象，apiFetch 返回后只经 C++ 内部可达（Response、reader 持有的是内部对象），
   // V8 的 minor GC 会丢弃这种未修改过的包装对象并触发回调，正在读取的请求会被误取消。
   // pull 是普通 JS 函数，只要流还活着就被它引用，流真正被丢弃后才会回收。Node 单测覆盖不到这一点，只能在 WebView2 中验证
-  if (stream) abandonedBodies?.register(pull, id, token)
+  if (stream) abandonedBodies?.register(pull, { id, finish: () => finishHttp() }, token)
   const res = new Response(stream, { status: head.status, statusText: head.statusText, headers: head.headers })
   // WebView2 中 Response 的 text()、json() 等会把响应体流的错误一律换成 TypeError('Failed to fetch')，
   // 取消原因和断流原因都会丢失，因此改为直接读取流
