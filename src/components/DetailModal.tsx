@@ -3,7 +3,6 @@ import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, get
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
-import AgentTurnModal from './AgentTurnModal'
 import { directionPath, useSopStore } from '../lib/sopStore'
 import { productIdForDirection } from '../lib/applyPostTemplate'
 import { channelLabel } from '../lib/channel'
@@ -88,8 +87,6 @@ export default function DetailModal() {
   const [sopEditing, setSopEditing] = useState(false)
   /** 图片 ↔ 提示词对照视图 */
   const [pairOpen, setPairOpen] = useState(false)
-  /** Agent 卡：按轮查看「你说了什么 → 出了哪几张」 */
-  const [agentTurnsOpen, setAgentTurnsOpen] = useState(false)
   /** 用 SOP 再补一批图的弹窗 */
   const [supplementOpen, setSupplementOpen] = useState(false)
   /** 派发弹窗：AI 原图套多个产品的水印 / Logo */
@@ -191,15 +188,6 @@ export default function DetailModal() {
    * 拿它判断「要不要继续」永远算出不缺，500 条只出 183 张的卡也就没有继续入口。
    */
   const cardGap = useMemo(() => (rawTask ? cardOutputGap(rawTask, tasks) : 0), [rawTask, tasks])
-  /** Agent 卡：这张卡有几轮对话（同一轮的几条任务共用一个 index，去重后才是轮数） */
-  const agentTurnCount = useMemo(() => {
-    const list = groupTasks.length ? groupTasks : (rawTask ? [rawTask] : [])
-    const indexes = new Set<number>()
-    for (const item of list) {
-      if (item.agentTurn) indexes.add(item.agentTurn.index)
-    }
-    return indexes.size
-  }, [groupTasks, rawTask])
 
   /**
    * 详情页开着的时候结果才回来：用户其实已经看到了，
@@ -1925,17 +1913,7 @@ export default function DetailModal() {
                 输入内容
               </h3>
               {/* 生成出来的提示词与对应图收进一个入口：详情页只显示「输入内容」，不再铺一片文字墙 */}
-              {/* Agent 卡按「轮」看，不按「条」看：一轮 4 条提示词，逐条展开会把同一句原话重复四遍 */}
-              {agentTurnCount > 0 ? (
-                <button
-                  type="button"
-                  onClick={() => setAgentTurnsOpen(true)}
-                  title="查看这张卡的每一轮：你说了什么、出了哪几张"
-                  className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700 transition-colors hover:bg-emerald-100 dark:bg-emerald-500/15 dark:text-emerald-300 dark:hover:bg-emerald-500/25"
-                >
-                  {agentTurnCount} 轮对话 · 看图
-                </button>
-              ) : groupTasks.length > 1 && (
+              {groupTasks.length > 1 && (
                 <button
                   type="button"
                   onClick={() => setPairOpen(true)}
@@ -2134,13 +2112,6 @@ export default function DetailModal() {
                 tasks={groupTasks}
                 title={task.sopName || '图片与提示词对照'}
                 onClose={() => setPairOpen(false)}
-              />
-            )}
-            {agentTurnsOpen && groupTasks.length > 0 && (
-              <AgentTurnModal
-                tasks={groupTasks}
-                title={task.sopName || 'Agent 卡'}
-                onClose={() => setAgentTurnsOpen(false)}
               />
             )}
             {showRevisedPrompt && currentRevisedPrompt && (

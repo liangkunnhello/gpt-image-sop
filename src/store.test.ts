@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, cardStatsMap, submitSopTasks, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, cardStatsMap, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -7082,52 +7082,6 @@ describe('合并卡的缺口', () => {
 
     request.resolve({ images: [], actualParams: {}, actualParamsList: [], revisedPrompts: [] })
     await vi.waitFor(() => expect(useStore.getState().tasks.find((item) => item.id === 'b')?.status).toBe('done'))
-  })
-})
-/**
- * Agent 卡：一轮的几条任务必须共享同一个 sopJobId 和同一份轮次记录。
- *
- * 前者是「所有图都落在同一张卡里」的唯一依据（画廊按 sopJobId 聚合），
- * 后者是详情页「第几轮 · 你说了什么」的唯一依据。
- */
-describe('Agent 卡的任务落库', () => {
-  beforeEach(async () => {
-    await clearTasks()
-    vi.mocked(callImageApi).mockReset()
-    // 出图请求挂住不返回：这里只验证建卡与字段，不关心出图结果
-    vi.mocked(callImageApi).mockImplementation(() => new Promise(() => {}))
-    useStore.setState({
-      settings: { ...DEFAULT_SETTINGS, baseUrl: 'https://api.example.com/v1', apiKey: 'test-key' },
-      tasks: [],
-      showToast: vi.fn(),
-    })
-  })
-
-  it('同一轮的几条任务共用一个 job、一份轮次记录，索引连续', async () => {
-    const ids = await submitSopTasks({
-      sopJobId: 'agent-job',
-      sopName: 'Agent · 测试',
-      systemPromptName: 'Agent 对话',
-      prompts: ['p1', 'p2', 'p3'],
-      params: { ...DEFAULT_PARAMS, n: 1 },
-      agentTurn: {
-        index: 1,
-        userText: '画一张主图',
-        reply: '理解为：深绿底 + 锁图标',
-        promptCount: 3,
-        baseImageIds: [],
-        createdAt: 1,
-      },
-    })
-
-    expect(ids).toHaveLength(3)
-    const tasks = useStore.getState().tasks.filter((item) => item.sopJobId === 'agent-job')
-    expect(tasks).toHaveLength(3)
-    // 每条都带同一份轮次记录：任何一条被删/被替换，这一轮的归属都还在
-    expect(tasks.every((item) => item.agentTurn?.index === 1 && item.agentTurn?.userText === '画一张主图')).toBe(true)
-    expect(tasks.map((item) => item.sopPromptIndex).sort()).toEqual([1, 2, 3])
-    // 每条只出一张：一轮四张 = 四条任务，不是一个请求要四张
-    expect(tasks.every((item) => item.params.n === 1)).toBe(true)
   })
 })
 /**

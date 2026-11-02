@@ -335,26 +335,6 @@ export interface TaskInputSnapshot {
   customCopy?: string
 }
 
-/**
- * Agent 卡模式：一轮对话的元信息。
- *
- * 同一轮的每条任务都存一份（内容相同），按 index 去重就是这张卡的轮次列表 ——
- * 只写在第一条上的话，那条被删/被重试替换后，整轮就丢了身份。
- */
-export interface AgentCardTurn {
-  /** 第几轮，从 1 开始 */
-  index: number
-  /** 用户这一轮说的话 */
-  userText: string
-  /** 模型给的简短说明（可能为空，解析失败时就是空串） */
-  reply: string
-  /** 本轮写了几条提示词 */
-  promptCount: number
-  /** 本轮带进去的底图 id（来自上一版的图，第一轮为空） */
-  baseImageIds: string[]
-  createdAt: number
-}
-
 export interface TaskRecord {
   id: string
   prompt: string
@@ -472,12 +452,6 @@ export interface TaskRecord {
   channel?: string
   /** SOP 模式：反推 SOP 期间插入的占位卡，拿到提示词后会被删除 */
   sopPlaceholder?: boolean
-  /**
-   * Agent 卡模式：本轮对话记录。
-   *
-   * 同一轮的每条任务都带同一份，详情页据此把几十条任务还原成「第几轮 · 你说了什么 · 出了哪几张」。
-   */
-  agentTurn?: AgentCardTurn
   /** SOP 模式：本轮使用的参考图 id，复用配置时回填输入框 */
   sopReferenceImageIds?: string[]
   /**

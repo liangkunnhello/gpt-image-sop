@@ -57,7 +57,6 @@ import VariableImageSlots from './input/VariableImageSlots'
 import InputThumbImage from './input/inputThumbImage'
 import InputBatchBars from './input/inputBatchBars'
 import InputParamsPanel from './input/inputParamsPanel'
-import { runAgentCardTurn } from '../lib/agentCardPipeline'
 import { taskGate } from '../lib/taskGate'
 
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[], defaultFavoriteCollectionId: string | null) {
@@ -540,13 +539,8 @@ export default function InputBar() {
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
   const sopMode = useSopStore((s) => s.sopMode)
   const variableMode = useSopStore((s) => s.variableMode)
-  const agentMode = useSopStore((s) => s.agentMode)
-  const setAgentMode = useSopStore((s) => s.setAgentMode)
-  const agentCardJobId = useSopStore((s) => s.agentCardJobId)
-  const endAgentCard = useSopStore((s) => s.endAgentCard)
   /** 普通模式：既不跑 SOP 也不跑变量，手写提示词直接出图 */
-  // Agent 卡模式不是普通模式：它自己走对话链路，不参与批量/融图那套
-  const plainMode = !sopMode && !variableMode && !agentMode
+  const plainMode = !sopMode && !variableMode
   const plainImageMode = useStore((s) => s.plainImageMode)
   const fixedImages = useStore((s) => s.fixedImages)
   const variableImages = useStore((s) => s.variableImages)
@@ -558,32 +552,6 @@ export default function InputBar() {
   // 批量进行中不再锁提交：新提交会排到队尾，当前批结束后自动开始
   const batchRunning = Boolean(batchProgress)
   // SOP / 变量模式靠参考图与提示词驱动，输入框可以为空，发送按钮常亮（缺图时点一下会提示）
-  /**
-   * Agent 卡模式：这张卡现在有几轮、几张图。
-   *
-   * 就靠 sopJobId 把多轮任务聚成一张卡 —— 和普通模式拆请求是同一个机制，
-   * 所以「所有图都在一张卡里」不需要另建结构。
-   */
-  const agentTurnCount = useStore((s) => {
-    if (!agentCardJobId) return 0
-    const indexes = new Set<number>()
-    for (const task of s.tasks) {
-      if (task.sopJobId !== agentCardJobId || task.deletedAt || task.sopPlaceholder) continue
-      if (task.agentTurn) indexes.add(task.agentTurn.index)
-    }
-    return indexes.size
-  })
-  const agentImageCount = useStore((s) => {
-    if (!agentCardJobId) return 0
-    let count = 0
-    for (const task of s.tasks) {
-      if (task.sopJobId !== agentCardJobId || task.deletedAt || task.sopPlaceholder) continue
-      count += task.outputImages.length
-    }
-    return count
-  })
-  /** 一轮对话要调文本模型写提示词，期间不让重复提交 */
-  const [agentSending, setAgentSending] = useState(false)
   /**
    * 闸门实时状态：正在跑几个、还在排队几个、上限多少。
    *
@@ -608,22 +576,18 @@ export default function InputBar() {
   }, [])
 
   const canSubmit = Boolean(
-    (sopMode || variableMode || prompt.trim()) && hasSubmitApiConfig && !activeAgentIsRunning && !agentSending,
+    (sopMode || variableMode || prompt.trim()) && hasSubmitApiConfig && !activeAgentIsRunning,
   )
   const batchEnabled = appMode === 'gallery' && settings.showBatchPrompt && settings.batchPromptEnabled
   // 批量进行中始终在画廊显示入口，以便查看进度和停止
   const showBatch = appMode === 'gallery' && (settings.showBatchPrompt || batchRunning)
   const batchPromptCount = useMemo(() => batchEnabled ? splitBatchPrompts(prompt).length : 0, [batchEnabled, prompt])
-  const submitButtonAriaLabel = agentSending
-    ? '正在写提示词'
-    : activeAgentIsRunning
+  const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'
     : hasSubmitApiConfig
     ? maskDraft ? '遮罩编辑' : batchEnabled ? `批量生成 ${batchPromptCount} 条` : '生成图像'
     : '请先配置 API'
-  const submitTooltipText = agentSending
-    ? '正在理解你的要求、写提示词…'
-    : gateStats.waiting > 0
+  const submitTooltipText = gateStats.waiting > 0
     ? `正在跑 ${gateStats.running} 个 · 排队 ${gateStats.waiting} 个${gateStats.limit ? `（并发上限 ${gateStats.limit}）` : ''}`
     : activeAgentIsRunning
     ? '停止生成'
@@ -632,9 +596,7 @@ export default function InputBar() {
     : batchRunning || queuedSubmitCount > 0
     ? `批量进行中：提交会排队，当前批结束后自动开始${queuedSubmitCount > 0 ? `（已有 ${queuedSubmitCount} 个在排队）` : ''}`
     : '提交任务'
-  const promptPlaceholder = agentMode
-    ? 'Agent 模式：说一句你想怎么改（参考图怎么用也写在这里），每句话就是这张卡的下一轮...'
-    : variableMode
+  const promptPlaceholder = variableMode
     ? '变量模式：这里写的会被当作「本次要求」带进策略与填词；留空也能发...'
     : sopMode
     ? 'SOP 模式：这里写的会被当作「本次要求」写进每条提示词；留空也能发...'
@@ -822,58 +784,9 @@ export default function InputBar() {
     clearInputAfterSubmit()
   }, [clearInputAfterSubmit, inputImages, fixedImages, variableImages])
 
-  /**
-   * Agent 卡模式发一轮。
-   *
-   * 和另外两个模式的区别：不弹窗、不分卡，发出去就是「这张卡的下一轮」。
-   * 参考图不用手动指定 —— 程序自动带上一版的图，怎么用写在对话里。
-   */
-  const runAgentTurn = useCallback(async () => {
-    const text = useStore.getState().prompt.trim()
-    if (!text) {
-      useStore.getState().showToast('先说一句你想怎么改', 'info')
-      return
-    }
-    if (agentSending) return
-    const current = useStore.getState()
-    const profile = getActiveApiProfile(current.settings)
-    if (!profile?.apiKey) {
-      current.showToast('当前接口配置没有 Key，先在设置里填好', 'error')
-      current.setShowSettings(true)
-      return
-    }
-    setAgentSending(true)
-    try {
-      const result = await runAgentCardTurn({
-        text,
-        count: current.params.n,
-        // 参数在入队那一刻定死：写提示词要几十秒，中途改尺寸不该影响这一轮
-        params: current.params,
-        profile,
-        directionId: useSopStore.getState().activeDirectionId || undefined,
-      })
-      // 只清提示词：输入区的图片不是这一轮的依据（底图由上一版自动带入）
-      useStore.getState().setPrompt('')
-      useStore.getState().showToast(
-        result.reply
-          ? `第 ${result.turnIndex} 轮：${result.reply}`
-          : `第 ${result.turnIndex} 轮已提交 ${result.promptCount} 条`,
-        'success',
-      )
-    } catch (err) {
-      useStore.getState().showToast(err instanceof Error ? err.message : '这一轮失败了', 'error')
-    } finally {
-      setAgentSending(false)
-    }
-  }, [agentSending])
-
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {
       void submitAgentMessage()
-      return
-    }
-    if (agentMode) {
-      void runAgentTurn()
       return
     }
     if (variableMode) {
@@ -897,7 +810,7 @@ export default function InputBar() {
       style: pickedStyle?.content,
     })
     void submitTask({ promptPrefix: presetPrefix })
-  }, [appMode, agentMode, runAgentTurn, sopMode, variableMode, inputImages.length, fixedImages.length, variableImages.length, pickedPoint, pickedStyle, taskCopyText])
+  }, [appMode, sopMode, variableMode, inputImages.length, fixedImages.length, variableImages.length, pickedPoint, pickedStyle, taskCopyText])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -2378,34 +2291,6 @@ export default function InputBar() {
             </div>
           )}
 
-          {/*
-            Agent 卡模式的状态条：这张卡聊到第几轮、攒了多少张。
-            没有「输入图」入口 —— 底图由上一版自动带入，怎么用写在对话里。
-          */}
-          {agentMode && (
-            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200/70 bg-emerald-50 px-3 py-1.5 text-xs text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200">
-              <span className="min-w-0 flex-1 truncate">
-                {agentSending
-                  ? '正在理解你的要求、写提示词…'
-                  : agentTurnCount > 0
-                    ? `本卡 · 第 ${agentTurnCount} 轮 · 共 ${agentImageCount} 张`
-                    : '这张卡还没开始，下一句话就是第 1 轮'}
-              </span>
-              {agentTurnCount > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    endAgentCard()
-                    useStore.getState().showToast('已结束这张卡，下一句话会开一张新卡', 'info')
-                  }}
-                  className="shrink-0 rounded-lg bg-white/70 px-2 py-1 font-medium text-emerald-700 transition-colors hover:bg-white dark:bg-white/10 dark:text-emerald-200 dark:hover:bg-white/[0.16]"
-                >
-                  结束这张卡
-                </button>
-              )}
-            </div>
-          )}
-
           {/* SOP / 变量模式：参考图 / 固定图 / 变量图三个独立入口，各自拖入互不串 */}
           {(variableMode || sopMode) && (
             <VariableImageSlots
@@ -2416,7 +2301,7 @@ export default function InputBar() {
           )}
 
           {/* 输入图片行（移动端可折叠）。SOP / 变量模式走上面的三分区，这里不再重复渲染 */}
-          {!variableMode && !sopMode && !agentMode && inputImages.length > 0 && (
+          {!variableMode && !sopMode && inputImages.length > 0 && (
             isMobile ? (
               <>
                 <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
@@ -2694,29 +2579,6 @@ export default function InputBar() {
                   }`}
                 >
                   {sopProgress && variableMode ? `${sopProgress.done}/${sopProgress.total}` : '变量'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAgentMode(!agentMode)}
-                  className={`h-10 px-3 rounded-xl text-xs font-medium transition-all ${
-                    agentMode
-                      ? 'bg-emerald-500 text-white'
-                      : 'bg-gray-200 dark:bg-white/[0.06] text-gray-500 dark:text-gray-300'
-                  }`}
-                >
-                  {agentMode && agentSending ? '写词…' : 'Agent'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAgentMode(!agentMode)}
-                  title="Agent 模式：在输入框里连着几轮对话改图，所有轮次的图都落在同一张任务卡里"
-                  className={`h-10 px-3 rounded-xl text-xs font-medium transition-all shadow-sm ${
-                    agentMode
-                      ? 'bg-emerald-500 text-white hover:bg-emerald-600'
-                      : 'bg-gray-200 dark:bg-white/[0.06] text-gray-500 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-white/[0.1]'
-                  }`}
-                >
-                  {agentMode && agentSending ? '写词…' : 'Agent'}
                 </button>
                 {renderAddImageButton(false)}
                 <div
