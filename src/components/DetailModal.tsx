@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, isResumableTask, resumeTask, retryTask, updateSopText, trashTask, trashOutputImage, trashOutputImages, deliverTaskNow, openDeliveryFolderForTask, resolveTaskDeliveryTarget } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, reapplyPostTemplate, cardOutputGap, resumeCard, retryTask, updateSopText, trashTask, trashOutputImage, trashOutputImages, deliverTaskNow, openDeliveryFolderForTask, resolveTaskDeliveryTarget } from '../store'
 import type { TaskRecord } from '../types'
 import SopEditorModal from './SopEditorModal'
 import PromptPairModal from './PromptPairModal'
@@ -180,6 +180,14 @@ export default function DetailModal() {
     // 摊平逻辑集中在 mergeCardTasks：回收站标记、人工改判这些「按图的字段」必须一起合并
     return mergeCardTasks(groupTasks)
   }, [rawTask, groupTasks])
+
+  /**
+   * 整组还差多少张。
+   *
+   * 详情页展示的是整组图，但合并出来的 task.params.n 只是代表任务那份（通常是 1）——
+   * 拿它判断「要不要继续」永远算出不缺，500 条只出 183 张的卡也就没有继续入口。
+   */
+  const cardGap = useMemo(() => (rawTask ? cardOutputGap(rawTask, tasks) : 0), [rawTask, tasks])
 
   /**
    * 详情页开着的时候结果才回来：用户其实已经看到了，
@@ -1190,7 +1198,9 @@ export default function DetailModal() {
    * 走 retryTask 的话会按设置新建一张卡，用户只是想补回这张，不是想再要一张。
    */
   const handleRetry = () => {
-    if (isResumableTask(task)) void resumeTask(task)
+    if (!rawTask || !task) return
+    // 按整组判断：合并卡里只要还有没出够的，就该补，而不是整条重做
+    if (cardGap > 0) void resumeCard(rawTask)
     else retryTask(task)
     setDetailTaskId(null)
   }
@@ -1867,14 +1877,18 @@ export default function DetailModal() {
                         handleRetry()
                       }}
                       className="inline-flex items-center justify-center rounded-full border border-blue-200/80 bg-white/80 px-3 py-1.5 text-blue-500 transition hover:bg-blue-50 dark:border-blue-400/20 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
-                      aria-label={isResumableTask(task) ? '继续这张卡' : '重试任务'}
+                      aria-label={cardGap > 0 ? '继续这张卡' : '重试任务'}
                     >
                       <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>
                     </button>
                     <ViewportTooltip visible={retryTooltip.visible} className="whitespace-nowrap">
-                      {isResumableTask(task) ? '继续这张卡（接着上次跑完）' : '重试任务'}
+                      {cardGap > 0
+                        ? (task.outputImages.length > 0
+                          ? `继续补剩下的 ${cardGap} 张（已出 ${task.outputImages.length} 张）`
+                          : '继续这张卡（接着上次跑完）')
+                        : '重试任务'}
                     </ViewportTooltip>
                   </div>
                 )}

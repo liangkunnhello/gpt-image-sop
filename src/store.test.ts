@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { TASK_STOPPED_MESSAGE, addImagesFromFiles, clearSubmittedInput, countResumableTasks, isResumableTask, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -6857,13 +6857,24 @@ describe('断点继续的候选判断', () => {
     expect(isResumableTask(failed({ error: TASK_STOPPED_MESSAGE }))).toBe(true)
   })
 
-  it('已经出过图的不算断点（那是重做，不是接着跑）', () => {
+  it('出够了的不算（那是重做，不是接着跑）', () => {
     expect(isResumableTask(failed({ outputImages: ['img-1'] }))).toBe(false)
   })
 
-  it('正在跑 / 已完成的都不算', () => {
-    expect(isResumableTask(task({ status: 'running' }))).toBe(false)
-    expect(isResumableTask(task({ status: 'done' }))).toBe(false)
+  it('只出了一部分也算缺口：设 500 张只出 183 张要能继续', () => {
+    const partial = failed({
+      status: 'done',
+      error: null,
+      params: { ...DEFAULT_PARAMS, n: 500 },
+      outputImages: Array.from({ length: 183 }, (_, index) => `img-${index}`),
+    })
+    expect(outputGap(partial)).toBe(317)
+    expect(isResumableTask(partial)).toBe(true)
+  })
+
+  it('正在跑的不算；一张都没出、说好出一张的也算缺口', () => {
+    expect(isResumableTask(task({ status: 'running', outputImages: [] }))).toBe(false)
+    expect(isResumableTask(task({ status: 'done', outputImages: [] }))).toBe(true)
   })
 
   it('已经在自动重连的不重复提交', () => {
@@ -6960,11 +6971,105 @@ describe('任务卡上的继续', () => {
     await vi.waitFor(() => expect(useStore.getState().tasks[0].status).toBe('done'))
   })
 
+  /**
+   * 只出了一部分时，继续只补缺口那几张，并且要**追加**到已有结果上。
+   * 走整条重跑的话，outputImages 会被清空、旧图还会被 deleteUnreferencedImageIds 删掉。
+   */
+  it('出一部分时只补缺口，跑完追加到原结果', async () => {
+    const partial = task({
+      status: 'done',
+      params: { ...DEFAULT_PARAMS, n: 3 },
+      outputImages: ['old-1', 'old-2'],
+    })
+    useStore.setState({ tasks: [partial] })
+    const request = deferred<Awaited<ReturnType<typeof callImageApi>>>()
+    vi.mocked(callImageApi).mockImplementationOnce(() => request.promise)
+
+    expect(await resumeTask(partial)).toBe(true)
+    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledOnce())
+
+    // 只请求缺的那 1 张，不是把 3 张重跑一遍
+    expect(vi.mocked(callImageApi).mock.calls[0][0].params.n).toBe(1)
+    const running = useStore.getState().tasks.find((item) => item.id === partial.id)!
+    // 已出的两张不能被清空
+    expect(running.outputImages).toEqual(['old-1', 'old-2'])
+    // 记录里的应出总数不能被改成缺口数（卡片分母还是 3）
+    expect(running.params.n).toBe(3)
+
+    request.resolve({ images: ['data:image/png;base64,extra'], actualParams: {}, actualParamsList: [], revisedPrompts: [] })
+    await vi.waitFor(() => expect(useStore.getState().tasks[0].status).toBe('done'))
+    expect(useStore.getState().tasks[0].outputImages).toHaveLength(3)
+    expect(useStore.getState().tasks[0].outputImages.slice(0, 2)).toEqual(['old-1', 'old-2'])
+  })
+
   it('已经出过图 / 正在跑的任务点继续不做任何事', async () => {
     const done = task({ status: 'done', outputImages: ['img-1'] })
     useStore.setState({ tasks: [done] })
     const started = await resumeTask(done)
     expect(started).toBe(false)
     expect(useStore.getState().tasks).toEqual([done])
+  })
+})
+/**
+ * 合并卡（同一个 sopJobId 的多条任务）的缺口必须按整组算。
+ *
+ * 卡片展示的是全组拼接的 outputImages，但 params 只是代表任务那一份（n 通常是 1）。
+ * 拿单任务的 n 当分母，500 条只出 183 张的卡永远算成「不缺」，
+ * 界面上也就没有继续入口 —— 用户只能看着 183 张，不知道该怎么补。
+ */
+describe('合并卡的缺口', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    vi.mocked(callImageApi).mockReset()
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, baseUrl: 'https://api.example.com/v1', apiKey: 'test-key' },
+      tasks: [],
+      showToast: vi.fn(),
+      detailTaskId: null,
+    })
+  })
+
+  it('500 条只出 183 张：应出 500、缺口 317', () => {
+    const members = Array.from({ length: 500 }, (_, index) => task({
+      id: `t-${index}`,
+      sopJobId: 'job-1',
+      sopPromptIndex: index,
+      outputImages: index < 183 ? [`img-${index}`] : [],
+      status: index < 183 ? 'done' : 'error',
+      error: index < 183 ? null : '请求中断',
+    }))
+    const card = members[0]
+    expect(cardExpectedCount(card, members)).toBe(500)
+    expect(cardOutputGap(card, members)).toBe(317)
+  })
+
+  it('单任务卡就是它自己的 n', () => {
+    const single = task({ id: 'a', params: { ...DEFAULT_PARAMS, n: 5 }, outputImages: ['1', '2'] })
+    expect(cardExpectedCount(single, [single])).toBe(5)
+    expect(cardOutputGap(single, [single])).toBe(3)
+  })
+
+  it('卡片继续只对没出够的那几条发请求', async () => {
+    const enough = task({ id: 'a', sopJobId: 'job-1', sopPromptIndex: 0, outputImages: ['img-ok'] })
+    const missing = task({
+      id: 'b',
+      sopJobId: 'job-1',
+      sopPromptIndex: 1,
+      status: 'error',
+      error: '请求中断',
+      outputImages: [],
+    })
+    useStore.setState({ tasks: [enough, missing] })
+    const request = deferred<Awaited<ReturnType<typeof callImageApi>>>()
+    vi.mocked(callImageApi).mockImplementationOnce(() => request.promise)
+
+    expect(await resumeCard(enough)).toBe(1)
+    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledOnce())
+    // 出够的那条不能跟着重跑
+    expect(useStore.getState().tasks.find((item) => item.id === 'a')?.status).toBe('done')
+
+    request.resolve({ images: [], actualParams: {}, actualParamsList: [], revisedPrompts: [] })
+    await vi.waitFor(() => expect(useStore.getState().tasks.find((item) => item.id === 'b')?.status).toBe('done'))
   })
 })

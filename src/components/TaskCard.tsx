@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { TASK_STOPPED_MESSAGE, useStore, isResumableTask, resumeTask, retryTask, stopTask } from '../store'
+import { TASK_STOPPED_MESSAGE, useStore, cardExpectedCount, cardOutputGap, resumeCard, retryTask, stopTask } from '../store'
 import { useClipStore } from '../lib/clipSimilarity'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { useNearViewport } from '../hooks/useNearViewport'
@@ -385,9 +385,18 @@ export default function TaskCard({
   const outputErrorCount = task.outputErrors?.length ?? 0
   /** 画廊里按「未进图片回收站」的图来展示与计数 */
   const visibleOutputIds = visibleOutputImages(task)
-  const outputSuccessCount = visibleOutputIds.length
-  const requestedOutputCount = Math.max(task.params.n, outputSuccessCount + outputErrorCount)
   const hasPartialOutputFailure = task.status === 'done' && outputErrorCount > 0
+  /**
+   * 还差几张。原来只有「部分槽位失败」才显示 应出 | 实出，
+   * 而「接口只给了 183 张 / 说好 500 张」这种没有失败记录的缺口是看不出来的 ——
+   * 卡上只有一个 183，用户根本不知道差了多少。
+   *
+   * 按**整组**算：合并卡的 params.n 只是代表任务自己的 1，
+   * 拿它当分母永远算不出 500 的缺口（这正是「没有继续按钮」的原因）。
+   * selector 只返回数字，避免每次重渲染都产生新对象。
+   */
+  const cardExpected = useStore((s) => cardExpectedCount(task, s.tasks))
+  const outputShortfall = useStore((s) => (task.status === 'running' ? 0 : cardOutputGap(task, s.tasks)))
 
   const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
   const showModel = task.apiModel && task.apiModel !== defaultModelForProvider
@@ -655,9 +664,14 @@ export default function TaskCard({
                   )}
                 </div>
               )}
-              {(hasPartialOutputFailure || visibleOutputIds.length > 1) && (
-                <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-                  {hasPartialOutputFailure ? <>{requestedOutputCount} | <span className="font-semibold text-yellow-300">{outputSuccessCount}</span></> : visibleOutputIds.length}
+              {(hasPartialOutputFailure || outputShortfall > 0 || visibleOutputIds.length > 1) && (
+                <span
+                  className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded"
+                  title={outputShortfall > 0 ? `应出 ${cardExpected} 张，已出 ${task.outputImages.length} 张，还差 ${outputShortfall} 张（点继续补）` : undefined}
+                >
+                  {hasPartialOutputFailure || outputShortfall > 0
+                    ? <>{cardExpected} | <span className="font-semibold text-yellow-300">{task.outputImages.length}</span></>
+                    : visibleOutputIds.length}
                 </span>
               )}
             </>
@@ -830,13 +844,15 @@ export default function TaskCard({
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
-              {/* 中断 / 没跑完的卡给「继续」：在这张卡上原地接着跑。
+              {/* 没出够的卡给「继续」：在这张卡上原地接着跑，只补差额。
                   不走「重试」——重试会按设置新建一张卡，旧的失败卡还留着，
                   越点越乱，也看不出哪张是接着上次的。 */}
-              {isResumableTask(task) ? (
+              {outputShortfall > 0 ? (
                 <TaskActionButton
-                  tooltip="继续这张卡（接着上次跑完，不新建卡）"
-                  onClick={() => { void resumeTask(task) }}
+                  tooltip={task.outputImages.length > 0
+                    ? `继续补剩下的 ${outputShortfall} 张（已出 ${task.outputImages.length} 张，不新建卡）`
+                    : '继续这张卡（接着上次跑完，不新建卡）'}
+                  onClick={() => { void resumeCard(task) }}
                   className="p-1.5 rounded-md bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-500/15 dark:text-amber-300 dark:hover:bg-amber-500/25 transition"
                 >
                   <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">

@@ -116,6 +116,14 @@ const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const taskExecutions = new Map<string, symbol>()
 /**
+ * 「继续补图」时本次实际要请求的张数。
+ *
+ * 为什么不直接改 task.params.n：那个字段是**这张卡的应出总数**，
+ * 卡片徽章、详情页都拿它当分母。续跑只补差额（500 里已出 183，就只请求 317），
+ * 但记录里必须还是 500，否则用户会以为自己的设置被改了。
+ */
+const resumeRequestCounts = new Map<string, number>()
+/**
  * 每个正在跑的任务一个中止控制器：用户点「停止」时用它掐断请求。
  * 只放「当前这次执行」的那一个；任务结束时删掉，避免误停已经结束的任务。
  */
@@ -5097,6 +5105,12 @@ async function runTaskExecution(taskId: string) {
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
   /**
+   * 续跑补图只请求缺口那么多张（500 里已出 183 就只发 317）。
+   * 读完立刻删掉：这个值只对当前这一次执行有效，别让下一次重试误用。
+   */
+  const resumeCount = resumeRequestCounts.get(taskId)
+  resumeRequestCounts.delete(taskId)
+  /**
    * 等名额期间任务可能已经被停掉 / 删掉 / 改写过了。
    * 不拦住的话，停止之后过一会儿还会照旧发一次请求出去。
    */
@@ -5174,11 +5188,13 @@ async function runTaskExecution(taskId: string) {
     // 渠道不支持这个尺寸时改按同比例更大的尺寸生成，出图后再缩回目标尺寸；
     // 有后处理模板时不做（模板字号按成品像素写死，先缩会错位），Codex CLI 只认 1K 也不做
     const postProcessOn = task.params.post_process !== false && postTemplateList.some((item) => item.enabled)
-    const sizePlan = planGenerationSize(task.params.size, {
+    // 续跑只补缺口：记录里的 params.n 是应出总数，不能拿它再请求一轮，否则会出超
+    const paramsForRequest = resumeCount != null ? { ...task.params, n: resumeCount } : task.params
+    const sizePlan = planGenerationSize(paramsForRequest.size, {
       postProcess: postProcessOn,
       allowResize: !activeProfile.codexCli,
     })
-    const requestParams = sizePlan.scaled ? { ...task.params, size: sizePlan.requestSize } : task.params
+    const requestParams = sizePlan.scaled ? { ...paramsForRequest, size: sizePlan.requestSize } : paramsForRequest
 
     const result = await callImageApi({
       settings: requestSettings,
@@ -5266,16 +5282,45 @@ async function runTaskExecution(taskId: string) {
     const partialImageIdsToClean = latestBeforeUpdate.streamPartialImageIds || []
     clearOpenAIWatchdogTimer(taskId)
     useStore.getState().setTaskStreamPreview(taskId)
+    /**
+     * 续跑补图：这次的结果要接在已有图后面，而不是把它们顶掉。
+     *
+     * 判断依据是「进入执行时任务里已经有图」—— 正常任务一开始 outputImages 恒为 []，
+     * 只有续跑会带着旧图进来。合并顺序也按这个来：旧的在前、新的在后，
+     * 和卡片上的时间顺序、编号顺序一致。
+     */
+    const previousOutputIds = latestBeforeUpdate.outputImages ?? []
+    const mergedOutputIds = previousOutputIds.length ? [...previousOutputIds, ...outputIds] : outputIds
+    /**
+     * 按 outputImages 下标对齐的字段（sourceImages / transparentOriginalImages）：
+     * 旧的必须等长齐全才能往后拼。不齐就整段作废 —— 错位比缺失更难发现。
+     */
+    const extendAligned = <T>(previous: T[] | undefined, next: T[] | undefined): T[] | undefined => {
+      if (!previousOutputIds.length) return next
+      if (!previous?.length || previous.length !== previousOutputIds.length) return undefined
+      return next ? [...previous, ...next] : previous
+    }
     updateTaskInStore(taskId, {
-      outputImages: outputIds,
-      sourceImages,
-      transparentOriginalImages: transparentOriginalImageIds,
+      outputImages: mergedOutputIds,
+      sourceImages: extendAligned(task.sourceImages, sourceImages),
+      transparentOriginalImages: extendAligned(task.transparentOriginalImages, transparentOriginalImageIds),
       outputErrors: result.failedRequests?.length ? result.failedRequests : undefined,
       streamPartialImageIds: undefined,
-      rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
-      actualParams,
-      actualParamsByImage,
-      revisedPromptByImage,
+      rawImageUrls: previousOutputIds.length
+        ? (task.rawImageUrls?.length || result.rawImageUrls?.length
+          ? [...(task.rawImageUrls ?? []), ...(result.rawImageUrls ?? [])]
+          : undefined)
+        : (result.rawImageUrls?.length ? result.rawImageUrls : undefined),
+      actualParams: previousOutputIds.length && actualParams
+        // 续跑后「实际出图张数」是合并后的总数，不然卡片上会显示成这批的 317
+        ? { ...actualParams, ...(typeof actualParams.n === 'number' ? { n: mergedOutputIds.length } : {}) }
+        : actualParams,
+      actualParamsByImage: previousOutputIds.length && task.actualParamsByImage
+        ? { ...task.actualParamsByImage, ...(actualParamsByImage ?? {}) }
+        : actualParamsByImage,
+      revisedPromptByImage: previousOutputIds.length && task.revisedPromptByImage
+        ? { ...task.revisedPromptByImage, ...(revisedPromptByImage ?? {}) }
+        : revisedPromptByImage,
       ...createTaskDonePatch(task, Date.now()),
       falRecoverable: false,
       customRecoverable: false,
@@ -5528,7 +5573,22 @@ export async function stopTask(taskId: string): Promise<boolean> {
   return true
 }
 
-export async function retryTask(task: TaskRecord, options: { overwrite?: boolean; keepProfile?: boolean } = {}) {
+export async function retryTask(
+  task: TaskRecord,
+  options: {
+    overwrite?: boolean
+    keepProfile?: boolean
+    /**
+     * 续跑补图：保留已有输出图，只请求 count 张，跑完追加到原结果里。
+     *
+     * 不能走「清空重跑」—— 那会把已经出好的图从库里删掉（见下面的
+     * deleteUnreferencedImageIds），183/500 的卡点一下继续就只剩 0 张了。
+     */
+    appendOutputs?: boolean
+    /** 本次要请求的张数（缺省沿用 params.n）。记录里的 params.n 仍然是应出总数 */
+    count?: number
+  } = {},
+) {
   const { settings, tasks } = useStore.getState()
   const source = tasks.find((item) => item.id === task.id)
   if (!source || source.status === 'running' || source.falRecoverable || source.customRecoverable) return
@@ -5549,6 +5609,18 @@ export async function retryTask(task: TaskRecord, options: { overwrite?: boolean
   const taskParams = shouldUseTransparentOutput
     ? getTransparentRequestParams(normalizedParams)
     : { ...normalizedParams, transparent_output: false }
+  /**
+   * 续跑：已经有图、且这次是「补差额」而不是「重做」。
+   * running 这里不用再挡 —— 上面已经提前 return 了。
+   */
+  const appendOutputs = Boolean(options.appendOutputs) && source.outputImages.length > 0
+  const requestedCount = options.count != null ? Math.max(1, Math.floor(options.count)) : null
+  /**
+   * 请求张数走 requestedCount，但记录里的 params.n 不能跟着变小 ——
+   * 那是这张卡的应出总数，卡片徽章（500 | 183）和详情页都拿它当分母。
+   */
+  const runParams = requestedCount != null ? { ...taskParams, n: requestedCount } : taskParams
+  const recordParams = appendOutputs ? { ...runParams, n: source.params.n } : runParams
   const transparentMeta = taskParams.transparent_output && runProfile.transparentBackgroundMethod === 'local'
     ? createTransparentOutputMeta(source.prompt.trim())
     : null
@@ -5570,7 +5642,7 @@ export async function retryTask(task: TaskRecord, options: { overwrite?: boolean
     ...(overwrite ? source : {}),
     id: taskId,
     prompt: source.prompt,
-    params: taskParams,
+    params: recordParams,
     apiProvider: runProfile.provider,
     apiProfileId: runProfile.id,
     apiProfileName: runProfile.name,
@@ -5581,13 +5653,14 @@ export async function retryTask(task: TaskRecord, options: { overwrite?: boolean
     maskImageId: source.maskImageId ?? null,
     transparentOutput: transparentMeta?.transparentOutput,
     transparentPrompt: transparentMeta?.effectivePrompt,
-    outputImages: [],
-    outputErrors: undefined,
-    transparentOriginalImages: undefined,
-    actualParams: undefined,
-    actualParamsByImage: undefined,
-    revisedPromptByImage: undefined,
-    rawImageUrls: undefined,
+    // 续跑时把旧图带上：删掉就等于把用户已经拿到的 183 张扔了
+    outputImages: appendOutputs ? [...source.outputImages] : [],
+    outputErrors: appendOutputs ? source.outputErrors : undefined,
+    transparentOriginalImages: appendOutputs ? source.transparentOriginalImages : undefined,
+    actualParams: appendOutputs ? source.actualParams : undefined,
+    actualParamsByImage: appendOutputs ? source.actualParamsByImage : undefined,
+    revisedPromptByImage: appendOutputs ? source.revisedPromptByImage : undefined,
+    rawImageUrls: appendOutputs ? source.rawImageUrls : undefined,
     rawResponsePayload: undefined,
     streamPartialImageIds: undefined,
     falRequestId: undefined,
@@ -5616,6 +5689,9 @@ export async function retryTask(task: TaskRecord, options: { overwrite?: boolean
     ? tasks.map((item) => item.id === taskId ? newTask : item)
     : [newTask, ...tasks])
   await putTask(newTask)
+  // 执行时按这个张数发请求；执行结束（runTaskExecution 开头读取后）自动清掉
+  if (requestedCount != null) resumeRequestCounts.set(taskId, requestedCount)
+  else resumeRequestCounts.delete(taskId)
   if (overwrite) {
     void deleteUnreferencedImageIds([
       ...source.outputImages,
@@ -5631,19 +5707,33 @@ export async function retryTask(task: TaskRecord, options: { overwrite?: boolean
 const RESUME_CONCURRENCY = 3
 
 /**
- * 可以「继续」的任务：失败 / 中断，且一张图都没出来。
+ * 这条任务还差几张：应出 n 张，实际出了 outputImages.length 张。
  *
- * - 出过图的不算：那一条已经拿到结果了，再跑一遍是重做，不是接着上次；
+ * 返回 0 表示「不缺」，剩下的判断交给调用方（跑着的、异步恢复中的都不算缺口）。
+ */
+export function outputGap(task: TaskRecord): number {
+  if (task.deletedAt || task.sopPlaceholder) return 0
+  if (task.status === 'running') return 0
+  if (task.falRecoverable || task.customRecoverable) return 0
+  if (isAgentTask(task)) return 0
+  const expected = Math.max(1, Math.floor(task.params.n || 1))
+  return Math.max(0, expected - (task.outputImages?.length ?? 0))
+}
+
+/**
+ * 可以「继续」的任务：还没出够应有的张数。
+ *
+ * 判定从「失败且一张没出」放宽成「有缺口」，因为只出到一半是最常见的形态：
+ * 设 500 张跑到 183 张就停了（接口截断、手动停止、半路报错），
+ * 原来这种卡既没有「继续」（要求一张都没出）也没有「重试」（要求 status 是 error），
+ * 用户只能眼睁睁看着 183 张，不知道怎么补。
+ *
+ * - 已经出够的不算（gap 为 0）；
  * - fal / 自定义异步任务有 job id，重启后会自己接着查结果，不在这里重复提交；
  * - agent 任务挂在一轮对话上，重跑会打乱对话记录，也不算。
  */
 export function isResumableTask(task: TaskRecord): boolean {
-  if (task.deletedAt || task.sopPlaceholder) return false
-  if (task.status !== 'error') return false
-  if (task.outputImages?.length) return false
-  if (task.falRecoverable || task.customRecoverable) return false
-  if (isAgentTask(task)) return false
-  return true
+  return outputGap(task) > 0
 }
 
 /** 有多少条可以继续（列表顶部那条提示用） */
@@ -5662,7 +5752,9 @@ export function countResumableTasks(tasks: TaskRecord[]): number {
  * 后台跑：几十条要跑很久，界面不该卡在这里等它跑完。
  */
 export async function resumeInterruptedTasks(): Promise<number> {
-  const pending = useStore.getState().tasks.filter(isResumableTask)
+  // 批量恢复只挑「一张都没出」的失败卡：缺口型的（183/500）由用户自己在卡上点，
+  // 一次把几十张缺口卡全推上去会把接口打满，也不见得是他这次想要补的
+  const pending = useStore.getState().tasks.filter((task) => isResumableTask(task) && !task.outputImages.length)
   if (!pending.length) {
     useStore.getState().showToast('没有需要继续的任务', 'info')
     return 0
@@ -5685,10 +5777,80 @@ export async function resumeInterruptedTasks(): Promise<number> {
 }
 
 /**
- * 单卡断点继续：在原来这条卡上接着跑，不新建卡。
+ * 一张卡对应的全部任务。
  *
- * 和「全部继续」共用同一套判定（isResumableTask），区别只是作用范围 ——
- * 大多数时候用户只想补回某一张，不想把整批重跑一遍（有些卡可能已经手动处理过）。
+ * 画廊里一张卡可能代表一整组任务（同一个 sopJobId，SOP / 变量 / 批量提示词都是这样），
+ * 这时卡片的 outputImages 是整组拼接的，但 params.n 只是代表任务自己的那份。
+ * 判断「出够了没」必须按整组来，否则 500 条只出 183 张的卡算出来永远是「不缺」。
+ */
+function cardMembers(task: TaskRecord, tasks: TaskRecord[]): TaskRecord[] {
+  if (!task.sopJobId) return [task]
+  const members = tasks.filter((item) => item.sopJobId === task.sopJobId && !item.deletedAt && !item.sopPlaceholder)
+  return members.length ? members : [task]
+}
+
+/** 卡片应该出多少张（整组计划量的合计；单任务卡就是它自己的 n） */
+export function cardExpectedCount(task: TaskRecord, tasks: TaskRecord[]): number {
+  return cardMembers(task, tasks).reduce((sum, item) => sum + Math.max(1, Math.floor(item.params.n || 1)), 0)
+}
+
+/** 卡片还差多少张（整组缺口合计） */
+export function cardOutputGap(task: TaskRecord, tasks: TaskRecord[]): number {
+  return cardMembers(task, tasks).reduce((sum, item) => sum + outputGap(item), 0)
+}
+
+/**
+ * 卡片上的「继续」：把这张卡里所有没出够的任务都补上。
+ *
+ * 合并卡点一下继续，用户期待的是「这张卡补齐」，不是「只补第一条」。
+ * 组内每条仍走 resumeTask 那套：原地跑、只补缺口、图追加。
+ */
+export async function resumeCard(task: TaskRecord): Promise<number> {
+  const tasks = useStore.getState().tasks
+  const pending = cardMembers(task, tasks)
+    .filter((item) => outputGap(item) > 0)
+    // 按原有编号补：用户对「第几号还没出」是有感知的，顺序乱跳会看不出进度
+    .sort((a, b) => (a.sopPromptIndex ?? 0) - (b.sopPromptIndex ?? 0))
+  if (!pending.length) {
+    useStore.getState().showToast('这张卡已经出够了', 'info')
+    return 0
+  }
+  const totalGap = pending.reduce((sum, item) => sum + outputGap(item), 0)
+  useStore.getState().showToast(
+    pending.length > 1
+      ? `正在补这张卡里的 ${pending.length} 条任务，共 ${totalGap} 张`
+      : `正在补剩下的 ${totalGap} 张（已出 ${pending[0].outputImages.length} 张）`,
+    'success',
+  )
+  let cursor = 0
+  const run = async () => {
+    while (cursor < pending.length) {
+      const item = pending[cursor]
+      cursor += 1
+      if (!item) continue
+      const existing = item.outputImages.length
+      // 一条失败不影响后面的：每条都按自己的缺口补
+      await retryTask(item, {
+        overwrite: true,
+        keepProfile: true,
+        appendOutputs: existing > 0,
+        count: existing > 0 ? outputGap(item) : undefined,
+      })
+    }
+  }
+  void Promise.all(Array.from({ length: Math.min(RESUME_CONCURRENCY, pending.length) }, run))
+  return pending.length
+}
+
+/**
+ * 单卡继续：分两种情况，都是在这一条卡上原地跑，不新建卡。
+ *
+ * 1. 一张图都没有（失败 / 中断）→ 整条重跑；
+ * 2. 已经出了一部分（500 张里出了 183 张）→ **只补缺口那 317 张**，跑完追加。
+ *
+ * 第二种以前根本没有入口：判定要求「一张都没出」所以没有「继续」，
+ * 「重试」又要求 status 是 error，到一半停下的卡两边都够不着。
+ * 而直接复用整条重跑更糟 —— 那会把已出的 183 张删掉。
  */
 export async function resumeTask(task: TaskRecord): Promise<boolean> {
   const latest = useStore.getState().tasks.find((item) => item.id === task.id)
@@ -5696,9 +5858,21 @@ export async function resumeTask(task: TaskRecord): Promise<boolean> {
     useStore.getState().showToast('这条任务已经不需要继续了', 'info')
     return false
   }
+  const gap = outputGap(latest)
+  const existing = latest.outputImages?.length ?? 0
   // overwrite：原地续跑；keepProfile：沿用这张卡当时的接口配置，画风才不会跟前面几张对不上
-  await retryTask(latest, { overwrite: true, keepProfile: true })
-  useStore.getState().showToast('正在接着跑这张卡', 'success')
+  await retryTask(latest, {
+    overwrite: true,
+    keepProfile: true,
+    appendOutputs: existing > 0,
+    count: existing > 0 ? gap : undefined,
+  })
+  useStore.getState().showToast(
+    existing > 0
+      ? `接着补剩下的 ${gap} 张（已出 ${existing} 张）`
+      : '正在接着跑这张卡',
+    'success',
+  )
   return true
 }
 
