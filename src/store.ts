@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import type {
+  AgentCardTurn,
   AgentConversation,
   AgentInputDraft,
   AgentMessage,
@@ -7550,6 +7551,11 @@ export async function submitSopTasks(input: {
    */
   inputSnapshot?: TaskInputSnapshot
   /**
+   * Agent 卡模式：本轮对话记录（同一轮的每条任务都带同一份）。
+   * 详情页据此把几十条任务还原成「第几轮 · 你说了什么 · 出了哪几张」。
+   */
+  agentTurn?: AgentCardTurn
+  /**
    * 出图参数（尺寸 / 质量 / 后处理开关…）。
    *
    * 流水线要等反推、写提示词跑完才调到这里，那已经是几分钟之后 ——
@@ -7616,6 +7622,7 @@ export async function submitSopTasks(input: {
        * 否则复用配置会把模型生成的长提示词塞回输入框。
        */
       inputSnapshot: input.inputSnapshot,
+      agentTurn: input.agentTurn,
     }
   })
 
@@ -7632,7 +7639,9 @@ export async function submitSopTasks(input: {
   for (const task of tasks) executeTask(task.id)
 
   useStore.getState().showToast(
-    `${input.variable ? '变量模式' : 'SOP'} 已提交 ${tasks.length} 条提示词`,
+    input.agentTurn
+      ? `第 ${input.agentTurn.index} 轮：已出 ${tasks.length} 条提示词`
+      : `${input.variable ? '变量模式' : 'SOP'} 已提交 ${tasks.length} 条提示词`,
     'success',
   )
   return tasks.map((task) => task.id)

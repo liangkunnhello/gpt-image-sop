@@ -96,6 +96,18 @@ interface SopState {
   sopMode: boolean
   /** 变量模式开关：与 sopMode 互斥，同一时刻只能开一个 */
   variableMode: boolean
+  /**
+   * Agent 卡模式开关：在输入框里连着几轮对话出图，所有轮次的图都落在同一张任务卡里。
+   * 与 sopMode / variableMode 互斥。
+   */
+  agentMode: boolean
+  /**
+   * 当前正在累积的那张卡（= 该卡所有任务的 sopJobId）。
+   *
+   * null 表示「下一句话开一张新卡」。点「结束这张卡」把它清空，
+   * 关掉 Agent 模式不清空 —— 关掉再打开还应该接着这张卡聊。
+   */
+  agentCardJobId: string | null
   directions: SopDirectionNode[]
   systemPrompts: SopSystemPrompt[]
   /** 变量提示词库：与系统提示词并行的一套，只描述提取策略 */
@@ -180,6 +192,10 @@ interface SopState {
   setPostTemplates: (ownerId: string, templates: PostTemplate[]) => void
   setSopMode: (value: boolean) => void
   setVariableMode: (value: boolean) => void
+  setAgentMode: (value: boolean) => void
+  /** 结束当前这张卡：下一次对话自动开一张新卡 */
+  endAgentCard: () => void
+  setAgentCardJobId: (value: string | null) => void
   setIgnoreCompliance: (value: boolean) => void
   setUseImageSellingPoints: (value: boolean) => void
   setAvoidCtaDesign: (value: boolean) => void
@@ -237,6 +253,8 @@ export const useSopStore = create<SopState>()(
     (set, get) => ({
       sopMode: false,
       variableMode: false,
+      agentMode: false,
+      agentCardJobId: null,
       directions: SEED_DIRECTIONS,
       systemPrompts: [],
       variablePrompts: [],
@@ -274,8 +292,11 @@ export const useSopStore = create<SopState>()(
       setTrashOpen: (value) => set({ trashOpen: value }),
       setLibraryTab: (tab) => set({ libraryTab: tab }),
       // 两个模式互斥：开一个就把另一个关掉，避免提交时走错分支
-      setSopMode: (value) => set({ sopMode: value, variableMode: false }),
-      setVariableMode: (value) => set({ variableMode: value, sopMode: false }),
+      setSopMode: (value) => set({ sopMode: value, variableMode: false, agentMode: false }),
+      setVariableMode: (value) => set({ variableMode: value, sopMode: false, agentMode: false }),
+      setAgentMode: (value) => set({ agentMode: value, sopMode: false, variableMode: false }),
+      endAgentCard: () => set({ agentCardJobId: null }),
+      setAgentCardJobId: (value) => set({ agentCardJobId: value }),
       setPromptsPerGroup: (value) => set({ promptsPerGroup: clampPromptCount(value) }),
       setImageFidelity: (value) => set({ imageFidelity: value }),
       // 与 SOP 模式的条数用同一个上限：变量模式的条数由「骨架 + 变量选项」的数量决定，
@@ -737,7 +758,7 @@ export const useSopStore = create<SopState>()(
         return state as SopState
       },
       // 进度是运行时状态，不落盘
-      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, savedSops: state.savedSops, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, extraRequirements: state.extraRequirements, extraPick: state.extraPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, imageFidelity: state.imageFidelity, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
+      partialize: (state) => ({ sopMode: state.sopMode, variableMode: state.variableMode, agentMode: state.agentMode, agentCardJobId: state.agentCardJobId, directions: state.directions, systemPrompts: state.systemPrompts, variablePrompts: state.variablePrompts, savedSops: state.savedSops, activeDirectionId: state.activeDirectionId, activeFilterId: state.activeFilterId, sidebarCollapsed: state.sidebarCollapsed, presets: state.presets, lastPick: state.lastPick, defaultPick: state.defaultPick, extraRequirements: state.extraRequirements, extraPick: state.extraPick, ignoreCompliance: state.ignoreCompliance, useImageSellingPoints: state.useImageSellingPoints, avoidCtaDesign: state.avoidCtaDesign, promptsPerGroup: state.promptsPerGroup, imageFidelity: state.imageFidelity, variablesPerCard: state.variablesPerCard, avoidOverlay: state.avoidOverlay, postTemplates: state.postTemplates, postPreviewImages: state.postPreviewImages, deliveryDirs: state.deliveryDirs }),
     },
   ),
 )
