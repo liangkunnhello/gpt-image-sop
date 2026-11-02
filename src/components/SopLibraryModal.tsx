@@ -17,6 +17,8 @@ interface LibraryItem {
   name: string
   content: string
   updatedAt: number
+  /** 卖点/风格的唯一编码：重名时靠它区分（其它页签没有） */
+  code?: string
 }
 
 const CloseIcon = () => (
@@ -129,7 +131,7 @@ export default function SopLibraryModal() {
             .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
           : presets
             .filter((item) => item.productId === productId && item.kind === tab)
-            .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt }))
+            .map((item) => ({ id: item.id, name: item.name, content: item.content, updatedAt: item.updatedAt, code: item.code }))
     // 最新的放最上面：新建 / 刚保存的那条直接出现在顶部
     return newestFirst(list)
   }, [tab, systemPrompts, variablePrompts, savedSops, presets, productId])
@@ -492,6 +494,14 @@ export default function SopLibraryModal() {
                         >
                           {item.name}
                         </span>
+                        {item.code && (
+                          <span
+                            className="shrink-0 rounded bg-gray-100 px-1 py-px font-mono text-[10px] text-gray-500 dark:bg-white/10 dark:text-gray-400"
+                            title={`唯一编码 ${item.code}：卖点/风格允许重名，用它区分`}
+                          >
+                            #{item.code}
+                          </span>
+                        )}
                         {isCurrent && (
                           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${tab === 'variable' ? 'bg-violet-500' : 'bg-blue-500'}`} />
                         )}

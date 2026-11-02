@@ -58,12 +58,57 @@ export const UNASSIGNED_FILTER = '__unassigned__'
 /** 卖点/风格选择「本次不使用」的特殊值 */
 export const NO_PRESET = '__none__'
 
+/**
+ * 编码字母表：去掉 0 / O / 1 / I —— 这几个字符手抄、口述都容易认错，
+ * 而这个编码的用途正是「人对着念、对着核对」。
+ */
+const PRESET_CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
+
+/** 生成一个没被占用的 4 位编码 */
+export function newPresetCode(taken: Set<string>): string {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    let code = ''
+    for (let index = 0; index < 4; index += 1) {
+      code += PRESET_CODE_ALPHABET[Math.floor(Math.random() * PRESET_CODE_ALPHABET.length)]
+    }
+    if (!taken.has(code)) return code
+  }
+  // 撞满 50 次基本不可能；真撞了就退到时间戳尾巴，保证一定非空
+  return Date.now().toString(36).slice(-4).toUpperCase()
+}
+
+/**
+ * 给缺少编码的卖点/风格补上（老存档迁移、旧备份导入都走这里）。
+ * 返回原数组引用（没变化时）避免无谓的重渲染。
+ */
+export function ensurePresetCodes(presets: SopPreset[] = []): SopPreset[] {
+  const taken = new Set<string>()
+  for (const item of presets) if (item.code) taken.add(item.code)
+  let changed = false
+  const next = presets.map((item) => {
+    if (item.code) return item
+    const code = newPresetCode(taken)
+    taken.add(code)
+    changed = true
+    return { ...item, code }
+  })
+  return changed ? next : presets
+}
+
 /** 卖点 / 风格预设：挂在产品节点下，同产品所有方向共享 */
 export interface SopPreset {
   id: string
   productId: string
   kind: 'point' | 'style'
   name: string
+  /**
+   * 唯一编码身份证（4 位，如 `K7M2`）。
+   *
+   * 卖点/风格允许重名（用户确实会建两个「主卖点」），重名时只看名字分不清选的是哪个。
+   * 这个编码是稳定的、全局不重复的，显示在名字旁边就能区分，也能口头指认。
+   * 老数据没有这个字段，加载时会自动补齐（见 ensurePresetCodes）。
+   */
+  code?: string
   content: string
   updatedAt: number
 }
@@ -346,9 +391,13 @@ export const useSopStore = create<SopState>()(
       })),
       addPreset: (productId, kind, name, content) => {
         const id = newId(`preset-${kind}`)
-        set((state) => ({
-          presets: [...state.presets, { id, productId, kind, name, content, updatedAt: Date.now() }],
-        }))
+        set((state) => {
+          const taken = new Set<string>()
+          for (const item of state.presets) if (item.code) taken.add(item.code)
+          return {
+            presets: [...state.presets, { id, productId, kind, name, content, code: newPresetCode(taken), updatedAt: Date.now() }],
+          }
+        })
         return id
       },
       updatePreset: (id, patch) => {
@@ -658,8 +707,8 @@ export const useSopStore = create<SopState>()(
       storage: createJSONStorage(() => (isTauri ? tauriStorage : safeJsonStorage())),
       // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边；v5：变量提示词库；v6：节点伪删除；
       // v7：productId 为空的配置认领到顶层节点；v8：新增按节点存的交付地址；
-      // v9：新增生图 SOP 库（整份 SOP 存下来直接出图）
-      version: 9,
+      // v9：新增生图 SOP 库（整份 SOP 存下来直接出图）；v10：卖点/风格加唯一编码
+      version: 10,
       migrate: (persisted, version) => {
         const state = (persisted ?? {}) as Partial<SopState>
 
@@ -667,6 +716,8 @@ export const useSopStore = create<SopState>()(
         if (version < 8) state.deliveryDirs = state.deliveryDirs ?? {}
         // v9：老存档没有 SOP 库
         if (version < 9) state.savedSops = state.savedSops ?? []
+        // v10：卖点/风格补唯一编码（重名时靠它区分）
+        if (version < 10) state.presets = ensurePresetCodes(state.presets)
 
         // v2：系统提示词补齐 productId
         if (version < 2 && state.systemPrompts?.length) {
@@ -810,7 +861,8 @@ export function mergeSopLibrary(library?: SopLibraryExport | null) {
       systemPrompts: mergeById(state.systemPrompts, library.systemPrompts),
       variablePrompts: mergeById(state.variablePrompts, library.variablePrompts),
       savedSops: mergeById(state.savedSops, library.savedSops),
-      presets: mergeById(state.presets, library.presets),
+      // 旧备份里的卖点没有编码：合并后统一补一遍，重名时仍能区分
+      presets: ensurePresetCodes(mergeById(state.presets, library.presets)),
       postTemplates,
       lastPick: { ...state.lastPick, ...(library.lastPick ?? {}) },
       defaultPick: { ...state.defaultPick, ...(library.defaultPick ?? {}) },

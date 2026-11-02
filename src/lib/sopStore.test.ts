@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { MAX_SYSTEM_PROMPT_VERSIONS, useSopStore } from './sopStore'
+import { MAX_SYSTEM_PROMPT_VERSIONS, ensurePresetCodes, newPresetCode, useSopStore } from './sopStore'
 
 /**
  * 系统提示词的版本管理。
@@ -156,5 +156,60 @@ describe('产品 / 方向的排序', () => {
     // 活着的只剩 dir-2，它已经在顶上了
     useSopStore.getState().moveSibling('dir-2', -1)
     expect(names('prod-1')).toEqual(['方向二'])
+  })
+})
+/**
+ * 卖点/风格的唯一编码。
+ *
+ * 卖点允许重名（用户确实会建两个「主卖点」），重名时只看名字分不清选的是哪个，
+ * 所以要给每条一个稳定的短编码，显示在名字旁边当「身份证」。
+ */
+describe('卖点唯一编码', () => {
+  const ALPHABET = /^[2-9A-HJ-NP-Z]{4}$/
+
+  it('生成的编码是 4 位，且不含 0/O/1/I 这些易混字符', () => {
+    const code = newPresetCode(new Set())
+    expect(code).toMatch(ALPHABET)
+  })
+
+  it('会避开已经占用的编码', () => {
+    const taken = new Set<string>()
+    for (let index = 0; index < 30; index += 1) {
+      const code = newPresetCode(taken)
+      expect(taken.has(code)).toBe(false)
+      taken.add(code)
+    }
+    expect(taken.size).toBe(30)
+  })
+
+  it('补编码时不动已有的，只补缺的', () => {
+    const presets = [
+      { id: 'p1', productId: 'prod', kind: 'point' as const, name: '主卖点', content: 'A', updatedAt: 1, code: 'AAAA' },
+      { id: 'p2', productId: 'prod', kind: 'point' as const, name: '主卖点', content: 'B', updatedAt: 2 },
+    ]
+    const next = ensurePresetCodes(presets)
+    expect(next[0]).toBe(presets[0])
+    expect(next[1].code).toMatch(ALPHABET)
+    // 补出来的不能和已有的撞
+    expect(next[1].code).not.toBe('AAAA')
+  })
+
+  it('全都有编码时返回原数组（不制造无谓的重渲染）', () => {
+    const presets = [
+      { id: 'p1', productId: 'prod', kind: 'style' as const, name: '风格', content: 'A', updatedAt: 1, code: 'BBBB' },
+    ]
+    expect(ensurePresetCodes(presets)).toBe(presets)
+  })
+
+  it('新建卖点时自动带上编码，重名的两条也能区分', () => {
+    useSopStore.setState({ presets: [] })
+    const a = useSopStore.getState().addPreset('prod-1', 'point', '主卖点', '文案 A')
+    const b = useSopStore.getState().addPreset('prod-1', 'point', '主卖点', '文案 B')
+    const presets = useSopStore.getState().presets
+    const codeA = presets.find((item) => item.id === a)?.code
+    const codeB = presets.find((item) => item.id === b)?.code
+    expect(codeA).toMatch(ALPHABET)
+    expect(codeB).toMatch(ALPHABET)
+    expect(codeA).not.toBe(codeB)
   })
 })

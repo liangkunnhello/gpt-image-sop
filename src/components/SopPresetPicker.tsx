@@ -35,13 +35,17 @@ export default function SopPresetPicker({ kind, label, directionId, scopeIds }: 
     <button
       type="button"
       onClick={() => setLibraryTab(kind)}
-      title={`${label}：${current?.content || '未设置'}（点击打开提示词库）`}
+      title={`${label}：${current?.content || '未设置'}${current?.code ? `（编码 #${current.code}）` : ''}（点击打开提示词库）`}
       className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white/70 px-2.5 py-1 text-xs text-gray-600 transition-colors hover:bg-white dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-300 dark:hover:bg-white/[0.08]"
     >
       <span className="text-gray-400 dark:text-gray-500">{label}</span>
       <span className="max-w-[140px] truncate font-medium text-gray-700 dark:text-gray-200">
         {current?.name ?? (isNone ? '不使用' : '未设置')}
       </span>
+      {/* 唯一编码：重名卖点靠它区分，和提示词库列表里显示的是同一个 */}
+      {current?.code && (
+        <span className="shrink-0 font-mono text-[10px] text-gray-400 dark:text-gray-500">#{current.code}</span>
+      )}
       <EditIcon />
     </button>
   )
