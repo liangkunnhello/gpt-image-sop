@@ -2274,12 +2274,22 @@ export default function InputBar() {
             排队提示：一次提交几百张时，大部分卡都在等名额。
             不写出来就会被当成「出图很慢」——其实请求一个都还没发出去。
           */}
-          {gateStats.waiting > 0 && (
-            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-200/80 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-              <span className="flex h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+          {/* 只有「多任务同时在跑」或「有人在排队」时才显示：单个任务跑的时候没必要占一行 */}
+          {(gateStats.waiting > 0 || gateStats.running > 1) && (
+            <div
+              className={`mb-2 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-1.5 text-xs ${
+                gateStats.waiting > 0
+                  ? 'border-amber-200/80 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+                  : 'border-blue-200/70 bg-blue-50 text-blue-700 dark:border-blue-500/25 dark:bg-blue-500/10 dark:text-blue-300'
+              }`}
+            >
+              <span className={`flex h-1.5 w-1.5 shrink-0 rounded-full ${gateStats.waiting > 0 ? 'bg-amber-500' : 'bg-blue-500'}`} />
               <span className="min-w-0 flex-1">
-                正在跑 {gateStats.running} 个{gateStats.limit ? ` / 上限 ${gateStats.limit}` : ''} · 还有 {gateStats.waiting} 个在排队，
-                轮到才开始发请求
+                {gateStats.waiting > 0
+                  // 有排队：说明上限被打满，慢在本地排队
+                  ? `正在跑 ${gateStats.running}${gateStats.limit ? ` / 上限 ${gateStats.limit}` : ''} · 还有 ${gateStats.waiting} 个在排队，轮到才开始发请求`
+                  // 无排队：请求都发出去了，还是慢就只能是接口/渠道那边串行
+                  : `正在跑 ${gateStats.running} 个${gateStats.limit ? `（并发上限 ${gateStats.limit}）` : '（不限并发）'}`}
               </span>
               <button
                 type="button"
