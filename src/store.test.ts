@@ -148,7 +148,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, submitSopTasks, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, cardStatsMap, submitSopTasks, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -7151,5 +7151,40 @@ describe('排队状态', () => {
     const after = useStore.getState().queuedTaskIds
     useStore.getState().setTaskQueued('t1', false)
     expect(useStore.getState().queuedTaskIds).toBe(after)
+  })
+})
+/**
+ * 画廊整表一次算好每张卡的应出/缺口。
+ *
+ * 之前是每张卡自己遍历 s.tasks，卡数 × 任务数 × 每次 store 更新，
+ * 几百张一起跑时界面会明显变慢。这里锁住口径与单卡计算一致。
+ */
+describe('画廊整表统计', () => {
+  it('合并卡按 job 汇总，单任务卡按 id', () => {
+    const tasks = [
+      task({ id: 'a', sopJobId: 'job-1', sopPromptIndex: 1, outputImages: ['i1'] }),
+      task({ id: 'b', sopJobId: 'job-1', sopPromptIndex: 2, status: 'error', error: '中断', outputImages: [] }),
+      task({ id: 'c', params: { ...DEFAULT_PARAMS, n: 4 }, outputImages: ['x'] }),
+    ]
+    const map = cardStatsMap(tasks)
+    expect(map.get('job-1')).toEqual({ expected: 2, gap: 1 })
+    expect(map.get('task:c')).toEqual({ expected: 4, gap: 3 })
+  })
+
+  it('进回收站与占位卡不算进去', () => {
+    const tasks = [
+      task({ id: 'a', sopJobId: 'job-1', sopPromptIndex: 1, outputImages: ['i1'] }),
+      task({ id: 'b', sopJobId: 'job-1', sopPromptIndex: 2, outputImages: [], deletedAt: 1 }),
+      task({ id: 'p', sopJobId: 'job-1', sopPromptIndex: 3, sopPlaceholder: true }),
+    ]
+    expect(cardStatsMap(tasks).get('job-1')).toEqual({ expected: 1, gap: 0 })
+  })
+
+  it('同一条的重试副本只算一次', () => {
+    const tasks = [
+      task({ id: 'a', sopJobId: 'job-1', sopPromptIndex: 1, status: 'error', error: '中断', outputImages: [] }),
+      task({ id: 'b', sopJobId: 'job-1', sopPromptIndex: 1, outputImages: ['i1'] }),
+    ]
+    expect(cardStatsMap(tasks).get('job-1')).toEqual({ expected: 1, gap: 0 })
   })
 })

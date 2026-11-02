@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { TASK_STOPPED_MESSAGE, useStore, cardExpectedCount, cardOutputGap, resumeCard, retryTask, stopTask } from '../store'
+import { TASK_STOPPED_MESSAGE, useStore, resumeCard, retryTask, stopTask } from '../store'
 import { useClipStore } from '../lib/clipSimilarity'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { useNearViewport } from '../hooks/useNearViewport'
@@ -19,6 +19,13 @@ import ViewportTooltip from './ViewportTooltip'
 
 interface Props {
   task: TaskRecord
+  /**
+   * 这张卡的「应出 / 缺口」，由画廊整表算一次性传进来。
+   *
+   * 卡片自己订阅 s.tasks 再遍历一遍的话，500 张卡 × 500 条任务 × 每次 store 更新，
+   * 出图期间界面会明显变慢。缺失时退回（单任务口径）估算，不再读全局。
+   */
+  cardStats?: { expected: number; gap: number }
   onReuse: () => void
   onEditOutputs: () => void
   onDelete: () => void
@@ -68,6 +75,7 @@ function TaskActionButton({
 
 export default function TaskCard({
   task,
+  cardStats,
   onReuse,
   onEditOutputs,
   onDelete,
@@ -400,8 +408,8 @@ export default function TaskCard({
    * 拿它当分母永远算不出 500 的缺口（这正是「没有继续按钮」的原因）。
    * selector 只返回数字，避免每次重渲染都产生新对象。
    */
-  const cardExpected = useStore((s) => cardExpectedCount(task, s.tasks))
-  const outputShortfall = useStore((s) => (task.status === 'running' ? 0 : cardOutputGap(task, s.tasks)))
+  const cardExpected = cardStats?.expected ?? Math.max(1, Math.floor(task.params.n || 1))
+  const outputShortfall = task.status === 'running' ? 0 : (cardStats?.gap ?? 0)
 
   const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
   const showModel = task.apiModel && task.apiModel !== defaultModelForProvider

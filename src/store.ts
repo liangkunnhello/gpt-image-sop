@@ -5187,7 +5187,8 @@ async function runTaskExecution(taskId: string) {
    * 卡片计时器一开就是半小时，完成时的 elapsed 也虚高。现在从这一刻重算。
    */
   const executionStartedAt = Date.now()
-  updateTaskInStore(taskId, { startedAt: executionStartedAt, elapsed: null })
+  // 只改内存：几百张一起跑时，这里落库就是几百次多余写盘，而 startedAt 丢了也没影响
+  updateTaskInStore(taskId, { startedAt: executionStartedAt, elapsed: null }, { persist: false })
   task = { ...task, startedAt: executionStartedAt, elapsed: null }
 
   if (
@@ -5479,7 +5480,12 @@ async function runTaskExecution(taskId: string) {
   }
 }
 
-export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
+export function updateTaskInStore(
+  taskId: string,
+  patch: Partial<TaskRecord>,
+  /** persist: false 只改内存。用于 startedAt 这类「显示用、丢了也不影响正确性」的字段 */
+  options: { persist?: boolean } = {},
+) {
   const { tasks, setTasks, defaultFavoriteCollectionId } = useStore.getState()
   const updated = tasks.map((t) =>
     t.id === taskId ? { ...t, ...normalizeFavoritePatch(t, patch, defaultFavoriteCollectionId) } : t,
@@ -5487,7 +5493,7 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   const task = updated.find((t) => t.id === taskId)
   setTasks(updated)
   maybeOpenSupportPrompt(tasks, updated, taskId)
-  if (task) putTask(task)
+  if (task && options.persist !== false) putTask(task)
 }
 
 export function createFavoriteCollection(name: string) {
@@ -5838,6 +5844,51 @@ function cardMembers(task: TaskRecord, tasks: TaskRecord[]): TaskRecord[] {
 }
 
 /**
+ * 一组任务按「第几条」分槽后的应出/缺口合计。
+ *
+ * 单卡的 cardExpectedCount / cardOutputGap 与画廊的批量预计算都走这里，
+ * 保证两处口径一致（同一条提示词被「重试→新建」复制出的多条只算一次）。
+ */
+function slotStatsOf(members: TaskRecord[]): { expected: number; gap: number } {
+  const slots = new Map<string, TaskRecord[]>()
+  for (const item of members) {
+    const key = item.sopPromptIndex == null ? `id:${item.id}` : `idx:${item.sopPromptIndex}`
+    const list = slots.get(key)
+    if (list) list.push(item)
+    else slots.set(key, [item])
+  }
+  let expected = 0
+  let gap = 0
+  for (const slot of slots.values()) {
+    const plan = slotPlan(slot)
+    expected += plan.expected
+    gap += Math.max(0, plan.expected - plan.produced)
+  }
+  return { expected, gap }
+}
+
+/**
+ * 画廊一次算好所有卡的应出/缺口。
+ *
+ * 每张卡自己遍历一遍 s.tasks 的话，500 张卡 × 500 条任务 × 每次 store 更新，
+ * 出图期间每秒几十次更新就足以把界面拖慢。改成整表算一次、卡片直接读结果。
+ * key 与分组口径一致：有 sopJobId 用 jobId，单任务卡用 id。
+ */
+export function cardStatsMap(tasks: TaskRecord[]): Map<string, { expected: number; gap: number }> {
+  const groups = new Map<string, TaskRecord[]>()
+  for (const task of tasks) {
+    if (task.deletedAt || task.sopPlaceholder) continue
+    const key = task.sopJobId ?? `task:${task.id}`
+    const list = groups.get(key)
+    if (list) list.push(task)
+    else groups.set(key, [task])
+  }
+  const out = new Map<string, { expected: number; gap: number }>()
+  for (const [key, members] of groups) out.set(key, slotStatsOf(members))
+  return out
+}
+
+/**
  * 按「第几条」把任务分槽。
  *
  * 同一条提示词可能被「重试 → 新建」复制出多条（新任务沿用同一个 sopPromptIndex），
@@ -5866,15 +5917,12 @@ function slotPlan(slot: TaskRecord[]): { expected: number; produced: number } {
 
 /** 卡片应该出多少张（按条去重后的计划量；单任务卡就是它自己的 n） */
 export function cardExpectedCount(task: TaskRecord, tasks: TaskRecord[]): number {
-  return cardSlots(task, tasks).reduce((sum, slot) => sum + slotPlan(slot).expected, 0)
+  return slotStatsOf(cardMembers(task, tasks)).expected
 }
 
 /** 卡片还差多少张（按条去重后的缺口合计） */
 export function cardOutputGap(task: TaskRecord, tasks: TaskRecord[]): number {
-  return cardSlots(task, tasks).reduce((sum, slot) => {
-    const { expected, produced } = slotPlan(slot)
-    return sum + Math.max(0, expected - produced)
-  }, 0)
+  return slotStatsOf(cardMembers(task, tasks)).gap
 }
 
 /**

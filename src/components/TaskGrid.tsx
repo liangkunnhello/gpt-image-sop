@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashTask } from '../store'
+import { useStore, cardStatsMap, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery, trashTask } from '../store'
 import { taskMatchesChannel } from '../lib/channel'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { isTauri } from '../lib/platform'
@@ -71,6 +71,11 @@ export default function TaskGrid() {
   }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId, defaultFavoriteCollectionId, directionFilter, activeFilterId, channelFilter])
   // 同一份 SOP 生成的多个任务合并成一张卡，其余任务原样展示
   const displayTasks = useMemo(() => groupSopTasks(filteredTasks), [filteredTasks])
+  /**
+   * 每张卡的应出/缺口整表算一次。
+   * 交给每张卡自己遍历 s.tasks 的话，卡数 × 任务数 × 每次 store 更新 = 出图期间明显卡顿。
+   */
+  const cardStats = useMemo(() => cardStatsMap(filteredTasks), [filteredTasks])
 
   // 后台算一次当前视图的 CLIP 重复度，算完各自卡片会显示平均重复度。
   // 口径（卡内 / 同方向）由设置决定：卡内就按卡分组，方向就把整个方向放一起比
@@ -353,6 +358,7 @@ export default function TaskGrid() {
           <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
             <TaskCard
               task={task}
+              cardStats={cardStats.get(task.sopJobId ?? `task:${task.id}`)}
               onClick={(e) => {
                 if (Date.now() < suppressClickUntil.current) {
                   e.preventDefault()
