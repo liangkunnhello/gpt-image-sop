@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
+import { taskGate } from './lib/taskGate'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
 import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
@@ -148,7 +149,7 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, cardStatsMap, stopCard, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, cardStatsMap, stopCard, submitSopTasks, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -7176,5 +7177,73 @@ describe('停止整张卡', () => {
     useStore.setState({ showToast: toast })
     expect(await stopCard(done)).toBe(0)
     expect(toast).toHaveBeenCalledOnce()
+  })
+})
+/**
+ * 提交一批任务后，请求必须是并发发出去的，不能一条一条排。
+ *
+ * 用「三个请求同时在飞」来证明：如果并发真的是 10，三个任务的 callImageApi
+ * 会在任何一个返回之前就全部被调用；如果是串行，只会看到 1 次。
+ */
+describe('出图请求的并发', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    vi.mocked(callImageApi).mockReset()
+    // 上一个用例的请求永不返回，名额不会释放，先清空
+    taskGate.reset()
+    useStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'test-key',
+        // 明确打开限制、并发 10，和默认设置一致
+        batchPromptConcurrencyLimited: true,
+        batchPromptConcurrency: 10,
+      },
+      tasks: [],
+      showToast: vi.fn(),
+    })
+  })
+
+  it('三条任务同时执行时，三个请求同时在飞', async () => {
+    // 全部挂住不返回：只要有一个被调用了，三个应该紧接着都进来
+    vi.mocked(callImageApi).mockImplementation(() => new Promise(() => {}))
+
+    await submitSopTasks({
+      sopJobId: 'job-concurrency',
+      sopName: '并发测试',
+      systemPromptName: '测试',
+      prompts: ['p1', 'p2', 'p3'],
+      params: { ...DEFAULT_PARAMS, n: 1 },
+    })
+
+    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledTimes(3))
+    // 三条任务都处于运行中：说明不是「第一条跑完才发第二条」
+    const running = useStore.getState().tasks.filter((item) => item.status === 'running')
+    expect(running).toHaveLength(3)
+  })
+
+  it('并发上限是 1 时才会真的串行', async () => {
+    useStore.setState({
+      settings: {
+        ...useStore.getState().settings,
+        batchPromptConcurrencyLimited: true,
+        batchPromptConcurrency: 1,
+      },
+    })
+    vi.mocked(callImageApi).mockImplementation(() => new Promise(() => {}))
+
+    await submitSopTasks({
+      sopJobId: 'job-serial',
+      sopName: '串行测试',
+      systemPromptName: '测试',
+      prompts: ['p1', 'p2', 'p3'],
+      params: { ...DEFAULT_PARAMS, n: 1 },
+    })
+
+    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledTimes(1))
+    // 给足时间：仍然是 1 次，说明闸门确实按设置卡住了
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(callImageApi).toHaveBeenCalledTimes(1)
   })
 })

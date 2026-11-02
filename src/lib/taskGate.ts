@@ -61,6 +61,16 @@ export class TaskGate {
     this.drain()
   }
 
+  /**
+   * 清空计数与等待队列。**只给测试用**：
+   * 用例里 mock 的请求永远不返回，active 会一直挂在那里，
+   * 后面的用例就永远拿不到名额（表现为「一个请求都没发」）。
+   */
+  reset(): void {
+    this.active = 0
+    this.waiters = []
+  }
+
   private drain() {
     while (this.active < this.limit && this.waiters.length) {
       // 名额直接转交给等待者：先加计数再唤醒，避免中间被人插队
