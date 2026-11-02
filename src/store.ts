@@ -5789,14 +5789,44 @@ function cardMembers(task: TaskRecord, tasks: TaskRecord[]): TaskRecord[] {
   return members.length ? members : [task]
 }
 
-/** 卡片应该出多少张（整组计划量的合计；单任务卡就是它自己的 n） */
-export function cardExpectedCount(task: TaskRecord, tasks: TaskRecord[]): number {
-  return cardMembers(task, tasks).reduce((sum, item) => sum + Math.max(1, Math.floor(item.params.n || 1)), 0)
+/**
+ * 按「第几条」把任务分槽。
+ *
+ * 同一条提示词可能被「重试 → 新建」复制出多条（新任务沿用同一个 sopPromptIndex），
+ * 不去重的话，那条旧的失败记录会让卡片永远显示缺口 —— 补完了还在提示补。
+ * 没有编号的（普通单任务）各占一槽，互不影响。
+ */
+function cardSlots(task: TaskRecord, tasks: TaskRecord[]): TaskRecord[][] {
+  const members = cardMembers(task, tasks)
+  if (!task.sopJobId) return [members]
+  const slots = new Map<string, TaskRecord[]>()
+  for (const item of members) {
+    const key = item.sopPromptIndex == null ? `id:${item.id}` : `idx:${item.sopPromptIndex}`
+    const list = slots.get(key)
+    if (list) list.push(item)
+    else slots.set(key, [item])
+  }
+  return [...slots.values()]
 }
 
-/** 卡片还差多少张（整组缺口合计） */
+/** 一个槽位应出几张 / 已经出了几张（同一槽取最多的那份） */
+function slotPlan(slot: TaskRecord[]): { expected: number; produced: number } {
+  const expected = Math.max(1, ...slot.map((item) => Math.floor(item.params.n || 1)))
+  const produced = Math.max(0, ...slot.map((item) => item.outputImages.length))
+  return { expected, produced }
+}
+
+/** 卡片应该出多少张（按条去重后的计划量；单任务卡就是它自己的 n） */
+export function cardExpectedCount(task: TaskRecord, tasks: TaskRecord[]): number {
+  return cardSlots(task, tasks).reduce((sum, slot) => sum + slotPlan(slot).expected, 0)
+}
+
+/** 卡片还差多少张（按条去重后的缺口合计） */
 export function cardOutputGap(task: TaskRecord, tasks: TaskRecord[]): number {
-  return cardMembers(task, tasks).reduce((sum, item) => sum + outputGap(item), 0)
+  return cardSlots(task, tasks).reduce((sum, slot) => {
+    const { expected, produced } = slotPlan(slot)
+    return sum + Math.max(0, expected - produced)
+  }, 0)
 }
 
 /**
@@ -5807,34 +5837,45 @@ export function cardOutputGap(task: TaskRecord, tasks: TaskRecord[]): number {
  */
 export async function resumeCard(task: TaskRecord): Promise<number> {
   const tasks = useStore.getState().tasks
-  const pending = cardMembers(task, tasks)
-    .filter((item) => outputGap(item) > 0)
+  /**
+   * 按槽位补：同一条提示词被「重试 → 新建」复制出的多条只算一次，
+   * 并且补在「已经有图的那条」上（它才是这条提示词的正式记录）。
+   */
+  const pending = cardSlots(task, tasks)
+    .map((slot) => {
+      const { expected, produced } = slotPlan(slot)
+      // 出图最多的那条就是正式记录；都没图就取第一条
+      const target = slot.reduce((best, item) => (item.outputImages.length > best.outputImages.length ? item : best))
+      return { target, gap: expected - produced }
+    })
+    .filter((entry) => entry.gap > 0)
     // 按原有编号补：用户对「第几号还没出」是有感知的，顺序乱跳会看不出进度
-    .sort((a, b) => (a.sopPromptIndex ?? 0) - (b.sopPromptIndex ?? 0))
+    .sort((a, b) => (a.target.sopPromptIndex ?? 0) - (b.target.sopPromptIndex ?? 0))
   if (!pending.length) {
     useStore.getState().showToast('这张卡已经出够了', 'info')
     return 0
   }
-  const totalGap = pending.reduce((sum, item) => sum + outputGap(item), 0)
+  const totalGap = pending.reduce((sum, entry) => sum + entry.gap, 0)
+  const produced = pending[0].target.outputImages.length
   useStore.getState().showToast(
     pending.length > 1
-      ? `正在补这张卡里的 ${pending.length} 条任务，共 ${totalGap} 张`
-      : `正在补剩下的 ${totalGap} 张（已出 ${pending[0].outputImages.length} 张）`,
+      ? `正在补这张卡里没出够的 ${pending.length} 条，共 ${totalGap} 张`
+      : `正在补剩下的 ${totalGap} 张（已出 ${produced} 张）`,
     'success',
   )
   let cursor = 0
   const run = async () => {
     while (cursor < pending.length) {
-      const item = pending[cursor]
+      const entry = pending[cursor]
       cursor += 1
-      if (!item) continue
-      const existing = item.outputImages.length
+      if (!entry) continue
+      const existing = entry.target.outputImages.length
       // 一条失败不影响后面的：每条都按自己的缺口补
-      await retryTask(item, {
+      await retryTask(entry.target, {
         overwrite: true,
         keepProfile: true,
         appendOutputs: existing > 0,
-        count: existing > 0 ? outputGap(item) : undefined,
+        count: entry.gap,
       })
     }
   }

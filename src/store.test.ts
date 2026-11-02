@@ -7050,6 +7050,17 @@ describe('合并卡的缺口', () => {
     expect(cardOutputGap(single, [single])).toBe(3)
   })
 
+  /**
+   * 「重试 → 新建」会沿用同一个 sopPromptIndex，于是在同一张卡里留下两条：
+   * 旧的失败记录 + 新的成功记录。不去重的话，旧那条会让卡上永远显示缺口。
+   */
+  it('同一条被重试复制出多条时按条去重，不会永远显示缺口', () => {
+    const original = task({ id: 'a', sopJobId: 'job-1', sopPromptIndex: 1, status: 'error', error: '中断', outputImages: [] })
+    const retried = task({ id: 'b', sopJobId: 'job-1', sopPromptIndex: 1, outputImages: ['img-new'] })
+    expect(cardExpectedCount(original, [original, retried])).toBe(1)
+    expect(cardOutputGap(original, [original, retried])).toBe(0)
+  })
+
   it('卡片继续只对没出够的那几条发请求', async () => {
     const enough = task({ id: 'a', sopJobId: 'job-1', sopPromptIndex: 0, outputImages: ['img-ok'] })
     const missing = task({
