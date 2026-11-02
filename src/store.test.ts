@@ -7130,3 +7130,26 @@ describe('Agent 卡的任务落库', () => {
     expect(tasks.every((item) => item.params.n === 1)).toBe(true)
   })
 })
+/**
+ * 排队标记：几百张卡各订阅一次，所以「重复标记」必须是空操作 ——
+ * 否则每入队一次就把整排卡片重渲染一遍。
+ */
+describe('排队状态', () => {
+  it('标记、清除，重复标记不改引用', () => {
+    useStore.setState({ queuedTaskIds: new Set<string>() })
+    useStore.getState().setTaskQueued('t1', true)
+    expect(useStore.getState().queuedTaskIds.has('t1')).toBe(true)
+
+    const before = useStore.getState().queuedTaskIds
+    useStore.getState().setTaskQueued('t1', true)
+    // 引用没变 = 不会触发订阅者重渲染
+    expect(useStore.getState().queuedTaskIds).toBe(before)
+
+    useStore.getState().setTaskQueued('t1', false)
+    expect(useStore.getState().queuedTaskIds.has('t1')).toBe(false)
+    // 清除不存在的也要是空操作
+    const after = useStore.getState().queuedTaskIds
+    useStore.getState().setTaskQueued('t1', false)
+    expect(useStore.getState().queuedTaskIds).toBe(after)
+  })
+})

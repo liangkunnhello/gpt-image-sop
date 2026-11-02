@@ -31,6 +31,16 @@ export class TaskGate {
     return this.active
   }
 
+  /** 并发上限（Infinity 表示不限制），界面用来解释「为什么在排队」 */
+  get limitCount() {
+    return this.limit
+  }
+
+  /** 现在申请名额会不会立刻拿到（false = 要排队） */
+  get hasFreeSlot() {
+    return this.active < this.limit
+  }
+
   /** 已经拿到名额但还在等（说明上限被打满了） */
   get waitingCount() {
     return this.waiters.length

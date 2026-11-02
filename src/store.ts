@@ -497,6 +497,14 @@ interface AppState {
   // 多选
   selectedTaskIds: string[]
   setSelectedTaskIds: (ids: string[] | ((prev: string[]) => string[])) => void
+  /**
+   * 还在等并发名额的任务（运行时状态，不持久化）。
+   *
+   * 排队中的卡片原来显示「生成中 + 计时器」，看起来和「接口卡住」一模一样；
+   * 一次交几百张时被误认成出图慢，其实是并发闸门在排队。
+   */
+  queuedTaskIds: Set<string>
+  setTaskQueued: (taskId: string, queued: boolean) => void
   toggleTaskSelection: (id: string, force?: boolean) => void
   clearSelection: () => void
   selectedFavoriteCollectionIds: string[]
@@ -1099,6 +1107,8 @@ export const useStore = create<AppState>()(
 
       // Tasks
       tasks: [],
+      // 等并发名额的任务（不持久化，刷新即空）
+      queuedTaskIds: new Set<string>(),
       trashedTasks: [],
       setTrashedTasks: (trashedTasks) => set(() => ({ trashedTasks })),
       setTasks: (tasks) => set(() => ({
@@ -1180,6 +1190,15 @@ export const useStore = create<AppState>()(
       setSelectedTaskIds: (updater) => set((s) => ({
         selectedTaskIds: typeof updater === 'function' ? updater(s.selectedTaskIds) : updater
       })),
+      setTaskQueued: (taskId, queued) => set((s) => {
+        const has = s.queuedTaskIds.has(taskId)
+        if (queued === has) return s
+        // 用 Set 而不是数组：几百张卡各订阅一次，数组 includes 会把入队变成 O(n²)
+        const next = new Set(s.queuedTaskIds)
+        if (queued) next.add(taskId)
+        else next.delete(taskId)
+        return { queuedTaskIds: next }
+      }),
       toggleTaskSelection: (id, force) => set((s) => {
         const isSelected = s.selectedTaskIds.includes(id)
         const shouldSelect = force !== undefined ? force : !isSelected
@@ -5099,11 +5118,22 @@ async function executeAgentRound(
 async function executeTask(taskId: string) {
   const settings = useStore.getState().settings
   taskGate.setLimit(settings.batchPromptConcurrencyLimited ? settings.batchPromptConcurrency : null)
+  /**
+   * 名额满了就先标成「排队中」。
+   *
+   * 排队的任务原来和「请求已经发出去、只是接口慢」显示得一模一样（生成中 + 计时器），
+   * 一次交几百张时最容易被误判成出图慢。标出来之后，一眼能看出瓶颈在本地并发还是在接口。
+   */
+  const willWait = !taskGate.hasFreeSlot
+  if (willWait) useStore.getState().setTaskQueued(taskId, true)
   await taskGate.acquire()
+  if (willWait) useStore.getState().setTaskQueued(taskId, false)
   try {
     await runTaskExecution(taskId)
   } finally {
     taskGate.release()
+    // 兜底：任何异常路径都别让一条任务永久留在排队集合里
+    useStore.getState().setTaskQueued(taskId, false)
   }
 }
 

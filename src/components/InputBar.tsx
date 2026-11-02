@@ -585,13 +585,23 @@ export default function InputBar() {
   /** 一轮对话要调文本模型写提示词，期间不让重复提交 */
   const [agentSending, setAgentSending] = useState(false)
   /**
-   * 排队数：闸门限 10 并发，一次提交 500 张时后面几百条都在等。
-   * 不定期把「还在排队」说清楚，界面看着就像卡死了。
-   * 走 1 秒轮询，而不是把闸门每次变化都灌进 store —— 那会让整排卡片重渲染。
+   * 闸门实时状态：正在跑几个、还在排队几个、上限多少。
+   *
+   * 一次交几百张时大部分卡都在排队，界面看着像「出图很慢」，其实一个请求都还没发。
+   * 1 秒轮询一次，值没变就返回同一个对象，避免 InputBar 每秒重渲染。
    */
-  const [queuedInGate, setQueuedInGate] = useState(0)
+  const [gateStats, setGateStats] = useState({ running: 0, waiting: 0, limit: 0 })
   useEffect(() => {
-    const tick = () => setQueuedInGate(taskGate.waitingCount)
+    const tick = () => {
+      const next = {
+        running: taskGate.activeCount,
+        waiting: taskGate.waitingCount,
+        limit: Number.isFinite(taskGate.limitCount) ? taskGate.limitCount : 0,
+      }
+      setGateStats((prev) => (
+        prev.running === next.running && prev.waiting === next.waiting && prev.limit === next.limit ? prev : next
+      ))
+    }
     tick()
     const timer = window.setInterval(tick, 1000)
     return () => window.clearInterval(timer)
@@ -613,8 +623,8 @@ export default function InputBar() {
     : '请先配置 API'
   const submitTooltipText = agentSending
     ? '正在理解你的要求、写提示词…'
-    : queuedInGate > 0
-    ? `并发已满：${queuedInGate} 个任务在排队，轮到才发请求`
+    : gateStats.waiting > 0
+    ? `正在跑 ${gateStats.running} 个 · 排队 ${gateStats.waiting} 个${gateStats.limit ? `（并发上限 ${gateStats.limit}）` : ''}`
     : activeAgentIsRunning
     ? '停止生成'
     : !hasSubmitApiConfig
@@ -2348,6 +2358,27 @@ export default function InputBar() {
           </div>
 
           {/*
+            排队提示：一次提交几百张时，大部分卡都在等名额。
+            不写出来就会被当成「出图很慢」——其实请求一个都还没发出去。
+          */}
+          {gateStats.waiting > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-200/80 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+              <span className="flex h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+              <span className="min-w-0 flex-1">
+                正在跑 {gateStats.running} 个{gateStats.limit ? ` / 上限 ${gateStats.limit}` : ''} · 还有 {gateStats.waiting} 个在排队，
+                轮到才开始发请求
+              </span>
+              <button
+                type="button"
+                onClick={() => useStore.getState().setShowSettings(true)}
+                className="shrink-0 rounded-lg bg-white/70 px-2 py-1 font-medium text-amber-700 transition-colors hover:bg-white dark:bg-white/10 dark:text-amber-200 dark:hover:bg-white/[0.16]"
+              >
+                调并发
+              </button>
+            </div>
+          )}
+
+          {/*
             Agent 卡模式的状态条：这张卡聊到第几轮、攒了多少张。
             没有「输入图」入口 —— 底图由上一版自动带入，怎么用写在对话里。
           */}
@@ -2693,7 +2724,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0 || queuedInGate > 0) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0 || gateStats.waiting > 0) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
@@ -2758,7 +2789,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0 || queuedInGate > 0) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || queuedSubmitCount > 0 || gateStats.waiting > 0) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}

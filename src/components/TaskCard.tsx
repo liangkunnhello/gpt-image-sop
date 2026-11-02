@@ -362,6 +362,11 @@ export default function TaskCard({
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
+  /**
+   * 在等并发名额。这种卡片原来显示「生成中 + 计时器」，
+   * 和「请求已发出、接口慢」完全分不开 —— 一次交几百张时会被当成出图慢。
+   */
+  const isQueued = useStore((s) => s.queuedTaskIds.has(task.id))
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -701,7 +706,17 @@ export default function TaskCard({
           )}
           {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
           <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-            {showRunningTimer || task.status !== 'done' || !coverRatio || !coverSize ? (
+            {isQueued ? (
+              <span
+                className="flex items-center gap-1 bg-amber-500/85 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm"
+                title="并发名额已满，这条还在排队；轮到时才开始发请求"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h10" />
+                </svg>
+                排队中
+              </span>
+            ) : showRunningTimer || task.status !== 'done' || !coverRatio || !coverSize ? (
               <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
