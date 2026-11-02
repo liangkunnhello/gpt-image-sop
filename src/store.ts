@@ -1309,7 +1309,7 @@ export const useStore = create<AppState>()(
       name: 'gpt-image-playground',
       // 与 zustand 默认存储（window.localStorage）一致，但写满配额只告警不抛异常；客户端改用预加载到内存的 SQLite kv
       storage: createJSONStorage(() => isTauri ? tauriStorage : safeJsonStorage()),
-      version: 2,
+      version: 3,
       migrate: migratePersistedState,
       partialize: getPersistedState,
       merge: mergePersistedState,

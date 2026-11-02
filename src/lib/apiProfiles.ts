@@ -778,7 +778,8 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     showBatchPrompt: typeof record.showBatchPrompt === 'boolean' ? record.showBatchPrompt : false,
     batchPromptEnabled: typeof record.batchPromptEnabled === 'boolean' ? record.batchPromptEnabled : false,
     batchPromptMode: record.batchPromptMode === 'concurrent' ? 'concurrent' : 'queue',
-    batchPromptConcurrencyLimited: typeof record.batchPromptConcurrencyLimited === 'boolean' ? record.batchPromptConcurrencyLimited : true,
+    // 默认不限流：并发上限是本机自己加的限制，挡的是自己的速度
+    batchPromptConcurrencyLimited: typeof record.batchPromptConcurrencyLimited === 'boolean' ? record.batchPromptConcurrencyLimited : false,
     batchPromptConcurrency: normalizeBatchPromptConcurrency(record.batchPromptConcurrency),
     referenceImageEditAction: normalizeReferenceImageEditAction(record.referenceImageEditAction),
     zipDownloadRoutes: normalizeZipDownloadRoutes(record.zipDownloadRoutes),
@@ -1372,7 +1373,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   showBatchPrompt: false,
   batchPromptEnabled: false,
   batchPromptMode: 'queue',
-  batchPromptConcurrencyLimited: true,
+  batchPromptConcurrencyLimited: false,
   batchPromptConcurrency: DEFAULT_BATCH_PROMPT_CONCURRENCY,
   referenceImageEditAction: 'ask',
   zipDownloadRoutes: DEFAULT_ZIP_DOWNLOAD_ROUTES,

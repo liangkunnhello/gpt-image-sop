@@ -146,6 +146,19 @@ describe('persisted state codec', () => {
     expect(migratePersistedState('invalid', 1)).toBe('invalid')
   })
 
+  /**
+   * 并发限制原本默认开、默认 10 个，老存档里的 true 是被默认值写进去的，不是用户选的。
+   * 一次提交几百张时，这道自加的天花板才是瓶颈（名额 10 / 上限 10 / 在途也就 10）。
+   */
+  it('v2 及更早的存档一次性关掉「限制同时在跑」，之后不再覆盖用户的设置', () => {
+    const legacy = { settings: { ...DEFAULT_SETTINGS, batchPromptConcurrencyLimited: true } }
+    expect((migratePersistedState(legacy, 2) as { settings: { batchPromptConcurrencyLimited: boolean } }).settings.batchPromptConcurrencyLimited).toBe(false)
+
+    // v3 已经是新版本：用户自己再打开就不能被迁移改回去
+    const fresh = { settings: { ...DEFAULT_SETTINGS, batchPromptConcurrencyLimited: true } }
+    expect((migratePersistedState(fresh, 3) as { settings: { batchPromptConcurrencyLimited: boolean } }).settings.batchPromptConcurrencyLimited).toBe(true)
+  })
+
   it('normalizes legacy conversations, active ID, and top-level Agent draft fallback', () => {
     const result = normalizePersistedState({
       settings: DEFAULT_SETTINGS,

@@ -513,17 +513,16 @@ export default function InputParamsPanel({
                   />
                 </div>
               </div>
-              {batchMode === 'concurrent' && (
-                <div className={ROW_CLASS}>
-                  <span className={ROW_LABEL_CLASS}>限制同时在跑</span>
-                  <Switch
-                    checked={batchConcurrencyLimited}
-                    label="限制同时在跑"
-                    onToggle={() => onBatchChange({ batchPromptConcurrencyLimited: !batchConcurrencyLimited })}
-                  />
-                </div>
-              )}
-              {batchMode === 'concurrent' && batchConcurrencyLimited && (
+              {/* 这个开关对所有提交生效（不只是「并发」模式的批量提示词），所以不再挂在 batchMode 下 */}
+              <div className={ROW_CLASS}>
+                <span className={ROW_LABEL_CLASS}>限制同时在跑</span>
+                <Switch
+                  checked={batchConcurrencyLimited}
+                  label="限制同时在跑"
+                  onToggle={() => onBatchChange({ batchPromptConcurrencyLimited: !batchConcurrencyLimited })}
+                />
+              </div>
+              {batchConcurrencyLimited && (
                 <label className={ROW_CLASS}>
                   <span className={ROW_LABEL_CLASS}>同时在跑</span>
                   <ConcurrencyInput
@@ -532,14 +531,16 @@ export default function InputParamsPanel({
                   />
                 </label>
               )}
-              {batchMode === 'concurrent' && !batchConcurrencyLimited && (
+              {!batchConcurrencyLimited && (
                 <p className="rounded-lg bg-amber-500/[0.1] px-2.5 py-2 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-500/[0.14] dark:text-amber-400/90">
-                  不限制时会同时发出全部请求，提示词较多时可能导致{isTauri ? '客户端' : '浏览器'}卡顿甚至崩溃，也容易触发服务商限流。
+                  现在不限制：一次提交的请求会**同时全部发出**，出图速度取决于接口本身。
+                  提示词特别多（几百条）时{isTauri ? '客户端' : '浏览器'}可能吃内存、也更容易撞服务商限流，
+                  真遇到卡顿再回来打开这个开关。
                 </p>
               )}
               <p className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
                 提示词之间空两行分隔，当前共 {batchPromptCount} 条；参考图和参数对每条提示词都生效。
-                这里的「同时在跑」按**一批**算：一次提交（一张任务卡）里同时发这么多个请求，
+                打开「限制同时在跑」后，名额按**一批**算：一次提交（一张任务卡）里同时发这么多个请求，
                 多出来的在这批里排队；另外提交的一批有自己的名额，互不占用。
               </p>
             </>
