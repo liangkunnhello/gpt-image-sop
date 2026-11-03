@@ -6,14 +6,14 @@ import Select from '../Select'
 import ButtonTooltip from './buttonTooltip'
 import ParamPopoverChip, { CHIP_BASE_CLASS, CHIP_IDLE_CLASS } from './paramPopoverChip'
 import { shouldLimitOutputSize } from '../../lib/outputFileSize'
+import { MAX_BATCH_CONCURRENCY, normalizeBatchConcurrency } from '../../lib/batchGate'
 
 const CHIP_CLASS = `${CHIP_BASE_CLASS} ${CHIP_IDLE_CLASS}`
 const CHIP_DISABLED_CLASS = 'h-8 px-3.5 rounded-full bg-black/[0.03] dark:bg-white/[0.04] opacity-50 cursor-not-allowed text-xs text-gray-700 dark:text-gray-200'
 const ROW_CLASS = 'relative flex items-center justify-between gap-3'
 const ROW_LABEL_CLASS = 'text-gray-500 dark:text-gray-400'
 const CONTROL_DISABLED_CLASS = 'px-3 py-1.5 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.04] opacity-50 cursor-not-allowed text-xs transition-all duration-200'
-
-type BatchSettingsPatch = Partial<Pick<AppSettings, 'batchPromptEnabled' | 'batchPromptMode'>>
+type BatchSettingsPatch = Partial<Pick<AppSettings, 'batchPromptEnabled' | 'batchPromptMode' | 'batchConcurrency'>>
 
 function Switch({ checked, disabled, label, onToggle }: { checked: boolean; disabled?: boolean; label: string; onToggle: () => void }) {
   return (
@@ -87,6 +87,7 @@ export default function InputParamsPanel({
   showBatch,
   batchEnabled,
   batchMode,
+  batchConcurrency,
   batchPromptCount,
   batchProgress,
   queuedSubmitCount,
@@ -146,6 +147,8 @@ export default function InputParamsPanel({
   showBatch: boolean
   batchEnabled: boolean
   batchMode: BatchPromptMode
+  /** 一张任务卡最多同时发几条请求，防止一次提交几百张把接口压垮 */
+  batchConcurrency: number
   batchPromptCount: number
   batchProgress: BatchProgress | null
   /** 排队等待提交的批次数：批量进行中再提交会先排队 */
@@ -454,10 +457,29 @@ export default function InputParamsPanel({
                   />
                 </div>
               </div>
+              <div className={ROW_CLASS}>
+                <span className={ROW_LABEL_CLASS}>每批同时发</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={MAX_BATCH_CONCURRENCY}
+                    value={batchConcurrency}
+                    onChange={(e) => onBatchChange({ batchConcurrency: normalizeBatchConcurrency(e.target.value) })}
+                    className="w-24 px-3 py-1.5 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.06] focus:border-blue-300 dark:focus:border-blue-500/50 focus:outline-none text-xs transition-all duration-200"
+                  />
+                  <span className="text-[11px] text-gray-400 dark:text-gray-500">
+                    张（上限 {MAX_BATCH_CONCURRENCY}）
+                  </span>
+                </div>
+              </div>
               <p className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
                 提示词之间空两行分隔，当前共 {batchPromptCount} 条；参考图和参数对每条提示词都生效。
-                提交后请求全部同时发出，本机不再排队，出图速度取决于接口本身（提示词特别多时
-                {isTauri ? '客户端' : '浏览器'}可能吃内存，也更容易撞服务商限流）。
+                <br />
+                一张任务卡同时最多发 <b>{batchConcurrency}</b> 条请求，其余在这张卡里排队。
+                实测经本地代理时，<b>170~180 条连接同时建立</b>就会被重置（表现为
+                「TLS 握手失败」「连接被重置 10054」），所以别调到那附近；
+                出图每条要占 3~7 分钟，批越小越稳、批越大越快。{isTauri ? '客户端' : '浏览器'}能承受的并行也有限。
                 「等待上一条跑完」只在执行方式选「排队」时生效。
               </p>
             </>

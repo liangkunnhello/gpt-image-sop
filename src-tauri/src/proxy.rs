@@ -69,6 +69,15 @@ impl Route {
         matches!(self, Route::Via(_))
             && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
     }
+
+    /// 作为客户端缓存的键：连接方式变了就必须重建客户端，不能继续复用旧连接
+    pub fn cache_key(&self) -> String {
+        match self {
+            Route::System => "system".to_string(),
+            Route::Direct => "direct".to_string(),
+            Route::Via(url) => format!("via:{url}"),
+        }
+    }
 }
 
 /// 生效中的连接方式，托管为 State

@@ -69,6 +69,7 @@ import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { runWithConcurrency, splitBatchPrompts } from './lib/batchPrompts'
+import { acquireBatchSlot, batchKeyOf, setBatchGateLimit } from './lib/batchGate'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { blobToDataUrl, dataUrlToBytes, fileToDataUrl } from './lib/dataUrl'
 import { cacheImage, cacheThumbnail, clearImageCaches, deleteCachedImage, deleteImageCacheEntry, ensureImageCached, scheduleMissingThumbnailBackfill } from './lib/imageCache'
@@ -777,6 +778,8 @@ export const useStore = create<AppState>()(
           dismissedPresetProviderIds: effectiveDismissedPresetProviderIds,
         }))
         const shouldClearReusedProfile = st.reusedTaskApiProfileId && settings.activeProfileId === st.reusedTaskApiProfileId
+        // 并发数改大时立刻放行还在等名额的那批，不用等下一次提交
+        setBatchGateLimit(settings.batchConcurrency)
         return {
           settings,
           ...(shouldClearReusedProfile
@@ -1750,6 +1753,8 @@ async function recoverFalTask(taskId: string) {
 
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
 export async function initStore() {
+  // 先把存档里的并发数喂给闸门：否则首次提交会按默认值走，改了设置等于没生效
+  setBatchGateLimit(useStore.getState().settings.batchConcurrency)
   const legacyAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
   const storedTasks = await getAllTasks()
   const storedAgentConversations = normalizeAgentConversations(await getAllAgentConversations())
@@ -5095,14 +5100,33 @@ async function executeAgentRound(
 }
 
 /**
- * 真正执行一条任务。
+ * 真正执行一条任务：先向本批要一个名额，拿到才发请求。
  *
- * 提交即发请求，本机不再排队：出图速度完全交给接口。
- * （早先这里有一道「同时在跑 N 个」的闸门，实测它本身就成了瓶颈：
- * 名额 10 / 上限 10，在途请求也正好卡在 10，所以去掉了。）
+ * 这道闸门是**必要的**，不是可选优化。实测依据（488 条那批的真实数据）：
+ * - 请求全部同时发出时，经本地代理 170~180 条连接就开被重置，
+ *   200 条时约 40% 失败，报错正是「TLS 握手失败」「连接被重置（10054）」；
+ * - 出图请求要占住连接 3~7 分钟（成功任务单条耗时中位约 420 秒），
+ *   所以占用量会持续累积，不像短请求发完就散。
+ *
+ * 名额按「一张任务卡」算（见 batchKeyOf），不是全局共用——
+ * 全局共用会让「SOP 在跑时普通模式几乎不动」，看着像一个个出。
+ *
+ * 建卡仍然是同步的：卡片立刻出现在界面上，用户马上能看整批进度，
+ * 只是「什么时候真发请求」要等名额。
  */
 async function executeTask(taskId: string) {
-  await runTaskExecution(taskId)
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task) return
+  const key = batchKeyOf(task)
+  const release = await acquireBatchSlot(key)
+  try {
+    // 排队期间任务可能已经被停掉 / 删掉了，进来再确认一次
+    const latest = useStore.getState().tasks.find((item) => item.id === taskId)
+    if (!latest || latest.status !== 'running') return
+    await runTaskExecution(taskId)
+  } finally {
+    release()
+  }
 }
 
 async function runTaskExecution(taskId: string) {

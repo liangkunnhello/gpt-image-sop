@@ -197,6 +197,14 @@ export interface AppSettings {
   /** 多提示词批量提交，提示词之间空两行分隔 */
   batchPromptEnabled: boolean
   batchPromptMode: BatchPromptMode
+  /**
+   * 一张任务卡（同一批）最多同时发几条请求。
+   *
+   * 这个值不是「可选优化」，是防止把接口压垮的硬闸门：实测经本地代理时，
+   * 170~180 条连接同时建立就开始被重置（表现就是 TLS 握手失败 / 10054），
+   * 一次提交 488 条会大面积失败。60 约为上限的 1/3，留足网络抖动余量。
+   */
+  batchConcurrency: number
   referenceImageEditAction: ReferenceImageEditAction
   zipDownloadRoutes: ZipDownloadRoute[]
   /** 仅客户端：默认保存地址本身由 Rust 侧保存，不在设置中 */

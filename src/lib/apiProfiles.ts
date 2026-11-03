@@ -26,6 +26,7 @@ import { isImportableConfigUrl } from './importableConfigUrl'
 import { DEFAULT_IMAGES_MODEL } from './imageModels'
 import { normalizeFontMode } from './fonts'
 import { DEFAULT_TASK_FOLDER_TEMPLATE, withCopyToken } from './taskFolderName'
+import { DEFAULT_BATCH_CONCURRENCY, normalizeBatchConcurrency } from './batchGate'
 
 const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 const RAW_DEFAULT_API_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL)
@@ -777,6 +778,8 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     showBatchPrompt: typeof record.showBatchPrompt === 'boolean' ? record.showBatchPrompt : false,
     batchPromptEnabled: typeof record.batchPromptEnabled === 'boolean' ? record.batchPromptEnabled : false,
     batchPromptMode: record.batchPromptMode === 'concurrent' ? 'concurrent' : 'queue',
+    // 老存档没有这一项：统一从这里补默认值，否则一次提交几百张会把接口压垮
+    batchConcurrency: normalizeBatchConcurrency(record.batchConcurrency),
     referenceImageEditAction: normalizeReferenceImageEditAction(record.referenceImageEditAction),
     zipDownloadRoutes: normalizeZipDownloadRoutes(record.zipDownloadRoutes),
     saveLocationMode: record.saveLocationMode === 'default' ? 'default' : 'ask',
@@ -1369,6 +1372,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   showBatchPrompt: false,
   batchPromptEnabled: false,
   batchPromptMode: 'queue',
+  batchConcurrency: DEFAULT_BATCH_CONCURRENCY,
   referenceImageEditAction: 'ask',
   zipDownloadRoutes: DEFAULT_ZIP_DOWNLOAD_ROUTES,
   saveLocationMode: 'ask',

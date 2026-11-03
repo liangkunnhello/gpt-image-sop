@@ -2157,6 +2157,7 @@ export default function InputBar() {
       showBatch={showBatch}
       batchEnabled={batchEnabled}
       batchMode={settings.batchPromptMode}
+      batchConcurrency={settings.batchConcurrency}
       batchPromptCount={batchPromptCount}
       batchProgress={batchProgress}
       queuedSubmitCount={queuedSubmitCount}

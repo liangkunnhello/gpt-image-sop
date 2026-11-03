@@ -5,9 +5,10 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH};
-use reqwest::{Method, Url};
+use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::State;
@@ -46,6 +47,47 @@ impl Requests {
     /// 页面重载时调用：丢弃全部记录和响应，进行中的请求随即断开，等待中的命令以“已取消”返回
     pub fn clear(&self) {
         self.lock().clear();
+    }
+}
+
+/// 复用的 reqwest 客户端（每个连接方式一份），键是 Route::cache_key()。
+///
+/// 之前每个请求都新建一次 Client，等于没有连接池：一次提交 488 张就是 488 次完整
+/// TLS 握手。经本地代理实测握手 1~9 秒，488 次握手本身就够把代理压垮
+/// （200 并发时约 40% 连接被重置，正是「TLS 握手失败 / 错误码 10054」的来源）。
+///
+/// 改成复用之后：
+/// - 连接留在池里，后续请求省掉握手，单条请求的固定开销从秒级降到毫秒级；
+/// - 池里同时存活的空闲连接有上限（IDLE_PER_HOST），不会因为一次提交几百张
+///   就永久占住几百条通往代理的连接。
+///
+/// 仍然保证「代理设置改动立即生效」：键里带连接方式，设置一变就换一个新客户端。
+#[derive(Default)]
+pub struct Clients(Mutex<HashMap<String, Client>>);
+
+impl Clients {
+    fn get(&self, route: &Route) -> Result<Client, String> {
+        let key = route.cache_key();
+        let mut map = self.0.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(client) = map.get(&key) {
+            return Ok(client.clone());
+        }
+        let client = route
+            .apply(
+                Client::builder()
+                    .user_agent(USER_AGENT)
+                    // 空闲连接保留 90 秒：出图请求密集时能持续复用，不再每条重新握手
+                    .pool_idle_timeout(Duration::from_secs(90))
+                    // 每个主机最多留 32 条空闲连接。实测代理在 170 条以上同时建立连接就开始
+                    // 重置，这里只限「空闲保有量」，在跑的请求不受限制
+                    .pool_max_idle_per_host(32),
+            )
+            .and_then(|builder| builder.build())
+            .map_err(|err| format!("创建 HTTP 客户端失败：{err}"))?;
+        // 只保留当前连接方式这一份，切换代理后旧连接不再有机会被复用
+        map.clear();
+        map.insert(key, client.clone());
+        Ok(client)
     }
 }
 
@@ -167,7 +209,12 @@ fn subscribe(state: &Requests, id: &str) -> Result<watch::Receiver<bool>, String
 }
 
 /// 校验请求参数并构造请求，同时返回这次请求是否经过自定义代理
-fn build(meta: &Meta, body: Vec<u8>, route: &Route) -> Result<(reqwest::RequestBuilder, bool), String> {
+fn build(
+    meta: &Meta,
+    body: Vec<u8>,
+    route: &Route,
+    clients: &Clients,
+) -> Result<(reqwest::RequestBuilder, bool), String> {
     let url = Url::parse(&meta.url).map_err(|err| format!("请求地址不合法：{err}"))?;
     // 只允许 http/https，主机和端口不限
     if !matches!(url.scheme(), "http" | "https") {
@@ -193,11 +240,8 @@ fn build(meta: &Meta, body: Vec<u8>, route: &Route) -> Result<(reqwest::RequestB
     if body.is_empty() && matches!(method, Method::POST | Method::PUT) {
         headers.insert(CONTENT_LENGTH, HeaderValue::from_static("0"));
     }
-    // 每次新建客户端：系统代理和应用内的代理设置变化后的请求立即生效，取消时连接不会留在连接池中
-    let client = route
-        .apply(reqwest::Client::builder().user_agent(USER_AGENT))
-        .and_then(|builder| builder.build())
-        .map_err(|err| format!("创建 HTTP 客户端失败：{err}"))?;
+    // 复用客户端：连接留在池里，省掉每条请求一次完整 TLS 握手（见 Clients）
+    let client = clients.get(route)?;
     let proxied = route.proxies(&url);
     let req = client.request(method, url).headers(headers);
     Ok((if body.is_empty() { req } else { req.body(body) }, proxied))
@@ -209,6 +253,7 @@ pub async fn http_send(
     request: Request<'_>,
     state: State<'_, Requests>,
     proxy: State<'_, Proxy>,
+    clients: State<'_, Clients>,
 ) -> Result<Head, String> {
     let meta = percent_encoding::percent_decode_str(header(&request, "x-meta"))
         .decode_utf8()
@@ -220,7 +265,7 @@ pub async fn http_send(
         InvokeBody::Raw(bytes) => bytes.clone(),
         _ => Vec::new(),
     };
-    let (req, proxied) = match build(&meta, body, &proxy.route()) {
+    let (req, proxied) = match build(&meta, body, &proxy.route(), &clients) {
         Ok(built) => built,
         Err(err) => {
             state.lock().remove(&meta.id);
@@ -334,7 +379,7 @@ mod tests {
             url: "https://example.invalid/".into(),
             headers: Vec::new(),
         };
-        let (req, proxied) = build(&meta, Vec::new(), &route).unwrap();
+        let (req, proxied) = build(&meta, Vec::new(), &route, &Clients::default()).unwrap();
         assert!(proxied);
         let err = req.send().await.unwrap_err();
         assert!(send_error(&err, true).starts_with("无法连接代理服务器"));
@@ -378,7 +423,7 @@ mod tests {
             url,
             headers: Vec::new(),
         };
-        let (req, proxied) = build(&meta, Vec::new(), &Route::Direct).unwrap();
+        let (req, proxied) = build(&meta, Vec::new(), &Route::Direct, &Clients::default()).unwrap();
         send_error(&req.send().await.unwrap_err(), proxied)
     }
 

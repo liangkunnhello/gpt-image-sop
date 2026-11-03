@@ -112,6 +112,7 @@ pub fn run() {
         .manage(files::MigrateSource::default())
         .manage(data_dir::PickedDir::default())
         .manage(http::Requests::default())
+        .manage(http::Clients::default())
         .manage(mcp::McpServer::default())
         .manage(mcp::bridge::Bridge::default())
         // 页面重载（含开发时的热重载）后旧页面的请求已无人读取，立即断开；未提交的保存也无人继续，删除临时文件

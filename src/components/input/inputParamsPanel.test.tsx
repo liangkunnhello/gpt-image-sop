@@ -102,6 +102,7 @@ function renderPanel({
         showBatch={false}
         batchEnabled={false}
         batchMode="queue"
+        batchConcurrency={60}
         batchPromptCount={0}
         batchProgress={null}
         queuedSubmitCount={0}
