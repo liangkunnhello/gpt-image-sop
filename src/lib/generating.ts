@@ -8,11 +8,13 @@ import type { TaskRecord } from '../types'
  * - status === 'running'          → 真在跑
  * - status === 'error' 但可恢复    → fal / 自定义服务商断线重连中，逻辑上仍在等结果
  *
- * 显式排除占位卡：SOP 反推阶段的占位任务还没拿到提示词，没有图可看，
- * 用户视角里它只是「正在准备」，和真正的出图进度不是一回事。
+ * **占位卡也算在生成中。**
+ * 这里原来显式排除占位卡，理由是「反推阶段还没拿到提示词，没有图可看，只是准备」。
+ * 但用户已经点了发送、这段时间一样要等，侧栏却什么都没亮 ——
+ * 反推 + 写提示词常常要好几分钟，看起来就像「发了没反应」。
+ * 既然任务卡上本来就是「生成中…」+ 蓝边框，侧栏的蓝点也该同时亮起，两边才对得上。
  */
 export function isTaskGenerating(task: TaskRecord): boolean {
-  if (task.sopPlaceholder) return false
   if (task.deletedAt) return false
   if (task.status === 'running') return true
   return task.status === 'error' && Boolean(task.falRecoverable || task.customRecoverable)

@@ -39,8 +39,14 @@ describe('「正在生成」判定（要和任务卡上的转圈口径一致）'
     expect(isTaskGenerating(task({ status: 'done', outputImages: ['img'] }))).toBe(false)
   })
 
-  it('SOP 占位卡不算：还没拿到提示词，用户视角只是「准备中」', () => {
-    expect(isTaskGenerating(task({ status: 'running', sopPlaceholder: true }))).toBe(false)
+  it('SOP 占位卡也算：点了发送就该亮，反推/写词那几分钟不能看起来像没反应', () => {
+    // 原来这里断言 false（「还没拿到提示词，只是准备中」），
+    // 但反推 + 写提示词常要好几分钟，侧栏什么都不亮会让人以为发送失败。
+    expect(isTaskGenerating(task({ status: 'running', sopPlaceholder: true }))).toBe(true)
+  })
+
+  it('占位卡进回收站后不再亮', () => {
+    expect(isTaskGenerating(task({ status: 'running', sopPlaceholder: true, deletedAt: 1 }))).toBe(false)
   })
 
   it('已删除的任务不算（回收站里的卡不该还亮着）', () => {
