@@ -76,13 +76,22 @@ describe('checkPromptsIntegrity（整批）', () => {
 })
 
 describe('token 预算（截断的根因）', () => {
-  it('一批 8 条要给出足够写完的输出预算', () => {
-    // 实测一条 380~460 字中文 ≈ 600~900 token，8 条至少 7200
+  it('单批要给出足够写完的输出预算', () => {
+    // 实测一条 380~460 字中文 ≈ 600~900 token，每条至少留 900
     expect(tokensForPrompts(PROMPTS_PER_BATCH)).toBeGreaterThanOrEqual(PROMPTS_PER_BATCH * 900)
   })
 
-  it('单批条数收窄到 8（原来 12 条一批时第 11 条就被熔断）', () => {
-    expect(PROMPTS_PER_BATCH).toBeLessThanOrEqual(8)
+  it('单批 12 条的预算要覆盖实测需求（12 条约 8100 token），留出余量', () => {
+    /**
+     * 截断的真正根因是「预算不足」，不是「批次太大」：
+     * 原来每条只给 500，12 条才 6000，写到第 11 条就没了。
+     * 现在每条 900（12 条 10800），实测 12 条约需 8100，余量约 33%。
+     * 所以批大小可以留在 12 —— 批数少一次就少一次固定开销。
+     */
+    expect(PROMPTS_PER_BATCH).toBe(12)
+    expect(tokensForPrompts(12)).toBeGreaterThanOrEqual(8100)
+    // 但不能顶到渠道上限，否则会被 400 拒掉
+    expect(tokensForPrompts(12)).toBeLessThanOrEqual(32000)
   })
 
   it('条数再多也封顶在渠道能接受的上限内', () => {
