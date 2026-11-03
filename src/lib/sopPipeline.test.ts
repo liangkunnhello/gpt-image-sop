@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiProfile } from '../types'
-import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, generatePrompts, rewriteSopText, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
+import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, generatePrompts, rewriteSopText, sceneSimilarity, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from './promptLimits'
 
 const profile = {
@@ -117,81 +117,230 @@ function numbered(from: number, count: number, tail = '夜晚街道，正面机�
   return Array.from({ length: count }, (_, i) => `${i + 1}. 场景${from + i}，${tail}`).join('\n')
 }
 
-describe('generatePrompts 分批写', () => {
+/**
+ * 两阶段 mock：按 system 提示区分「规划画面方案」与「写正文」。
+ *
+ * 两阶段之后不能再按调用顺序喂固定回复 —— 并行写词时各批完成先后不确定，
+ * 顺序喂会串错。这里按请求内容回应，才测得出真实行为。
+ */
+const PLAN_MARKER = '生图策划'
+
+/**
+ * 四个词池的长度两两互质（17 / 13 / 11 / 7）。
+ *
+ * 一开始用 16/8/8/6 这种有公约数的长度，结果 i 与 i+24 会「场景不同、
+ * 人物同、色调同、机位同」，2-gram 相似度直接超过阈值，被 dedupeScenes 判成重复，
+ * 规划条数不够就退回顺序路径 —— 测出来的现象是「模型返回空内容」，很误导。
+ * 互质之后任意两条至少有三项不同，才符合「四项里至少三项不同」的规划要求。
+ */
+const SCENE_WORDS = [
+  '公园林荫道', '城市天台花园', '居家飘窗角落', '海边栈桥', '校园操场', '街角咖啡馆',
+  '山地草甸', '地铁站台', '书房窗边', '清晨菜市场', '楼顶泳池边', '乡间土路',
+  '美术馆长廊', '健身房一角', '儿童游乐区', '老城巷口', '湖心凉亭',
+]
+const PEOPLE_WORDS = ['母女二人', '独处青年', '祖孙三代', '情侣二人', '父子二人', '姐妹三人', '一家四口', '独处老人', '并肩同事', '兄弟二人', '母女三代', '情侣带宠物', '独处少年']
+const COLOR_WORDS = ['薄荷绿配奶白', '暖橙配深棕', '雾蓝配浅灰', '蜜桃粉配米白', '青竹绿配象牙', '酒红配暖金', '雾紫配奶咖', '柠檬黄配纯白', '砂粉配灰蓝', '墨绿配浅木', '奶黄配砖红']
+const SHOT_WORDS = ['平视中景', '微俯全景', '低角度仰拍', '侧俯三分', '正面近景', '斜四十五度中景', '过肩视角']
+
+/** 造一条与其他条至少三项不同的方案标签 */
+function sceneTag(index: number): string {
+  return `${SCENE_WORDS[index % SCENE_WORDS.length]}，${PEOPLE_WORDS[index % PEOPLE_WORDS.length]}，${COLOR_WORDS[index % COLOR_WORDS.length]}，${SHOT_WORDS[index % SHOT_WORDS.length]}`
+}
+
+/** 从写词请求里取出这一批被分到的方案（sceneBlock 里的编号行） */
+function scenesOf(user: string): string[] {
+  const block = user.split('【这一批必须按下列画面方案逐条写')[1]
+  if (!block) return []
+  const body = block.split('\n\n按这份 SOP')[0]
+  return body
+    .split('\n')
+    .map((line) => line.match(/^\d+\.\s*(.+)$/)?.[1]?.trim())
+    .filter((item): item is string => Boolean(item))
+}
+
+function jsonReply(content: string) {
+  return new Response(
+    JSON.stringify({ choices: [{ message: { content } }] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )
+}
+
+/**
+ * @param planCount 规划阶段返回多少条方案（默认比要的多 30%，与实现一致）
+ * @param onWrite  可选的写词拦截：返回 null 表示用默认回复
+ */
+function mockTwoPhase(options: {
+  planCount: number
+  onWrite?: (scenes: string[], callIndex: number) => string | null
+}) {
+  let writeCalls = 0
+  const planCalls: string[] = []
+  const writeRequests: Array<{ scenes: string[]; user: string }> = []
+  const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body))
+    const system = body.messages[0].content as string
+    const user = body.messages[1].content as string
+    if (system.includes(PLAN_MARKER)) {
+      planCalls.push(user)
+      return jsonReply(Array.from({ length: options.planCount }, (_, i) => `${i + 1}. ${sceneTag(i)}`).join('\n'))
+    }
+    const scenes = scenesOf(user)
+    writeRequests.push({ scenes, user })
+    const custom = options.onWrite?.(scenes, writeCalls)
+    writeCalls += 1
+    if (custom !== null && custom !== undefined) return jsonReply(custom)
+    if (!scenes.length) {
+      // 规划失败时的顺序回退路径：按请求里要的条数给回复
+      const need = Number(user.match(/写 (\d+) 条提示词/)?.[1] ?? 1)
+      return jsonReply(numbered(1, need))
+    }
+    // 默认：按分到的方案逐条回正文，条数与方案一致
+    return jsonReply(scenes.map((scene, i) => `${i + 1}. ${scene}，三栏排版，无按钮。`).join('\n'))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return { fetchMock, planCalls, writeRequests }
+}
+
+describe('generatePrompts 两阶段并行写', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('条数不超过单批时只请求一次（原行为不变）', async () => {
-    const fetchMock = mockSequence([numbered(1, 5)])
-    const prompts = await generatePrompts(profile, SOP, 5)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(prompts).toHaveLength(5)
+  it('先规划一次，再按批并行写；总调用数 = 1 + 批数', async () => {
+    const total = 30
+    const batches = Math.ceil(total / PROMPTS_PER_BATCH)
+    const { fetchMock, planCalls, writeRequests } = mockTwoPhase({ planCount: total + 10 })
+    const prompts = await generatePrompts(profile, SOP, total)
+
+    // 规划只跑一次（不随批数增长），这是提速的关键
+    expect(planCalls).toHaveLength(1)
+    expect(writeRequests).toHaveLength(batches)
+    expect(fetchMock).toHaveBeenCalledTimes(1 + batches)
+    expect(prompts).toHaveLength(total)
   })
 
-  it('要 30 条时按批循环写满，进度逐批回调', async () => {
-    /**
-     * 批次大小改了（12 → 8）之后，30 条不再正好是 3 批，
-     * 所以这里按 PROMPTS_PER_BATCH 动态算出真实批数和最后一批的条数，
-     * 不再写死 3。
-     */
-    const perBatch = PROMPTS_PER_BATCH
-    const lastBatch = 30 - Math.floor(30 / perBatch) * perBatch || perBatch
-    const batches = Math.ceil(30 / perBatch)
-    const fetchMock = mockSequence(
-      Array.from({ length: batches }, (_, i) => {
-        const start = i * perBatch + 1
-        const count = i === batches - 1 ? lastBatch : perBatch
-        return numbered(start, count)
-      }),
-    )
-    const progress: Array<[number, number]> = []
-    const prompts = await generatePrompts(profile, SOP, 30, true, '', '', false, (written, total) => {
-      progress.push([written, total])
+  it('每批只写自己那份方案，不会看到别的批的', async () => {
+    const total = PROMPTS_PER_BATCH * 2
+    const { writeRequests } = mockTwoPhase({ planCount: total + 6 })
+    await generatePrompts(profile, SOP, total)
+
+    expect(writeRequests).toHaveLength(2)
+    const [first, second] = writeRequests.map((item) => item.scenes)
+    // 每批条数都等于单批上限
+    expect(first).toHaveLength(PROMPTS_PER_BATCH)
+    expect(second).toHaveLength(PROMPTS_PER_BATCH)
+    // 两批的方案集合没有交集 —— 这正是能并行且不撞车的前提
+    for (const scene of first) expect(second).not.toContain(scene)
+  })
+
+  it('结果顺序按批号还原，不受各批完成先后影响', async () => {
+    const total = PROMPTS_PER_BATCH * 2
+    // 第 0 批故意慢、第 1 批快：并行下第 1 批会先返回
+    const { } = mockTwoPhase({
+      planCount: total + 6,
+      onWrite: (scenes, callIndex) => {
+        if (callIndex === 0) {
+          return scenes.map((scene, i) => `${i + 1}. ${scene}，这是第一批，无按钮。`).join('\n')
+        }
+        return scenes.map((scene, i) => `${i + 1}. ${scene}，这是第二批，无按钮。`).join('\n')
+      },
     })
+    const prompts = await generatePrompts(profile, SOP, total)
 
-    expect(fetchMock).toHaveBeenCalledTimes(batches)
-    expect(prompts).toHaveLength(30)
-    expect(progress[progress.length - 1]).toEqual([30, 30])
-    // 编号必须接着往下走，不能每批都从「场景1」重来
-    expect(prompts[0]).toContain('场景1')
-    expect(prompts[29]).toContain('场景30')
+    // 前 PROMPTS_PER_BATCH 条必须来自第一批，不能因为第二批先返回就抢在前面
+    expect(prompts.slice(0, PROMPTS_PER_BATCH).every((item) => item.includes('这是第一批'))).toBe(true)
+    expect(prompts.slice(PROMPTS_PER_BATCH).every((item) => item.includes('这是第二批'))).toBe(true)
   })
 
-  it('第二批请求里带上已写好的条目，并明确要求避重', async () => {
-    const fetchMock = mockSequence([
-      numbered(1, PROMPTS_PER_BATCH),
-      numbered(PROMPTS_PER_BATCH + 1, PROMPTS_PER_BATCH),
-    ])
-    await generatePrompts(profile, SOP, PROMPTS_PER_BATCH * 2)
-    const secondBody = JSON.parse(
-      String((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body),
-    )
-    const user = secondBody.messages[1].content as string
-    expect(user).toContain('已经写好的提示词')
-    expect(user).toContain('场景1')
-    // 每批只请求这一批的条数，不能又按总数要一次
-    expect(user).toContain(`写 ${PROMPTS_PER_BATCH} 条提示词`)
+  it('进度按已完成条数累加，最后一条回调等于总数', async () => {
+    const total = 30
+    const { } = mockTwoPhase({ planCount: total + 10 })
+    const progress: Array<[number, number]> = []
+    await generatePrompts(profile, SOP, total, true, '', '', false, (written, t) => {
+      progress.push([written, t])
+    })
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress[progress.length - 1]).toEqual([total, total])
+    // 累加不应倒退
+    for (let i = 1; i < progress.length; i += 1) {
+      expect(progress[i][0]).toBeGreaterThanOrEqual(progress[i - 1][0])
+    }
   })
 
-  it('跨批逐字重复的条目会被丢掉，不占总数', async () => {
-    const repeated = numbered(1, 8)
-    mockSequence([
-      numbered(1, PROMPTS_PER_BATCH),
-      // 第二批前 8 条与第一批逐字相同，只有后面几条是新的
-      `${repeated}\n${numbered(100, 4)}`,
-    ])
-    const prompts = await generatePrompts(profile, SOP, PROMPTS_PER_BATCH + 4)
-    expect(prompts).toHaveLength(PROMPTS_PER_BATCH + 4)
-    expect(new Set(prompts).size).toBe(prompts.length)
-    expect(prompts.some((item) => item.includes('场景100'))).toBe(true)
+  it('规划失败时退回顺序写法，不让整批卡住', async () => {
+    // 规划请求返回一段无法解析成编号列表的内容
+    let writeCalls = 0
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body))
+      const system = body.messages[0].content as string
+      if (system.includes(PLAN_MARKER)) return jsonReply('抱歉，我无法完成这个请求。')
+      writeCalls += 1
+      return jsonReply(numbered(1, PROMPTS_PER_BATCH))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const prompts = await generatePrompts(profile, SOP, PROMPTS_PER_BATCH)
+    // 退回顺序路径：仍然能写出这批提示词
+    expect(prompts).toHaveLength(PROMPTS_PER_BATCH)
+    expect(writeCalls).toBeGreaterThanOrEqual(1)
+  })
+
+  it('单批写词失败不拖垮整批，其余批照常返回', async () => {
+    const total = PROMPTS_PER_BATCH * 2
+    const { } = mockTwoPhase({
+      planCount: total + 6,
+      onWrite: (scenes, callIndex) => {
+        if (callIndex === 1) throw new Error('这一批网络断了')
+        return null
+      },
+    })
+    const prompts = await generatePrompts(profile, SOP, total)
+    // 只剩第一批的条数，但不能抛错
+    expect(prompts).toHaveLength(PROMPTS_PER_BATCH)
   })
 
   it('条数超过上限时按上限算', async () => {
-    const fetchMock = mockSequence([numbered(1, 50)])
+    const { fetchMock } = mockTwoPhase({ planCount: MAX_PROMPTS_PER_RUN + 100 })
     const prompts = await generatePrompts(profile, SOP, MAX_PROMPTS_PER_RUN + 500)
     expect(prompts.length).toBeLessThanOrEqual(MAX_PROMPTS_PER_RUN)
     expect(fetchMock.mock.calls.length).toBeGreaterThan(1)
+  })
+})
+
+describe('dedupeScenes 规划去重', () => {
+  it('四项里只换色调的方案算重复，会被丢掉', () => {
+    const scenes = [
+      '公园林荫道，母女二人，薄荷绿配奶白，平视中景',
+      // 只有色调不同 —— 画出来还是同一个画面
+      '公园林荫道，母女二人，暖橙配深棕，平视中景',
+    ]
+    const result = dedupeScenes(scenes)
+    expect(result.kept).toHaveLength(1)
+    expect(result.dropped).toHaveLength(1)
+  })
+
+  it('四项里有三项不同的方案都保留', () => {
+    const scenes = [
+      '公园林荫道，母女二人，薄荷绿配奶白，平视中景',
+      '城市天台花园，独处青年，雾蓝配浅灰，低角度仰拍',
+    ]
+    const result = dedupeScenes(scenes)
+    expect(result.kept).toHaveLength(2)
+    expect(result.dropped).toHaveLength(0)
+  })
+
+  it('完全照抄的方案一定被丢掉', () => {
+    const one = '海边栈桥，祖孙三代，蜜桃粉配米白，微俯全景'
+    const result = dedupeScenes([one, one, one])
+    expect(result.kept).toHaveLength(1)
+    expect(result.dropped).toHaveLength(2)
+  })
+
+  it('相似度是自反的，且完全不同的两条接近 0', () => {
+    const a = '公园林荫道，母女二人，薄荷绿配奶白，平视中景'
+    const b = '地铁站台，独处老人，酒红配暖金，侧俯三分'
+    expect(sceneSimilarity(a, a)).toBe(1)
+    expect(sceneSimilarity(a, b)).toBeLessThan(0.45)
   })
 })
 

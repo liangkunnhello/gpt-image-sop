@@ -504,6 +504,13 @@ export interface PromptMessagesInput {
    * 用户这句是「这次要怎么做」，后者更容易在写多条时被忽略。
    */
   userRequirement?: string
+  /**
+   * 这批每条已经规划好的差异化方案（见 planPromptScenes）。
+   *
+   * 非空时模型只负责「把指定的场景写成完整的提示词」，不再自己决定画什么 ——
+   * 这样多批可以并行，撞车在规划阶段就解决掉了。
+   */
+  scenes?: string[]
 }
 
 /** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
@@ -563,6 +570,7 @@ export function buildPromptMessages({
   existing = [],
   imageHint = '',
   userRequirement = '',
+  scenes = [],
 }: PromptMessagesInput): { system: string; user: string } {
   const copy = copyText.trim()
   const tail = ignoreCompliance
@@ -586,17 +594,145 @@ export function buildPromptMessages({
   const requirement = userRequirement.trim()
     ? `\n\n【本次要求（用户输入框里写的，优先级最高）】\n${userRequirement.trim()}\n每条提示词都必须体现这条要求；与 SOP 冲突时以它为准。`
     : ''
+  /**
+   * 规划阶段已经把这 ${count} 条的画面方案定死了，这里只要求逐条照着写。
+   *
+   * 关键点：必须写明「第 N 条 = 哪个方案」。只丢一串场景而不编号的话，
+   * 模型会自己重新分配，最后几条会挤到同一个场景上，并行写就白等了。
+   */
+  const sceneBlock = scenes.length
+    ? `\n\n【这一批必须按下列画面方案逐条写，一条对应一条，顺序不得调整】\n${scenes.map((scene, index) => `${index + 1}. ${scene}`).join('\n')}\n每条都只写自己那一行的场景，不要挪用其他行的元素，也不要另起新的场景。`
+    : ''
+  const writeInstruction = scenes.length
+    ? `按这份 SOP 写这 ${count} 条提示词：第 1 条对应上面方案的第 1 行，第 ${count} 条对应第 ${count} 行，逐条对齐。严禁合并、跳过或新增方案。`
+    : `按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。`
+
   return {
     system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta, Boolean(imageBlock), Boolean(requirement)),
-    user: `【生图 SOP】\n${(avoidCta ? stripButtonPlaceholders(sopText) : sopText).trim()}${copyBlock}${previous}\n\n按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。${tail}${copyTail}${ctaBlock}${reserve}${requirement}${imageBlock}`,
+    user: `【生图 SOP】\n${(avoidCta ? stripButtonPlaceholders(sopText) : sopText).trim()}${copyBlock}${previous}${sceneBlock}\n\n${writeInstruction}${tail}${copyTail}${ctaBlock}${reserve}${requirement}${imageBlock}`,
   }
+}
+
+/**
+ * 规划阶段：先只产出「画面方案标签」，不写正文。
+ *
+ * 为什么要多走这一步（原先的写法与它的毛病）：
+ * 原来是顺序分批写，每批把已写好的提示词前 80 字贴给下一批「避重」。
+ * 这带来两个问题：
+ * 1. **必须串行** —— 后一批要等前一批写完才知道该避开什么；30 条 = 3 批串起来，
+ *    光写词就要 3 分半，实测占整个准备阶段的 81%；
+ * 2. **避重很弱** —— 模型只看到 80 字的开头，而且长上下文里本来就不容易守住。
+ *
+ * 改成「先规划、再并行」：
+ * - 规划只输出 N 条短标签（每条 15~25 字，含场景/人物/色调/机位四项），
+ *   输出量不到正文的 1/20，十几秒就能跑完；
+ * - 撞车在标签层就能算出来（字符串相似度），当场丢掉重规划，
+ *   比等到写完几百字正文再发现重复便宜得多；
+ * - 标签互不重复之后，写正文的各批彼此独立，可以并行。
+ */
+const SCENE_PLAN_SYSTEM = [
+  '你是商业海报的生图策划。用户会给你一份「生图 SOP」，你要为接下来要写的 N 条提示词**各规划一个画面方案**。',
+  '每条方案写成一行短标签，15~25 字，必须同时包含这四项信息：',
+  '① 场景（具体地点与情境，如「城市天台花园」「居家飘窗角落」）；',
+  '② 人物组合（人数与关系，如「母女二人」「独处青年」）；',
+  '③ 主色调（如「薄荷绿配奶白」「暖橙配深棕」）；',
+  '④ 机位（如「平视中景」「微俯全景」）。',
+  '硬性要求：任意两条方案之间，上面四项里**至少三项不同**。只换一个色调或只换机位不算新方案。',
+  '不要写画面细节、不要写文案、不要写排版，这些后面会按 SOP 统一处理 —— 你只负责把「拍什么」区分开。',
+  '只输出编号列表，一行一条，不要小标题、不要解释、不要代码块。',
+].join('\n')
+
+/** 并行写词的批次上限：同时最多几批在飞 */
+const PROMPT_WRITE_PARALLEL = 4
+
+/** 标签相似度：按 2-gram 集合算 Jaccard，用来在规划阶段查出「换汤不换药」的方案 */
+export function sceneSimilarity(a: string, b: string): number {
+  const grams = (text: string) => {
+    const out = new Set<string>()
+    const clean = text.replace(/\s+/g, '')
+    for (let i = 0; i < clean.length - 1; i += 1) out.add(clean.slice(i, i + 2))
+    return out
+  }
+  const left = grams(a)
+  const right = grams(b)
+  if (!left.size || !right.size) return 0
+  let shared = 0
+  for (const gram of left) if (right.has(gram)) shared += 1
+  return shared / (left.size + right.size - shared)
+}
+
+/**
+ * 规划阶段产出的标签去重。
+ *
+ * 阈值 0.45：中文短句的 2-gram 重合度天然偏高（同一份 SOP 出来的标签都带
+ * 「场景」「色调」这类词），门槛定太高会把正常的不同方案也判成重复。
+ * 0.45 大约相当于「四项里只有一两项不一样」，正是要拦的情况。
+ */
+export function dedupeScenes(scenes: string[], threshold = 0.45): { kept: string[]; dropped: string[] } {
+  const kept: string[] = []
+  const dropped: string[] = []
+  for (const scene of scenes) {
+    const text = scene.trim()
+    if (!text) continue
+    if (kept.some((item) => sceneSimilarity(item, text) >= threshold)) {
+      dropped.push(text)
+      continue
+    }
+    kept.push(text)
+  }
+  return { kept, dropped }
+}
+
+/**
+ * 规划要写多少条方案。
+ *
+ * 多要 30%：规划本身也会撞车，多出来的正好补上被去掉的那些；
+ * 但至少要多给 2 条，否则条数少时补不动（3 条撞 1 条就没余量了）。
+ */
+function planSceneCount(total: number) {
+  return total + Math.max(2, Math.ceil(total * 0.3))
+}
+
+async function planPromptScenes(
+  profile: ApiProfile,
+  input: {
+    sopText: string
+    total: number
+    copyText: string
+    avoidCta: boolean
+    userRequirement: string
+  },
+): Promise<string[]> {
+  const want = planSceneCount(input.total)
+  const copy = input.copyText.trim()
+  const user = [
+    `【生图 SOP】\n${(input.avoidCta ? stripButtonPlaceholders(input.sopText) : input.sopText).trim()}`,
+    copy ? `【图上必须出现的卖点（仅供你理解画面主题，不用写进方案）】\n${copy}` : '',
+    input.userRequirement.trim() ? `【本次要求】\n${input.userRequirement.trim()}` : '',
+    `请规划 ${want} 条互不相同的画面方案，按上面要求的四项写，一行一条。`,
+  ].filter(Boolean).join('\n\n')
+
+  const raw = await chat(
+    profile,
+    [
+      { role: 'system', content: SCENE_PLAN_SYSTEM },
+      { role: 'user', content: user },
+    ],
+    // 只出短标签，十几秒就够；给太紧会因为网络抖动误判失败
+    120,
+    // 每条 25 字 ≈ 40 token，want 条再留一倍余量
+    Math.min(8000, Math.max(1500, want * 80)),
+    // 规划要发散，否则模型会给出一堆相似的场景
+    0.9,
+  )
+  return parseNumberedList(raw)
 }
 
 /**
  * 第二步：SOP → 多条具体提示词。
  *
- * 条数超过单次输出能力时**自动分批**：每批 `PROMPTS_PER_BATCH` 条，
- * 把已写好的贴给模型避重，跨批去重后凑满 target 为止。
+ * 两阶段：先规划 N 条互不重复的画面方案，再按批次**并行**写正文。
+ * 规划失败（网络抖动、模型返回空）时退回原来的顺序写法，不让整批卡住。
  * `onProgress(written, total)` 每批回调一次，供界面显示「正在写 24/100」。
  */
 export async function generatePrompts(
@@ -614,6 +750,42 @@ export async function generatePrompts(
   userRequirement = '',
 ): Promise<string[]> {
   const total = clampPromptCount(count)
+  const opts = { sopText, ignoreCompliance, avoidHint, copyText, avoidCta, imageHint, userRequirement }
+
+  // 阶段 1：规划画面方案。失败就退回顺序写法，不让整批卡住
+  let scenes: string[] = []
+  try {
+    const planned = await planPromptScenes(profile, {
+      sopText, total, copyText, avoidCta, userRequirement,
+    })
+    scenes = dedupeScenes(planned).kept
+  } catch (err) {
+    console.warn('规划画面方案失败，退回顺序写词：', err)
+  }
+
+  // 方案够数才并行；不够说明规划没成功，顺序写（它自带避重上下文）更稳
+  if (scenes.length >= total) {
+    return writePromptsInParallel(profile, opts, total, scenes.slice(0, total), onProgress)
+  }
+
+  return writePromptsSequentially(profile, opts, total, onProgress)
+}
+
+/** 顺序写词：原来的实现，规划失败时兜底用 */
+async function writePromptsSequentially(
+  profile: ApiProfile,
+  opts: {
+    sopText: string
+    ignoreCompliance: boolean
+    avoidHint: string
+    copyText: string
+    avoidCta: boolean
+    imageHint: string
+    userRequirement: string
+  },
+  total: number,
+  onProgress?: (written: number, total: number) => void,
+): Promise<string[]> {
   const prompts: string[] = []
   const seen = new Set<string>()
   // 模型偶尔少写几条，多给两轮机会；轮数封顶避免一直写不出来时死循环
@@ -624,14 +796,8 @@ export async function generatePrompts(
     tries += 1
     const need = Math.min(PROMPTS_PER_BATCH, total - prompts.length)
     const messages = buildPromptMessages({
-      sopText,
+      ...opts,
       count: need,
-      ignoreCompliance,
-      avoidHint,
-      copyText,
-      avoidCta,
-      imageHint,
-      userRequirement,
       // 只带最近几批：全量贴进去会把上下文顶爆，而最近写的最容易撞车
       existing: prompts.slice(-PROMPTS_PER_BATCH * 3),
     })
@@ -641,17 +807,12 @@ export async function generatePrompts(
         { role: 'system', content: messages.system },
         { role: 'user', content: messages.user },
       ],
-      // 条数多时写得更久，超时要跟着放宽，否则正常的长输出会被中断
       240,
       tokensForPrompts(need),
-      // 发散交给 SOP 的变量池与互斥规则，这里保持稳定采样，避免 SOP 之外的随机漂移
       0.4,
     )
     const parsed = parseNumberedList(raw)
-    // 规则层要求「同一张图里每种卖点只出现一次」，但模型可能写重；
-    // 这里做确定性兜底：同一句卖点在一张图里重复出现时，只保留第一次。
-    const batch = copyText.trim() ? dedupePrompts(parsed).prompts : parsed
-    // 跨批去重：不同批次偶尔会给出几乎一模一样的一条，逐字相同就丢掉
+    const batch = opts.copyText.trim() ? dedupePrompts(parsed).prompts : parsed
     for (const prompt of batch) {
       const key = prompt.replace(/\s+/g, ' ').trim()
       if (!key || seen.has(key)) continue
@@ -662,6 +823,87 @@ export async function generatePrompts(
     onProgress?.(Math.min(prompts.length, total), total)
   }
   return prompts
+}
+
+/**
+ * 并行写词：把规划好的方案切成若干批，最多 `PROMPT_WRITE_PARALLEL` 批同时在飞。
+ *
+ * 为什么现在能并行、以前不能：
+ * 以前靠「把已写好的贴给下一批」避重，后一批必须等前一批出结果，天然串行。
+ * 现在画面方案在规划阶段就分好了，各批任务互不重叠，不需要看别人的输出。
+ *
+ * 顺序仍要保住：每批完成时按**批号**写回自己的槽位，
+ * 不能按完成先后拼接 —— 否则第 1 条可能落到第 12 条的位置上，
+ * 后面图片分配、卖点对应、卡内排序全都会错位。
+ */
+async function writePromptsInParallel(
+  profile: ApiProfile,
+  opts: {
+    sopText: string
+    ignoreCompliance: boolean
+    avoidHint: string
+    copyText: string
+    avoidCta: boolean
+    imageHint: string
+    userRequirement: string
+  },
+  total: number,
+  scenes: string[],
+  onProgress?: (written: number, total: number) => void,
+): Promise<string[]> {
+  const chunks: string[][] = []
+  for (let start = 0; start < total; start += PROMPTS_PER_BATCH) {
+    chunks.push(scenes.slice(start, Math.min(start + PROMPTS_PER_BATCH, total)))
+  }
+
+  const slots: string[][] = chunks.map(() => [])
+  let done = 0
+
+  const writeChunk = async (chunk: string[], index: number) => {
+    const messages = buildPromptMessages({
+      ...opts,
+      count: chunk.length,
+      scenes: chunk,
+    })
+    const raw = await chat(
+      profile,
+      [
+        { role: 'system', content: messages.system },
+        { role: 'user', content: messages.user },
+      ],
+      240,
+      tokensForPrompts(chunk.length),
+      // 方案已经定死，这里不再需要发散，稳定采样即可
+      0.4,
+    )
+    const parsed = parseNumberedList(raw)
+    const cleaned = opts.copyText.trim() ? dedupePrompts(parsed).prompts : parsed
+    // 条数对不上时按方案数补齐/截断：宁可少一条，也不能让后面的条错位
+    slots[index] = cleaned.slice(0, chunk.length)
+    done += slots[index].length
+    onProgress?.(Math.min(done, total), total)
+  }
+
+  // 分批滚动：最多 PROMPT_WRITE_PARALLEL 批同时在飞，谁先完成谁补下一批
+  let next = 0
+  const workers = Array.from({ length: Math.min(PROMPT_WRITE_PARALLEL, chunks.length) }, async () => {
+    while (next < chunks.length) {
+      const index = next
+      next += 1
+      try {
+        await writeChunk(chunks[index], index)
+      } catch (err) {
+        // 单批失败不拖垮整批：留下空槽，最后按实际拿到的条数返回
+        console.warn(`第 ${index + 1} 批写词失败：`, err)
+        slots[index] = []
+      }
+    }
+  })
+  await Promise.all(workers)
+
+  // 按批号摊平，保持规划顺序
+  const result = slots.flat().filter(Boolean)
+  return result.slice(0, total)
 }
 
 /**
