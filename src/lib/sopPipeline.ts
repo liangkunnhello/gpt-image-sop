@@ -87,8 +87,18 @@ export async function chat(
   }
 
   let res = await send(maxTokens)
-  // 有些渠道认死的输出上限比我们要求的小，按原值再要一次会一直 400；降级到保守值重试一次
-  if (res.status === 400 && maxTokens > 4000) res = await send(4000)
+  /**
+   * 有些渠道把输出上限写死得比我们要求的低，按原值再要会一直 400。
+   *
+   * 原来是「一次降到 4000」—— 但 4000 连 8 条 SOP 提示词都写不完（8×900=7200），
+   * 降级后必然整批被截断，等于用 400 换了半批废图。改成逐级对半降：
+   * 只在低于「够写完这一批」的值时才停，宁可少给几条也不给到写不完的量。
+   */
+  let limit = maxTokens
+  while (res.status === 400 && limit > 4000) {
+    limit = Math.max(4000, Math.floor(limit / 2))
+    res = await send(limit)
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}：${await getApiErrorMessage(res)}`)
   const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
   const content = String(json.choices?.[0]?.message?.content ?? '').trim()
@@ -96,10 +106,20 @@ export async function chat(
   return content
 }
 
-/** 写提示词时每条预留的输出预算（中文提示词一条约 150~250 字，留足余量） */
-const TOKENS_PER_PROMPT = 500
-/** 单次请求的输出上限天花板，超过这个值很多渠道会直接 400 */
-const MAX_OUTPUT_TOKENS = 16000
+/**
+ * 写提示词时每条预留的输出预算。
+ *
+ * 原来写 500，注释还写着「一条约 150~250 字」—— 但实际上这批 SOP 写出来的
+ * 每条是 **380~460 字中文**（实测 sop-mw05c4zr-2nol 的 26 条正常提示词），
+ * 中文按 1 字≈1.5~2 token 算，一条就要 600~900 token。
+ *
+ * 预算给不到就出现「写到一半被熔断」：那批 30 条里有 4 条被截断
+ * （idx 24 只写了 48 个字就断在「暖阳米黄色调」），断点全在「写第几张卡片文案」的位置。
+ * 900 是实测需求的上界，再留一点余量给模型发挥。
+ */
+const TOKENS_PER_PROMPT = 900
+/** 单次请求的输出上限天花板。16000 对 30 条已经不够（30×900=27000），放到 32000 */
+const MAX_OUTPUT_TOKENS = 32000
 
 /** 按要写的条数算出这次请求的输出上限，条数越多给得越多 */
 export function tokensForPrompts(count: number): number {

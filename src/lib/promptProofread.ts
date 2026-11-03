@@ -16,7 +16,7 @@
 import type { ApiProfile } from '../types'
 import { chat } from './sopPipeline'
 import { normalizeCopy } from './copyDedupe'
-import { checkPromptCopy, extractQuotedCopy, splitCopyLines } from './copyCheck'
+import { checkPromptsIntegrity, checkPromptCopy, extractQuotedCopy, splitCopyLines } from './copyCheck'
 
 export interface BannedWordRule {
   label: string
@@ -234,7 +234,7 @@ export interface ProofreadInput {
  * 不负责过滤：调用方按 index 自己摘（变量模式还有图片分配、填词结果等并行的数组要一起摘）。
  */
 export async function proofreadPrompts({ profile, prompts, copyText = '', enabled = true }: ProofreadInput): Promise<ProofreadOutcome> {
-  if (!enabled || !prompts.length) return { blocks: [], notes: [] }
+  if (!prompts.length) return { blocks: [], notes: [] }
 
   const reasons = new Map<number, string[]>()
   const push = (index: number, reason: string) => {
@@ -244,6 +244,24 @@ export async function proofreadPrompts({ profile, prompts, copyText = '', enable
   }
 
   const warnings: string[] = []
+  /**
+   * 先做结构完整性检测（整批一起算，因为要拿同批中位长度当参照）。
+   *
+   * 放在最前面，而且**不受「校对开关」影响**：被截断的提示词是半句话，
+   * 出图必然出来一张没写完字的废图，这属于结构性缺陷，不该由用户能不能关掉的
+   * 校对开关来决定。实测一批 30 条里 4 条被模型熔断在半句，卖点校验一条都没报
+   * （那批没填卖点文案），4 张废图直接出到出图阶段。
+   */
+  for (const issue of checkPromptsIntegrity(prompts)) {
+    push(issue.index, `提示词不完整：${issue.reason}`)
+  }
+  // 校对开关只管「规则 + 合规」这一段，完整性检测已经在上面无条件做过了
+  if (!enabled) {
+    const blocksOnly = [...reasons.entries()]
+      .map(([index, list]) => ({ index, reasons: list }))
+      .sort((a, b) => a.index - b.index)
+    return { blocks: blocksOnly, notes: [] }
+  }
   prompts.forEach((prompt, index) => {
     const checked = checkPromptRules(prompt, copyText)
     for (const reason of checked.blocks) push(index, reason)

@@ -9,11 +9,15 @@ export const MAX_PROMPTS_PER_RUN = 500
 /**
  * 单批写几条。
  *
- * 写提示词是一次 `chat` 调用，输出上限 `MAX_OUTPUT_TOKENS = 16000`、
- * 每条预算 `TOKENS_PER_PROMPT = 500`，也就是一次最多约 32 条。
- * 取 12 是留足余量：模型偶尔会把一条写得偏长，批太满会被截断成半条。
+ * 写提示词是一次 `chat` 调用，输出上限 `MAX_OUTPUT_TOKENS`、
+ * 每条预算 `TOKENS_PER_PROMPT = 900`（实测每条 SOP 提示词 380~460 字中文）。
+ *
+ * 改成 8 而不是原来的 12：实测 12 条一批时，第 11 条就已经被熔断
+ * （sop-mw05c4zr-2nol 那批第 11 条断在「赔付总限额6」）。
+ * 8 条 × 900 token = 7200，远低于上限，单批被截断的概率大幅下降；
+ * 批次变多的代价只是多几次调用，比出废图便宜得多。
  */
-export const PROMPTS_PER_BATCH = 12
+export const PROMPTS_PER_BATCH = 8
 
 /** 把用户填的条数收进合法范围：1 ~ MAX_PROMPTS_PER_RUN */
 export function clampPromptCount(value: number): number {

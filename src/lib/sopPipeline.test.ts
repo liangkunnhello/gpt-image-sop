@@ -130,18 +130,27 @@ describe('generatePrompts 分批写', () => {
   })
 
   it('要 30 条时按批循环写满，进度逐批回调', async () => {
+    /**
+     * 批次大小改了（12 → 8）之后，30 条不再正好是 3 批，
+     * 所以这里按 PROMPTS_PER_BATCH 动态算出真实批数和最后一批的条数，
+     * 不再写死 3。
+     */
     const perBatch = PROMPTS_PER_BATCH
-    const fetchMock = mockSequence([
-      numbered(1, perBatch),
-      numbered(perBatch + 1, perBatch),
-      numbered(perBatch * 2 + 1, 6),
-    ])
+    const lastBatch = 30 - Math.floor(30 / perBatch) * perBatch || perBatch
+    const batches = Math.ceil(30 / perBatch)
+    const fetchMock = mockSequence(
+      Array.from({ length: batches }, (_, i) => {
+        const start = i * perBatch + 1
+        const count = i === batches - 1 ? lastBatch : perBatch
+        return numbered(start, count)
+      }),
+    )
     const progress: Array<[number, number]> = []
     const prompts = await generatePrompts(profile, SOP, 30, true, '', '', false, (written, total) => {
       progress.push([written, total])
     })
 
-    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledTimes(batches)
     expect(prompts).toHaveLength(30)
     expect(progress[progress.length - 1]).toEqual([30, 30])
     // 编号必须接着往下走，不能每批都从「场景1」重来
