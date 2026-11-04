@@ -159,6 +159,8 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
     }
     enqueueSopJobs([{
       label: '第 1/1 张卡',
+      // 记下是从这张卡衍生的：素材跟踪那边靠它把消耗沿血缘往上卷
+      parentCardId: task.sopJobId || task.id,
       params: useStore.getState().params,
       imageDataUrls: images.map((item) => item.dataUrl),
       imageIds: images.map((item) => item.id),

@@ -13,7 +13,7 @@
  * 新增字段只改 JSON，不用改 schema。聚合在前端内存里算。
  */
 import { isTauri } from './platform'
-import { openDB, STORE_TRACK_ASSETS, STORE_TRACK_IMPORTS, STORE_TRACK_LINEAGE, STORE_TRACK_SPEND } from './idb'
+import { openDB } from './idb'
 
 /** 素材在生命周期里所处的位置 */
 export type AssetStage =
@@ -100,12 +100,23 @@ export interface ImportRecord {
 
 type TrackKind = 'assets' | 'spend' | 'lineage' | 'imports'
 
+/**
+ * IndexedDB 里的 store 名，**必须与 `idb.ts` 建表时用的名字一致**。
+ *
+ * 这里刻意不 import idb.ts 的常量：idb 被不少测试 mock 过，
+ * 一旦让 trackDb 依赖它的具名导出，那些只 mock 了 openDB 的测试就会报
+ * 「No STORE_TRACK_* export is defined on the mock」。
+ * 名字一致性由 trackDb.test.ts 里的用例守着。
+ */
 const STORE_BY_KIND: Record<TrackKind, string> = {
-  assets: STORE_TRACK_ASSETS,
-  spend: STORE_TRACK_SPEND,
-  lineage: STORE_TRACK_LINEAGE,
-  imports: STORE_TRACK_IMPORTS,
+  assets: 'trackAssets',
+  spend: 'trackSpend',
+  lineage: 'trackLineage',
+  imports: 'trackImports',
 }
+
+/** 导出给测试用：确认这里的 store 名与 idb.ts 建表时用的常量一致 */
+export const TRACK_STORE_NAMES = STORE_BY_KIND
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import('@tauri-apps/api/core')
@@ -190,6 +201,33 @@ export async function trackClear(kind: TrackKind): Promise<void> {
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error)
   })
+}
+
+/**
+ * 记一条任务卡血缘。
+ *
+ * 为什么不让调用方自己拼：血缘是「顺手记一笔」的事，失败了不该影响出图，
+ * 所以这里统一吞掉异常只打日志。主键用「子卡 + 母卡」保证同一对关系不会重复记。
+ */
+export async function recordLineage(
+  cardId: string,
+  parentCardId: string,
+  relation: LineageRecord['relation'],
+): Promise<void> {
+  if (!cardId || !parentCardId || cardId === parentCardId) return
+  try {
+    const record: LineageRecord = {
+      id: lineageId(cardId, parentCardId),
+      cardId,
+      parentCardId,
+      relation,
+      createdAt: Date.now(),
+    }
+    await trackPut('lineage', record.id, record)
+  } catch (err) {
+    // 血缘记不上不影响出图，但要留痕便于排查
+    console.warn('记录任务卡血缘失败：', err)
+  }
 }
 
 /** 消耗流水的稳定主键：同一平台素材同一天只应有一条 */

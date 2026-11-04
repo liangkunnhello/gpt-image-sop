@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
+import { ensureImageThumbnailCached } from '../../lib/imageCache'
 import type { TaskRecord } from '../../types'
 import {
   STAGE_LABEL,
@@ -33,7 +34,7 @@ import {
   type SpendRecord,
 } from '../../lib/trackDb'
 
-type Tab = 'assets' | 'import' | 'stats'
+type Tab = 'assets' | 'unmatched' | 'import' | 'stats'
 
 const FIELD_LABEL: Array<[keyof ColumnMapping, string, boolean]> = [
   ['date', '投放日期', true],
@@ -112,7 +113,7 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
           <div className="flex items-center gap-4">
             <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">素材投放跟踪</h2>
             <div className="flex gap-1">
-              {([['assets', '素材台账'], ['import', '导入报表'], ['stats', '消耗统计']] as Array<[Tab, string]>).map(([key, label]) => (
+              {([['assets', '素材台账'], ['unmatched', '待认领'], ['import', '导入报表'], ['stats', '消耗统计']] as Array<[Tab, string]>).map(([key, label]) => (
                 <button
                   key={key}
                   type="button"
@@ -146,6 +147,8 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
               byCard={byCard}
               onRebuild={rebuildLedger}
             />
+          ) : tab === 'unmatched' ? (
+            <UnmatchedTab spend={spend} assets={assets} onDone={load} setBusy={setBusy} setError={setError} />
           ) : tab === 'import' ? (
             <ImportTab
               tasks={tasks as TaskRecord[]}
@@ -226,7 +229,7 @@ function AssetsTab({
         <table className="w-full text-xs">
           <thead className="text-gray-400">
             <tr className="border-b border-gray-100 dark:border-white/10">
-              <th className="py-1.5 text-left font-normal">素材（哈希前 8 位）</th>
+              <th className="py-1.5 text-left font-normal">素材</th>
               <th className="py-1.5 text-right font-normal">累计消耗</th>
               <th className="py-1.5 text-right font-normal">投放天数</th>
               <th className="py-1.5 text-right font-normal">日均</th>
@@ -237,11 +240,16 @@ function AssetsTab({
           <tbody>
             {rows.slice(0, 200).map(({ asset, stat }) => (
               <tr key={asset.id} className="border-b border-gray-50 dark:border-white/5">
-                <td className="py-1.5 font-mono text-gray-700 dark:text-gray-200">
-                  {asset.id.slice(0, 8)}
-                  {asset.platformIds.length > 0 && (
-                    <span className="ml-2 text-[10px] text-gray-400">平台ID {asset.platformIds.length} 个</span>
-                  )}
+                <td className="py-1.5">
+                  <div className="flex items-center gap-2">
+                    <AssetThumb imageId={asset.id} />
+                    <div className="min-w-0">
+                      <span className="font-mono text-gray-700 dark:text-gray-200">{asset.id.slice(0, 8)}</span>
+                      {asset.platformIds.length > 0 && (
+                        <span className="ml-2 text-[10px] text-gray-400">平台ID {asset.platformIds.length} 个</span>
+                      )}
+                    </div>
+                  </div>
                 </td>
                 <td className="py-1.5 text-right text-gray-700 dark:text-gray-200">{stat ? `¥${fmtMoney(stat.totalSpend)}` : '-'}</td>
                 <td className="py-1.5 text-right text-gray-500">{stat?.activeDays ?? '-'}</td>
@@ -260,6 +268,30 @@ function AssetsTab({
   )
 }
 
+/**
+ * 素材缩略图。
+ *
+ * 列表里只显示哈希前 8 位的话，用户根本认不出是哪张图，
+ * 所以每行补一个缩略图。逐行自己异步加载、卸载即取消 ——
+ * 不用 IntersectionObserver 是因为这里最多渲染 200 行，
+ * 缩略图本身有缓存，重复打开不会重复解码。
+ */
+function AssetThumb({ imageId }: { imageId: string }) {
+  const [src, setSrc] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    ensureImageThumbnailCached(imageId)
+      .then((thumbnail) => {
+        if (!cancelled && thumbnail) setSrc(thumbnail.src)
+      })
+      .catch(() => { /* 缩略图加载失败不影响台账 */ })
+    return () => { cancelled = true }
+  }, [imageId])
+  return src
+    ? <img src={src} alt="" className="h-8 w-11 rounded object-cover" />
+    : <div className="h-8 w-11 rounded bg-gray-100 dark:bg-white/10" />
+}
+
 function StageBadge({ stage }: { stage: keyof typeof STAGE_LABEL }) {
   const color: Record<string, string> = {
     created: 'bg-gray-100 text-gray-500 dark:bg-white/10 dark:text-gray-400',
@@ -275,6 +307,135 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div className="rounded-xl border border-gray-100 px-3 py-2 dark:border-white/10">
       <p className="text-[11px] text-gray-400">{label}</p>
       <p className="mt-0.5 text-base font-semibold text-gray-800 dark:text-gray-100">{value}</p>
+    </div>
+  )
+}
+
+/**
+ * 待认领：报表里有、但认不到本地图的平台素材。
+ *
+ * 为什么必须有这一块：平台报表里常有一批行没有图片名称（这份报表就有 1828 行），
+ * 只靠文件名匹配永远认不到。这些数据本身是有效的（消耗合计里有它们），
+ * 让用户手动挂到某张图上，比直接丢掉或永远悬着实用。
+ *
+ * 绑定是按「平台素材ID」整体绑的：同一个平台 ID 在后续每天的报表里还会出现，
+ * 绑一次之后，那天的记录也会一起归到这张图上。
+ */
+function UnmatchedTab({
+  spend,
+  assets,
+  onDone,
+  setBusy,
+  setError,
+}: {
+  spend: SpendRecord[]
+  assets: AssetRecord[]
+  onDone: () => Promise<void>
+  setBusy: (value: string) => void
+  setError: (value: string) => void
+}) {
+  const [picked, setPicked] = useState<Record<string, string>>({})
+
+  const groups = useMemo(() => {
+    const map = new Map<string, { platformId: string; spend: number; days: number; dates: string[] }>()
+    for (const record of spend) {
+      if (record.assetId) continue
+      const entry = map.get(record.platformId) ?? { platformId: record.platformId, spend: 0, days: 0, dates: [] }
+      entry.spend += record.spend
+      entry.dates.push(record.date)
+      map.set(record.platformId, entry)
+    }
+    for (const entry of map.values()) {
+      entry.spend = Math.round(entry.spend * 100) / 100
+      entry.days = new Set(entry.dates).size
+    }
+    return [...map.values()].sort((a, b) => b.spend - a.spend)
+  }, [spend])
+
+  const bind = async (platformId: string) => {
+    const assetId = picked[platformId]
+    if (!assetId) return
+    setBusy('正在绑定…')
+    setError('')
+    try {
+      const targets = spend.filter((item) => item.platformId === platformId && !item.assetId)
+      for (const record of targets) {
+        await trackPut('spend', record.id, { ...record, assetId })
+      }
+      const asset = assets.find((item) => item.id === assetId)
+      if (asset) {
+        const lastDate = targets.reduce<string | undefined>(
+          (acc, item) => (!acc || item.date > acc ? item.date : acc), asset.lastSpendDate)
+        await trackPut('assets', asset.id, {
+          ...asset,
+          platformIds: asset.platformIds.includes(platformId) ? asset.platformIds : [...asset.platformIds, platformId],
+          lastSpendDate: lastDate,
+          firstSeenAt: asset.firstSeenAt ?? Date.now(),
+        })
+      }
+      setBusy(`已把平台素材 ${platformId} 绑到 ${assetId.slice(0, 8)}（${targets.length} 条流水）`)
+      await onDone()
+    } catch (err) {
+      setError(`绑定失败：${String(err)}`)
+      setBusy('')
+    }
+  }
+
+  const totalSpend = groups.reduce((sum, item) => sum + item.spend, 0)
+
+  if (!groups.length) {
+    return <p className="py-10 text-center text-xs text-gray-400">没有待认领的数据。导入报表后，认不到本地图的素材会出现在这里。</p>
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs text-gray-500 dark:text-gray-400">
+        这 {groups.length} 个平台素材合计 ¥{fmtMoney(totalSpend)}，认不到对应的本地图片。
+        报表里它们没有「图片名称」，只能你手动指定。绑定后同一平台素材以后每天的消耗都会自动归到这张图。
+      </p>
+      <table className="w-full text-xs">
+        <thead className="text-gray-400">
+          <tr className="border-b border-gray-100 dark:border-white/10">
+            <th className="py-1.5 text-left font-normal">平台素材ID</th>
+            <th className="py-1.5 text-right font-normal">累计消耗</th>
+            <th className="py-1.5 text-right font-normal">天数</th>
+            <th className="py-1.5 text-left font-normal">绑定到</th>
+            <th className="py-1.5" />
+          </tr>
+        </thead>
+        <tbody>
+          {groups.slice(0, 100).map((group) => (
+            <tr key={group.platformId} className="border-b border-gray-50 dark:border-white/5">
+              <td className="py-1.5 font-mono text-gray-600 dark:text-gray-300">{group.platformId}</td>
+              <td className="py-1.5 text-right text-gray-700 dark:text-gray-200">¥{fmtMoney(group.spend)}</td>
+              <td className="py-1.5 text-right text-gray-500">{group.days}</td>
+              <td className="py-1.5">
+                <select
+                  value={picked[group.platformId] ?? ''}
+                  onChange={(event) => setPicked({ ...picked, [group.platformId]: event.target.value })}
+                  className="w-full max-w-[16rem] rounded border border-gray-200 bg-transparent px-1 py-1 text-[11px] dark:border-white/15"
+                >
+                  <option value="">（选一个素材）</option>
+                  {assets.slice(0, 500).map((asset) => (
+                    <option key={asset.id} value={asset.id}>{asset.id.slice(0, 8)}</option>
+                  ))}
+                </select>
+              </td>
+              <td className="py-1.5 text-right">
+                <button
+                  type="button"
+                  disabled={!picked[group.platformId]}
+                  onClick={() => void bind(group.platformId)}
+                  className="rounded bg-blue-500 px-2 py-0.5 text-[11px] text-white hover:bg-blue-600 disabled:opacity-40"
+                >
+                  绑定
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {groups.length > 100 && <p className="text-[11px] text-gray-400">只显示前 100 个（按消耗降序），共 {groups.length} 个</p>}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import type { ApiProfile, ImageFidelity, InputImage, TaskParams } from '../types'
 import { createSopPlaceholder, removeSopPlaceholder, submitSopTasks, updateTaskInStore, useStore } from '../store'
+import { recordLineage } from './trackDb'
 import { useSopStore } from './sopStore'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage } from './imageApiShared'
@@ -1069,6 +1070,14 @@ export function appendCopySection(sopText: string, copyText: string): string {
 
 export interface SopJobRequest {
   label: string
+  /**
+   * 母卡：这次是「从哪张卡衍生出来的」。
+   *
+   * 目前只有详情页的「再次生成图片 → 新建一张卡」会传。
+   * 有了它，素材投放跟踪那边才能把消耗沿着血缘往上卷，
+   * 回答「这套创意整体花了多少钱、是从哪一版改出来的」。
+   */
+  parentCardId?: string
   imageDataUrls: string[]
   imageIds?: string[]
   /** 系统提示词 + 卖点 + 风格合成的一份 Markdown */
@@ -1179,6 +1188,8 @@ async function runJob(job: SopJobRequest) {
   const avoidZones = avoidZoneSummary(avoidTemplate)
 
   const sopJobId = `sop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  // 衍生关系顺手记一笔：失败不影响出图（recordLineage 内部吞异常）
+  if (job.parentCardId) void recordLineage(sopJobId, job.parentCardId, 'derive')
   // 实际要用的文本模型：先定死，反推与写词都用它，也记进任务卡（中途改配置不影响这一批）
   const textModel = resolveSopTextModel(profile)
   // 先占位，用户点完发送立刻能看到这张卡
