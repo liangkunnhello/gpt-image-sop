@@ -8,6 +8,7 @@ import { RELEASES_PAGE_URL, shouldShowUpdate } from '../lib/releaseUpdates'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import ViewportTooltip from './ViewportTooltip'
 import HelpModal from './HelpModal'
+import TrackerModal from './tracker/TrackerModal'
 import HistoryModal from './HistoryModal'
 import { useFavoriteCollectionTitle } from './FavoriteCollections'
 import { DesktopDownloadIcon, EditIcon, HelpCircleIcon, HistoryIcon, InstallIcon, SettingsIcon } from './icons'
@@ -43,6 +44,7 @@ export default function Header() {
   const latestRelease = useReleaseUpdates((s) => s.releases[0])
   const hasUpdate = useReleaseUpdates((s) => shouldShowUpdate(s.releases[0], __APP_VERSION__, s.ignoredVersion))
   const [showHelp, setShowHelp] = useState(false)
+  const [showTracker, setShowTracker] = useState(false)
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isPwaInstalled, setIsPwaInstalled] = useState(isInstalledPwa)
   const [hintVisible, setHintVisible] = useState(false)
@@ -262,6 +264,18 @@ export default function Header() {
             </button>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {/* 素材投放跟踪：台账 / 报表导入 / 消耗统计 */}
+            <button
+              type="button"
+              onClick={() => setShowTracker(true)}
+              className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.04] dark:hover:text-gray-200"
+              title="素材投放跟踪"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 17l5-6 4 4 5-7 4 5M3 21h18" />
+              </svg>
+              <span className="hidden md:inline">投放跟踪</span>
+            </button>
             {/* 客户端本身就是安装版，不显示 PWA 安装入口 */}
             {!isTauri && !isPwaInstalled && (
               <div
@@ -389,6 +403,7 @@ export default function Header() {
         </div>
       </div>
       {showBatchCheck && <BatchCheckModal onClose={() => setShowBatchCheck(false)} />}
+      {showTracker && <TrackerModal onClose={() => setShowTracker(false)} />}
       {showHelp && <HelpModal appMode={appMode} isFavoriteCollectionOverview={appMode === 'gallery' && filterFavorite && !activeFavoriteCollectionId} onClose={() => setShowHelp(false)} />}
     </>
   )
