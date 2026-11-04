@@ -35,7 +35,10 @@ export const BUILTIN_EXTRAS: ExtraRequirement[] = [
   {
     id: EXTRA_ID.noLogo,
     name: '不参考 logo 与合规文案',
-    content: '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要写进 SOP，也不要要求在生成的图上出现。',
+    content: [
+      '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要写进 SOP，也不要要求在生成的图上出现。',
+      '注意这一条只管参考图自带的合规元素：用户卖点文案里括号中的说明（如「(责任内)」）不属于合规小字，那是卖点原文的一部分，必须逐字保留在各自那句卖点后面。',
+    ].join(''),
     builtin: true,
   },
   {
@@ -91,4 +94,30 @@ export function resolveExtraIds(extraPick: Record<string, string[]>, directionId
   if (!directionId) return DEFAULT_EXTRA_IDS
   const picked = extraPick[directionId]
   return Array.isArray(picked) ? picked : DEFAULT_EXTRA_IDS
+}
+
+/**
+ * 历史版本的内置文案。
+ *
+ * 升级用：只有 content 还等于某一版历史原文，才认为用户没改过、可以整条换成新文案；
+ * 用户自己编辑过的条目原样保留，绝不覆盖 —— 这些条目本来就是可编辑的。
+ * 以后改内置文案时，把上一版原文追加进对应 id 的数组即可。
+ */
+const LEGACY_CONTENT: Record<string, string[]> = {
+  [EXTRA_ID.noLogo]: [
+    '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要写进 SOP，也不要要求在生成的图上出现。',
+  ],
+}
+
+/** 把存档里的内置条目升级到当前文案；用户改过的不动 */
+export function upgradeBuiltinExtras(list?: ExtraRequirement[]): ExtraRequirement[] | undefined {
+  if (!Array.isArray(list)) return list
+  const latest = new Map(BUILTIN_EXTRAS.map((item) => [item.id, item]))
+  return list.map((item) => {
+    const legacy = LEGACY_CONTENT[item.id]
+    const next = latest.get(item.id)
+    if (!legacy || !next) return item
+    if (!legacy.includes((item.content ?? '').trim())) return item
+    return { ...item, name: next.name, content: next.content }
+  })
 }

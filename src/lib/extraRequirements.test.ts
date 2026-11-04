@@ -7,6 +7,7 @@ import {
   hasExtra,
   pickExtraRequirements,
   resolveExtraIds,
+  upgradeBuiltinExtras,
   type ExtraRequirement,
 } from './extraRequirements'
 
@@ -63,5 +64,38 @@ describe('额外要求', () => {
     expect(resolveExtraIds({ 'dir-1': ['extra-mine'] }, 'dir-1')).toEqual(['extra-mine'])
     // 用户把这对勾全取消了，不该又冒出默认的四条
     expect(resolveExtraIds({ 'dir-1': [] }, 'dir-1')).toEqual([])
+  })
+})
+
+describe('内置文案升级', () => {
+  /** 上一版「不参考 logo」的原文：存档里还是这一版时要自动换成新版 */
+  const LEGACY_NO_LOGO = '参考图上的品牌 logo、水印、免责声明、风险提示、「请见条款及投保须知」「本素材纯属广告创意」这类合规小字，一律不要写进 SOP，也不要要求在生成的图上出现。'
+
+  it('存档里还是旧文案时换成新版，并补上括号说明的排除句', () => {
+    const stored: ExtraRequirement[] = [
+      { id: EXTRA_ID.noLogo, name: '不参考 logo 与合规文案', content: LEGACY_NO_LOGO, builtin: true },
+    ]
+    const upgraded = upgradeBuiltinExtras(stored)
+    expect(upgraded?.[0].content).toContain('(责任内)')
+    expect(upgraded?.[0].content).not.toBe(LEGACY_NO_LOGO)
+  })
+
+  it('用户自己改过的条目原样保留，不覆盖', () => {
+    const mine: ExtraRequirement[] = [
+      { id: EXTRA_ID.noLogo, name: '我的规则', content: '参考图上的 logo 一律不要。', builtin: true },
+    ]
+    expect(upgradeBuiltinExtras(mine)).toEqual(mine)
+  })
+
+  it('自定义条目与空存档不受影响', () => {
+    expect(upgradeBuiltinExtras([custom])).toEqual([custom])
+    expect(upgradeBuiltinExtras(undefined)).toBeUndefined()
+  })
+
+  it('新版文案本身不会被再次改写（可重复升级）', () => {
+    const once = upgradeBuiltinExtras([
+      { id: EXTRA_ID.noLogo, name: '不参考 logo 与合规文案', content: LEGACY_NO_LOGO, builtin: true },
+    ])
+    expect(upgradeBuiltinExtras(once)).toEqual(once)
   })
 })

@@ -51,8 +51,50 @@ function sameCopy(a: string, b: string) {
 }
 
 /**
+ * 卖点行拆成「正文」与结尾的括号说明。
+ *
+ * 「大病小病均可保障(责任内)」→ { main: '大病小病均可保障', note: '责任内' }
+ * 没有括号说明时 note 为空串。
+ */
+export function splitCopyNote(line: string): { main: string; note: string } {
+  const match = line.match(/^(.*?)[（(]([^（）()]+)[）)](?:[。.！!？?]*)$/)
+  return match
+    ? { main: match[1].trim(), note: match[2].trim() }
+    : { main: line.trim(), note: '' }
+}
+
+/**
+ * 括号说明允许落在正文之后多少个字符以内。
+ *
+ * 提示词的写法是「主句「大病小病均可保障」及下方小字「(责任内)」」，
+ * 正文与括号说明之间隔着「及下方小字」这类连接语，30~40 字符足够覆盖；
+ * 再放宽就会跨到下一句卖点上去，反而漏判。
+ */
+const NOTE_WINDOW = 40
+
+/**
+ * 括号说明有没有真的跟在它那句卖点后面。
+ *
+ * 为什么不能只在整条提示词里搜「有没有出现过责任内」：
+ * 同一张图上两句卖点各带一个「(责任内)」时，模型删掉后一个、只留前一个，
+ * 搜全文照样能搜到，校验就放行了 —— 任务 mw1kvds69sed9u 正是这样漏掉的
+ * （提示词里留下「第四条内为主句「大病小病均可保障」及下方小字，」这一句空壳）。
+ * 所以按位置判断：这句卖点的正文出现位置往后 NOTE_WINDOW 个字符内必须能找到这条括号说明。
+ *
+ * 正文在提示词里找不到（模型改写过了）时返回 true 不判错：
+ * 那种情况由 checkPromptCopy 的包含比对兜底，这里只负责「正文在、括号说明丢」。
+ */
+function hasNoteAfterMain(prompt: string, main: string, note: string): boolean {
+  const at = prompt.indexOf(main)
+  if (at < 0) return true
+  const windowText = prompt.slice(at, at + main.length + NOTE_WINDOW)
+  return windowText.includes(note)
+}
+
+/**
  * 逐条比对：
  * - 卖点每一条都必须出现在「」里（missing 表示漏了），允许被扩写 / 缩写（见 sameCopy）
+ * - 卖点行结尾带括号说明时，说明必须跟在那句正文后面（见 hasNoteAfterMain）
  * - 「」里与卖点毫无关系的文字算 altered（模型自己加的，或把卖点改得面目全非）
  * 长度小于 2 的碎片不做 altered 判定，避免把「¥」「1」这类误判成篡改。
  */
@@ -72,9 +114,23 @@ export function checkPromptCopy(prompts: string[], copyText: string): CopyCheckR
     const quoted = extractQuotedCopy(prompt)
     const quotedNorm = quoted.map(normalizeCopy).filter(Boolean)
     for (const line of lines) {
+      const { main, note } = splitCopyNote(line)
       const key = normalizeCopy(line)
       if (!key) continue
-      if (!quotedNorm.some((item) => sameCopy(item, key))) {
+      /**
+       * 用「正文」而不是整行去比对。
+       *
+       * 整行比对时，卖点「大病小病均可保障(责任内)」只要提示词里另外出现过
+       * 一个单独的「(责任内)」片段，规范化后就被整行包含，判定成「已出现」——
+       * 这也是 mw1kvds69sed9u 漏判的原因之一。拆出正文后，
+       * 独立的小字片段不再能顶替整句卖点。
+       */
+      const mainKey = normalizeCopy(main) || key
+      if (!quotedNorm.some((item) => sameCopy(item, mainKey))) {
+        issues.push({ index, kind: 'missing', detail: line })
+        continue
+      }
+      if (note && !hasNoteAfterMain(prompt, main, note)) {
         issues.push({ index, kind: 'missing', detail: line })
       }
     }

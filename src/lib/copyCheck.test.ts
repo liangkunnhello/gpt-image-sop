@@ -7,6 +7,7 @@ import {
   describeCopyIssues,
   extractQuotedCopy,
   splitCopyLines,
+  splitCopyNote,
 } from './copyCheck'
 import { fixPromptCopy } from './sopPipeline'
 import type { ApiProfile } from '../types'
@@ -99,6 +100,61 @@ describe('checkPromptCopy', () => {
   it('多条提示词各自判定，issue 带上是第几条', () => {
     const result = checkPromptCopy([good, '主标题「600 万医疗保障」'], COPY)
     expect(result.issues.every((item) => item.index === 1)).toBe(true)
+  })
+})
+
+describe('splitCopyNote', () => {
+  it('拆出正文与结尾括号说明', () => {
+    expect(splitCopyNote('大病小病均可保障(责任内)')).toEqual({ main: '大病小病均可保障', note: '责任内' })
+  })
+
+  it('全角括号同样识别', () => {
+    expect(splitCopyNote('涵盖120万元特效抗癌针（责任内）。')).toEqual({ main: '涵盖120万元特效抗癌针', note: '责任内' })
+  })
+
+  it('没有括号说明时 note 为空', () => {
+    expect(splitCopyNote('赔付总限额600万')).toEqual({ main: '赔付总限额600万', note: '' })
+  })
+
+  it('正文中间的括号不算结尾说明', () => {
+    expect(splitCopyNote('投保（限时）条件0~70岁')).toEqual({ main: '投保（限时）条件0~70岁', note: '' })
+  })
+})
+
+/**
+ * 真实事故：卖点里两句都带「(责任内)」，模型判成重复、删掉后一个，
+ * 提示词里留下「第四条内为主句「大病小病均可保障」及下方小字，」这种空壳，
+ * 旧校验按「互相包含即相同」直接放行，废图一路出了。任务 mw1kvds69sed9u。
+ */
+describe('checkPromptCopy 括号说明', () => {
+  const NOTE_COPY = '有无社保均可办理(责任内)\n大病小病均可保障(责任内)'
+  const tail = '，排完自然留白收尾画面上无按钮。'
+
+  it('两处括号说明都写了就通过', () => {
+    const prompt = `第三条内为主句「有无社保均可办理」及下方小字「(责任内)」，第四条内为主句「大病小病均可保障」及下方小字「(责任内)」${tail}`
+    expect(checkPromptCopy([prompt], NOTE_COPY)).toEqual({ ok: true, issues: [] })
+  })
+
+  it('只留一处括号说明，另一处留空壳要报缺失', () => {
+    const prompt = `第三条内为主句「有无社保均可办理」及下方小字「(责任内)」，第四条内为主句「大病小病均可保障」及下方小字${tail}`
+    const result = checkPromptCopy([prompt], NOTE_COPY)
+    expect(result.ok).toBe(false)
+    expect(result.issues).toEqual([
+      { index: 0, kind: 'missing', detail: '大病小病均可保障(责任内)' },
+    ])
+  })
+
+  it('整条提示词里一次都没写括号说明要报缺失', () => {
+    const prompt = `第三条内为主句「有无社保均可办理」，第四条内为主句「大病小病均可保障」${tail}`
+    const missing = checkPromptCopy([prompt], NOTE_COPY).issues.filter((item) => item.kind === 'missing')
+    expect(missing).toHaveLength(2)
+  })
+
+  it('正文本身缺失时只报一次，不因定位不到再重复报', () => {
+    const prompt = `第三条内为主句「有无社保均可办理」及下方小字「(责任内)」${tail}`
+    const hits = checkPromptCopy([prompt], NOTE_COPY).issues
+      .filter((item) => item.detail === '大病小病均可保障(责任内)')
+    expect(hits).toHaveLength(1)
   })
 })
 

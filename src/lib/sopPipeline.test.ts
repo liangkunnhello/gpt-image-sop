@@ -380,6 +380,23 @@ describe('appendCopySection 卖点并入存档 SOP', () => {
   })
 })
 
+describe('括号说明不许当重复卖点去掉', () => {
+  const COPY = '有无社保均可办理(责任内)\n大病小病均可保障(责任内)'
+
+  it('写提示词时说明括号内文字是原文、不算重复', () => {
+    const { system, user } = buildPromptMessages({ sopText: SOP, count: 1, copyText: COPY })
+    expect(system).toContain('括号说明不算重复')
+    expect(system).toContain('括号里的内容也是文案')
+    expect(user).toContain('括号中的说明')
+  })
+
+  it('没有卖点时不出现括号规则', () => {
+    const { system } = buildPromptMessages({ sopText: SOP, count: 1 })
+    expect(system).not.toContain('括号说明不算重复')
+    expect(system).not.toContain('括号里的内容也是文案')
+  })
+})
+
 describe('按钮形占位与叠字约束', () => {
   const SOP_WITH_BUTTON = [
     '## 版式结构',

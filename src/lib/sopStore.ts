@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 import type { ImageFidelity, SavedSop, SopDirectionNode, SopSystemPrompt, VariablePrompt } from '../types'
 import { isTauri } from './platform'
 import type { PostTemplate } from './postTemplate'
-import { BUILTIN_EXTRAS, type ExtraRequirement } from './extraRequirements'
+import { BUILTIN_EXTRAS, upgradeBuiltinExtras, type ExtraRequirement } from './extraRequirements'
 import { clampPromptCount } from './promptLimits'
 import { safeJsonStorage, tauriStorage } from './tauriStorage'
 
@@ -707,8 +707,9 @@ export const useSopStore = create<SopState>()(
       storage: createJSONStorage(() => (isTauri ? tauriStorage : safeJsonStorage())),
       // v2：系统提示词改产品级；v3：后处理模板改为「一个产品多套」；v4：字号改 px 并加描边；v5：变量提示词库；v6：节点伪删除；
       // v7：productId 为空的配置认领到顶层节点；v8：新增按节点存的交付地址；
-      // v9：新增生图 SOP 库（整份 SOP 存下来直接出图）；v10：卖点/风格加唯一编码
-      version: 10,
+      // v9：新增生图 SOP 库（整份 SOP 存下来直接出图）；v10：卖点/风格加唯一编码；
+      // v11：内置「不参考 logo」补「卖点里的括号说明不算合规小字」
+      version: 11,
       migrate: (persisted, version) => {
         const state = (persisted ?? {}) as Partial<SopState>
 
@@ -718,6 +719,9 @@ export const useSopStore = create<SopState>()(
         if (version < 9) state.savedSops = state.savedSops ?? []
         // v10：卖点/风格补唯一编码（重名时靠它区分）
         if (version < 10) state.presets = ensurePresetCodes(state.presets)
+        // v11：内置文案升级。额外要求整份存在存档里，光改默认值对老账号不生效，
+        // 只能在这里按 id 比对历史原文替换；用户手动改过的那条保持原样
+        if (version < 11) state.extraRequirements = upgradeBuiltinExtras(state.extraRequirements)
 
         // v2：系统提示词补齐 productId
         if (version < 2 && state.systemPrompts?.length) {
