@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GPT Image SOP",
+  "productName": "GPT SOP Tracker",
   "version": "../package.json",
-  "identifier": "com.liangkunnhello.gpt-image-sop",
+  "identifier": "com.liangkunnhello.gpt-sop-tracker",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -14,7 +14,7 @@
       {
         "label": "main",
         "create": false,
-        "title": "GPT Image SOP",
+        "title": "GPT SOP Tracker",
         "width": 1280,
         "height": 820,
         "minWidth": 800,
@@ -46,7 +46,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENCQjVGMzA3RjhGQTE3OTIKUldTU0YvcjRCL08xeTIvNWdiOUFjMDBjM1RHYVlCcU9kaEZNZ3UzeXMvejc4WEJhTHh5cHdValMK",
-      "endpoints": ["https://github.com/liangkunnhello/gpt-image-sop/releases/latest/download/latest.json"],
+      "endpoints": [],
       "requireSignedVersion": true,
       "windows": {
         "installMode": "passive"

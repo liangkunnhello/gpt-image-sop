@@ -1,3 +1,41 @@
+## 2.0.0-track.1（2026-11-04）
+
+**素材投放跟踪分支的首个隔离版**。这个版本只做「与现有软件彻底分开」，业务功能后续追加。
+
+### 与主版本（v1.3.x）的隔离
+
+两套软件可以并存，互不覆盖、互不读对方数据：
+
+| 项 | 主版本 | 本版本 |
+|---|---|---|
+| 产品名 | GPT Image SOP | **GPT SOP Tracker** |
+| identifier | com.liangkunnhello.gpt-image-sop | **com.liangkunnhello.gpt-sop-tracker** |
+| 安装目录 | `%LocalAppData%\GPT Image SOP` | **`%LocalAppData%\GPT SOP Tracker`** |
+| 数据文件 | 上面目录下的 `data\data.db` | **各自独立的一份** |
+| 发布 tag | `v1.3.x` | **`track-v2.0.0-track.1`** |
+| Release 类型 | 正式版 | **预发布（prerelease）** |
+| 自动更新 | 启用 | **关闭** |
+
+### 为什么要改这些（不改会互相顶掉）
+
+- **identifier 相同** → 两个安装包装进同一目录、读写同一个 `data.db`，
+  新版本一打开就可能改写现有任务卡记录；
+- **tag 不分开** → 主流水线手动触发时会按 `package.json` 的版本发版，
+  track 版会被发成正式版；
+- **Release 不标 prerelease** → GitHub 的 `releases/latest` 会指向 track 版，
+  已装主版本的用户会被自动更新成一个不同的产品。
+
+对应改动：
+- `tauri.conf.json`：产品名、identifier、窗口标题、**清空 updater endpoints**
+- 新增 `.github/workflows/tauri-release-track.yml`：只认 `track-v*` tag、
+  Release 标 prerelease、不产出 latest.json
+- `tauri-release.yml` 加防护：检测到版本号带 `-track.` 时跳过，不参与主版本发布
+
+### 这个版本还没有业务功能
+
+素材台账、报表导入、消耗统计、血缘追踪都在后续版本。装它只是为了先确认两套软件
+能并存、你的现有数据没被动过。
+
 ## v1.3.2（2026-11-04）
 
 ### 新增
