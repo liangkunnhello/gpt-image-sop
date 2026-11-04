@@ -20,7 +20,7 @@ import { buildAvoidHint, pickAvoidTemplate } from './postReserve'
 import { dedupePrompts, normalizeCopy } from './copyDedupe'
 import { planStrategyFills } from './variableSample'
 import { buildVariableImageHint, planVariableImageAssignments, withVariableImageHint } from './variableImages'
-import { shrinkToDataUrl, SOP_TEXT_MODEL } from './sopPipeline'
+import { shrinkToDataUrl, resolveSopTextModel, SOP_TEXT_MODEL } from './sopPipeline'
 import { describeBlocks, keepIndexes, proofreadPrompts } from './promptProofread'
 import { clampPromptCount } from './promptLimits'
 
@@ -652,7 +652,8 @@ async function runJob(job: VariableJobRequest) {
     ))
 
   const sopJobId = `var-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
-  const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId)
+  // 与任务卡上记录的保持一致：占位阶段就用同一个模型名
+  const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId, 'reverse', resolveSopTextModel(profile))
 
   try {
     // 直出模式不调模型：用户已经把「提示词 + 可变项」写好了，
@@ -777,6 +778,8 @@ async function runJob(job: VariableJobRequest) {
       params: runParams,
       systemPromptName: job.variablePromptName,
       sopText: specText,
+      // 变量模式与 SOP 模式共用写词阶段，同样记下实际用的模型
+      textModel: resolveSopTextModel(profile),
       directionId: job.directionId,
       referenceImageIds: job.imageIds,
       prompts: keptPrompts,

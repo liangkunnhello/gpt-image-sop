@@ -436,6 +436,14 @@ export interface TaskRecord {
   sopPromptIndex?: number
   /** SOP 模式：使用的系统提示词名称，详情页展示用 */
   sopSystemPrompt?: string
+  /**
+   * SOP 模式：反推 SOP 与写提示词实际使用的文本模型。
+   *
+   * 存快照而不是读当前配置：profile 的 sopTextModel 随时会被改，
+   * 改完再看旧卡就分不清那批提示词到底是哪个模型写的了。
+   * 变量模式同样记这个字段（它复用同一条流水线的写词阶段）。
+   */
+  sopTextModel?: string
   /** SOP 模式：直接用 SOP 库里的某份 SOP 出图时，记录它的名称（跳过反推） */
   sopLibraryName?: string
   /** SOP 模式：这次生成依据的 SOP 全文（Markdown），同一 sopJobId 的各任务内容相同 */

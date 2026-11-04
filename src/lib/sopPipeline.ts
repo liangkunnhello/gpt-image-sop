@@ -17,6 +17,30 @@ import { ensureImageCached } from './imageCache'
 /** 生成 SOP 与提示词所用的文本模型 */
 export const SOP_TEXT_MODEL = 'deepseek-v4.1-flash'
 
+/**
+ * 提示词排版优化要针对的模型族。命中时额外注入「禁精确坐标 + 排版话术逐条变化」规则。
+ *
+ * 实测（同一份 SOP 各跑 30 条）：
+ * - deepseek-v4.1-flash：30 条开场句完全一样，主标题措辞 30 条全是「特粗深棕黑体左对齐」，
+ *   结尾 40 字有 8 条逐字相同；大量写「0%~17%×0%~30%」这类精确框，生图模型并不执行。
+ * - gemini-3.8-flash：开场句 27 种写法，排版措辞 4 种，没有固定句式复读。
+ *
+ * 所以只对前者生效，别的模型保持原行为，避免把本来表现好的模型也约束坏。
+ */
+const LAYOUT_OPTIMIZED_MODELS = ['deepseek-v4.1', 'dsv4.1']
+
+/** 这个模型是否需要排版专项优化（按模型名匹配，不看 profile 名字） */
+export function needsLayoutOptimize(model: string | undefined): boolean {
+  if (!model) return false
+  const name = model.toLowerCase()
+  return LAYOUT_OPTIMIZED_MODELS.some((item) => name.includes(item))
+}
+
+/** 反推 / 写提示词真正会用的模型：profile 指定的优先，没填才落到默认 */
+export function resolveSopTextModel(profile: ApiProfile): string {
+  return (profile.sopTextModel || '').trim() || SOP_TEXT_MODEL
+}
+
 /** 送模型前统一缩到长边 1024，参考图再多也不会撑爆请求体 */
 const MODEL_MAX_SIDE = 1024
 /** 超过这个张数时进一步降到 768，优先保证请求能发出去 */
@@ -428,7 +452,23 @@ export async function generateSop(
   ])
 }
 
-function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false, hasImage = false, hasRequirement = false) {
+/**
+ * 排版专项优化规则：只对 needsLayoutOptimize 命中的模型注入。
+ *
+ * 这两条针对的是实测确认的两个毛病：
+ * ① 写精确百分比坐标（「0%~17%×0%~30%」）—— 生图模型根本不认这种框，
+ *    写了等于白写，还挤占了真正能执行的「左上角留空」描述；
+ * ② 排版话术逐条复读 —— 同一条句式抄 30 遍，排版看起来毫无变化。
+ */
+function layoutOptimizeRules(): string[] {
+  return [
+    '【不要写坐标数字】不要用百分比、像素、坐标区间来描述位置（例如「横向 0%~17%、纵向 0%~30%」「左侧 45%」）。生图模型不执行这种数字框，写了只是浪费篇幅。位置一律用可执行的空间语言描述：左上角、右下角、画面中上部、左侧文字区、右侧插画区、贴着底边等。',
+    '【排版话术必须逐条不同】禁止在多条提示词里复用同一套排版句式。每条的「文字区怎么排」都要换一种说法与侧重点，例如：稳重的左对齐单栏、主标题顶格卖点等距下排、主标题略偏上留出呼吸、卖点小一号紧随其后、文字整体靠左成一组、上下分组隔一层空白等。同一批里相邻两条不得用同一种排法描述，也不要把同一句原话重复给不同条。',
+    '【排版只写生图模型能落地的信息】写清四件事就够了：文字块落在哪个区域、整体是左对齐还是居中、主标题与卖点的大小关系、卖点下方怎么收尾（留白 / 图形 / 色块）。不要写字号数值、行距数值、字重英文名、字体文件名。',
+  ]
+}
+
+function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false, hasImage = false, hasRequirement = false, layoutOptimize = false) {
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
     hasImage
@@ -479,6 +519,7 @@ function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false
       : '',
     '画面文字必须单层、实心、清晰：不要重影、错位复制、描边偏移、描边叠影这类「叠字」效果，同一个字不要画两遍。',
     '多条之间要在场景、机位、人物、色调上做出区分，不能只是换几个词。',
+    layoutOptimize ? layoutOptimizeRules().join('\n') : '',
     '只输出编号列表，一行一条，不要任何解释、不要小标题、不要代码块。',
   ].filter(Boolean).join('\n')
 }
@@ -517,6 +558,11 @@ export interface PromptMessagesInput {
    * 这样多批可以并行，撞车在规划阶段就解决掉了。
    */
   scenes?: string[]
+  /**
+   * 是否对该模型启用排版专项优化（见 needsLayoutOptimize）。
+   * 由 generatePrompts 按实际模型名判定后传入，避免每个调用点各判一次。
+   */
+  layoutOptimize?: boolean
 }
 
 /** 拼「SOP → 提示词」这一轮的两条消息；单独抽出来方便测试文案优先级有没有写进去 */
@@ -577,6 +623,7 @@ export function buildPromptMessages({
   imageHint = '',
   userRequirement = '',
   scenes = [],
+  layoutOptimize = false,
 }: PromptMessagesInput): { system: string; user: string } {
   const copy = copyText.trim()
   const tail = ignoreCompliance
@@ -614,7 +661,7 @@ export function buildPromptMessages({
     : `按这份 SOP 写 ${count} 条提示词，严格遵守其中的「变量池」与「互斥规则」，每条之间在场景和构图上要有明显区别。`
 
   return {
-    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta, Boolean(imageBlock), Boolean(requirement)),
+    system: promptSystem(ignoreCompliance, avoidHint, Boolean(copy), avoidCta, Boolean(imageBlock), Boolean(requirement), layoutOptimize),
     user: `【生图 SOP】\n${(avoidCta ? stripButtonPlaceholders(sopText) : sopText).trim()}${copyBlock}${previous}${sceneBlock}\n\n${writeInstruction}${tail}${copyTail}${ctaBlock}${reserve}${requirement}${imageBlock}`,
   }
 }
@@ -645,6 +692,27 @@ const SCENE_PLAN_SYSTEM = [
   '④ 机位（如「平视中景」「微俯全景」）。',
   '硬性要求：任意两条方案之间，上面四项里**至少三项不同**。只换一个色调或只换机位不算新方案。',
   '不要写画面细节、不要写文案、不要写排版，这些后面会按 SOP 统一处理 —— 你只负责把「拍什么」区分开。',
+  '只输出编号列表，一行一条，不要小标题、不要解释、不要代码块。',
+].join('\n')
+
+/**
+ * 排版专项优化版本的规划提示词：把「文字区排布形态」提为第 ⑤ 项。
+ *
+ * 原因：SOP 里已经写死了文字排版的强约束（主标题特粗、卖点垂直堆叠、左对齐），
+ * 写正文的模型会把同一句排版描述抄 N 遍。只 forbid 复读不够 ——
+ * 必须在规划阶段就给每条定一个不同的排布形态，写正文时才有话可换。
+ */
+const SCENE_PLAN_SYSTEM_LAYOUT = [
+  '你是商业海报的生图策划。用户会给你一份「生图 SOP」，你要为接下来要写的 N 条提示词**各规划一个画面方案**。',
+  '每条方案写成一行短标签，20~30 字，必须同时包含这五项信息：',
+  '① 场景（具体地点与情境，如「城市天台花园」「居家飘窗角落」）；',
+  '② 人物组合（人数与关系，如「母女二人」「独处青年」）；',
+  '③ 主色调（如「薄荷绿配奶白」「暖橙配深棕」）；',
+  '④ 机位（如「平视中景」「微俯全景」）；',
+  '⑤ 文字区排布形态（这一条文字块怎么摆，如「左对齐单栏、主标题顶格、卖点等距下排」「主标题居中偏上、卖点两列并排」「文字整体靠左成一组、下方留一条空白呼吸带」「主标题与卖点左对齐、末端用色块收尾」）。',
+  '硬性要求：任意两条方案之间，①~④ 里**至少三项不同**；⑤ 必须每条都不一样，不许两条用同一种排布形态。',
+  '⑤ 只能用空间语言描述（左/右/上/下/居中/顶格/等距/成组/收尾方式），不要写百分比、像素、坐标区间、字号数值、行距、英文体重名。',
+  '不要写画面细节、不要写文案，这些后面会按 SOP 统一处理 —— 你负责把「拍什么」和「文字怎么摆」都区分开。',
   '只输出编号列表，一行一条，不要小标题、不要解释、不要代码块。',
 ].join('\n')
 
@@ -707,6 +775,7 @@ async function planPromptScenes(
     copyText: string
     avoidCta: boolean
     userRequirement: string
+    layoutOptimize: boolean
   },
 ): Promise<string[]> {
   const want = planSceneCount(input.total)
@@ -715,19 +784,21 @@ async function planPromptScenes(
     `【生图 SOP】\n${(input.avoidCta ? stripButtonPlaceholders(input.sopText) : input.sopText).trim()}`,
     copy ? `【图上必须出现的卖点（仅供你理解画面主题，不用写进方案）】\n${copy}` : '',
     input.userRequirement.trim() ? `【本次要求】\n${input.userRequirement.trim()}` : '',
-    `请规划 ${want} 条互不相同的画面方案，按上面要求的四项写，一行一条。`,
+    input.layoutOptimize
+      ? `请规划 ${want} 条互不相同的画面方案，按上面要求的五项写，一行一条。`
+      : `请规划 ${want} 条互不相同的画面方案，按上面要求的四项写，一行一条。`,
   ].filter(Boolean).join('\n\n')
 
   const raw = await chat(
     profile,
     [
-      { role: 'system', content: SCENE_PLAN_SYSTEM },
+      { role: 'system', content: input.layoutOptimize ? SCENE_PLAN_SYSTEM_LAYOUT : SCENE_PLAN_SYSTEM },
       { role: 'user', content: user },
     ],
     // 只出短标签，十几秒就够；给太紧会因为网络抖动误判失败
     120,
-    // 每条 25 字 ≈ 40 token，want 条再留一倍余量
-    Math.min(8000, Math.max(1500, want * 80)),
+    // 每条 25 字 ≈ 40 token，want 条再留一倍余量（带排版项时标签更长，翻倍）
+    Math.min(12000, Math.max(1500, want * (input.layoutOptimize ? 130 : 80))),
     // 规划要发散，否则模型会给出一堆相似的场景
     0.9,
   )
@@ -756,13 +827,15 @@ export async function generatePrompts(
   userRequirement = '',
 ): Promise<string[]> {
   const total = clampPromptCount(count)
-  const opts = { sopText, ignoreCompliance, avoidHint, copyText, avoidCta, imageHint, userRequirement }
+  // 按「这一刻真正要用的模型」决定是否注入排版专项规则，两条写词路径共用这一个判断
+  const layoutOptimize = needsLayoutOptimize(resolveSopTextModel(profile))
+  const opts = { sopText, ignoreCompliance, avoidHint, copyText, avoidCta, imageHint, userRequirement, layoutOptimize }
 
   // 阶段 1：规划画面方案。失败就退回顺序写法，不让整批卡住
   let scenes: string[] = []
   try {
     const planned = await planPromptScenes(profile, {
-      sopText, total, copyText, avoidCta, userRequirement,
+      sopText, total, copyText, avoidCta, userRequirement, layoutOptimize,
     })
     scenes = dedupeScenes(planned).kept
   } catch (err) {
@@ -788,6 +861,7 @@ async function writePromptsSequentially(
     avoidCta: boolean
     imageHint: string
     userRequirement: string
+    layoutOptimize: boolean
   },
   total: number,
   onProgress?: (written: number, total: number) => void,
@@ -852,6 +926,7 @@ async function writePromptsInParallel(
     avoidCta: boolean
     imageHint: string
     userRequirement: string
+    layoutOptimize: boolean
   },
   total: number,
   scenes: string[],
@@ -1104,9 +1179,11 @@ async function runJob(job: SopJobRequest) {
   const avoidZones = avoidZoneSummary(avoidTemplate)
 
   const sopJobId = `sop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  // 实际要用的文本模型：先定死，反推与写词都用它，也记进任务卡（中途改配置不影响这一批）
+  const textModel = resolveSopTextModel(profile)
   // 先占位，用户点完发送立刻能看到这张卡
   const presetSop = Boolean(job.sopText?.trim())
-  const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId, presetSop ? 'write' : 'reverse')
+  const placeholderId = createSopPlaceholder(sopJobId, job.label, job.directionId, presetSop ? 'write' : 'reverse', textModel)
 
   try {
     // 已存档的 SOP 直接拿来写提示词；没有才按参考图反推
@@ -1218,6 +1295,7 @@ async function runJob(job: SopJobRequest) {
           || '系统提示词',
       savedSopName: job.savedSopName,
       sopText: sop,
+      textModel: textModel,
       directionId: job.directionId,
       referenceImageIds: job.imageIds,
       prompts: promptsToSend,
@@ -1398,6 +1476,8 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
     systemPromptName: '',
     savedSopName: input.savedSopName,
     sopText,
+    // 补充生图是用此刻的配置写的，记这一批实际用的模型（可能与卡上原有批次不同）
+    textModel: resolveSopTextModel(profile),
     directionId: input.directionId,
     prompts: prompts.map((prompt) => withSopImageHint(prompt, imageHint)),
     inputImagesPerPrompt: prompts.map((_, index) => assignments[index]?.images ?? []),

@@ -2022,6 +2022,15 @@ export default function DetailModal() {
                   </span>
                 </>
               )}
+              {/* 写 SOP / 提示词用的文本模型：存的是那次实际发出的模型，不是当前配置 */}
+              {task.sopTextModel && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-600">·</span>
+                  <span title="反推 SOP 与写提示词实际使用的文本模型">
+                    写词模型：<span className="font-medium text-purple-600 dark:text-purple-400">{task.sopTextModel}</span>
+                  </span>
+                </>
+              )}
             </div>
             {task.sopText && (
               <div className="mb-4 overflow-hidden rounded-lg border border-gray-200 dark:border-white/[0.08]">

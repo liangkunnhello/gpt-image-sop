@@ -7637,6 +7637,13 @@ export async function submitSopTasks(input: {
   /** 直接用存档 SOP 时的名字：写进任务卡，详情页据此显示来源 */
   savedSopName?: string
   sopText?: string
+  /**
+   * 反推 SOP / 写提示词实际用的文本模型。
+   *
+   * 由流水线传入「那一刻真正发给接口的模型」，不是这里再读一次 profile ——
+   * 反推要跑几分钟，这期间用户可能已经改了配置。
+   */
+  textModel?: string
   directionId?: string
   referenceImageIds?: string[]
   prompts: string[]
@@ -7709,6 +7716,7 @@ export async function submitSopTasks(input: {
       sopName: input.sopName,
       sopPromptIndex: (input.promptIndexOffset ?? 0) + index + 1,
       sopSystemPrompt: input.systemPromptName,
+      sopTextModel: input.textModel,
       sopLibraryName: input.savedSopName,
       sopText: input.sopText,
       sopDirectionId: input.directionId || undefined,
@@ -7764,6 +7772,8 @@ export function createSopPlaceholder(
   label: string,
   directionId?: string,
   stage: 'reverse' | 'write' = 'reverse',
+  /** 反推 / 写词用的文本模型：占位卡也记上，进度期间就能看出是哪个模型在跑 */
+  textModel?: string,
 ) {
   const state = useStore.getState()
   const task: TaskRecord = {
@@ -7780,6 +7790,7 @@ export function createSopPlaceholder(
     sopJobId,
     sopName: label,
     sopPromptIndex: 0,
+    sopTextModel: textModel,
     sopDirectionId: directionId || undefined,
     // 占位卡也带上渠道，否则反推/写提示词这几分钟里，卡会被渠道筛选藏住
     channel: channelForNewTask(useStore.getState().channelFilter),

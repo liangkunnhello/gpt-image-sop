@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiProfile } from '../types'
-import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, generatePrompts, rewriteSopText, sceneSimilarity, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
+import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, generatePrompts, needsLayoutOptimize, resolveSopTextModel, rewriteSopText, sceneSimilarity, SOP_TEXT_MODEL, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from './promptLimits'
 
 const profile = {
@@ -479,5 +479,36 @@ describe('反推 SOP 时一并注入后期预留区与按钮规则', () => {
     const prompt = buildSopSystemPrompt(false, false, false)
     expect(prompt).not.toContain('不要给按钮留坑')
     expect(prompt).not.toContain('后期预留区')
+  })
+})
+
+describe('排版专项优化只对 deepseek-v4.1 生效', () => {
+  it('deepseek-v4.1 命中，gemini-3.8 不命中', () => {
+    expect(needsLayoutOptimize('deepseek-v4.1-flash')).toBe(true)
+    expect(needsLayoutOptimize('DeepSeek-V4.1-Pro')).toBe(true)
+    expect(needsLayoutOptimize('dsv4.1')).toBe(true)
+    expect(needsLayoutOptimize('gemini-3.8-flash')).toBe(false)
+    expect(needsLayoutOptimize('')).toBe(false)
+    expect(needsLayoutOptimize(undefined)).toBe(false)
+  })
+
+  it('命中时系统提示词注入禁坐标与排版逐条不同两条规则', () => {
+    const on = buildPromptMessages({ sopText: SOP, count: 1, layoutOptimize: true }).system
+    expect(on).toContain('不要写坐标数字')
+    expect(on).toContain('排版话术必须逐条不同')
+    expect(on).toContain('排版只写生图模型能落地的信息')
+  })
+
+  it('不命中时三条排版规则都不出现，其余规则不受影响', () => {
+    const off = buildPromptMessages({ sopText: SOP, count: 1, layoutOptimize: false }).system
+    expect(off).not.toContain('不要写坐标数字')
+    expect(off).not.toContain('排版话术必须逐条不同')
+    // 原有常识性规则仍在
+    expect(off).toContain('叠字')
+  })
+
+  it('profile 没填 sopTextModel 时回落到默认模型', () => {
+    expect(resolveSopTextModel(profile)).toBe(SOP_TEXT_MODEL)
+    expect(resolveSopTextModel({ ...profile, sopTextModel: ' gemini-3.8-flash ' } as ApiProfile)).toBe('gemini-3.8-flash')
   })
 })
