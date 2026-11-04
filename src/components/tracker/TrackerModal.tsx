@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
 import { ensureImageCached, ensureImageThumbnailCached } from '../../lib/imageCache'
 import { recordLineage } from '../../lib/trackDb'
+import { buildDemoBundle, isDemoId } from '../../lib/demoData'
 import SopSupplementModal from '../SopSupplementModal'
 import type { TaskRecord } from '../../types'
 import {
@@ -31,6 +32,7 @@ import {
   type SheetTable,
 } from '../../lib/reportImport'
 import {
+  trackDelete,
   trackGetAll,
   trackPut,
   trackPutMany,
@@ -118,6 +120,58 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  /**
+   * 填充演示数据。
+   *
+   * track 版是独立数据目录，新装上是空的 —— 没导入过报表就看不到台账/统计/血缘的效果。
+   * 演示数据的 id 全部以 demo- 开头，清除时按前缀删，不会碰到真实数据。
+   */
+  const fillDemo = async () => {
+    setBusy('正在生成演示数据…')
+    setError('')
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      const bundle = buildDemoBundle(today)
+      await trackPutMany('assets', bundle.assets.map((item) => ({ id: item.id, data: item })))
+      await trackPutMany('spend', bundle.spend.map((item) => ({ id: item.id, data: item })))
+      await trackPutMany('lineage', bundle.lineage.map((item) => ({ id: item.id, data: item })))
+      await trackPutMany('imports', bundle.imports.map((item) => ({ id: item.id, data: item })))
+      await load()
+      setBusy(`已填充 ${bundle.assets.length} 个演示素材、${bundle.spend.length} 条流水。右上角可一键清除。`)
+    } catch (err) {
+      setError(`填充演示数据失败：${String(err)}`)
+      setBusy('')
+    }
+  }
+
+  const clearDemo = async () => {
+    setBusy('正在清除演示数据…')
+    setError('')
+    try {
+      const kinds: Array<['assets' | 'spend' | 'lineage' | 'imports', string[]]> = [
+        ['spend', spend.map((item) => item.id)],
+        ['assets', assets.map((item) => item.id)],
+        ['lineage', lineage.map((item) => item.id)],
+        ['imports', imports.map((item) => item.id)],
+      ]
+      let removed = 0
+      for (const [kind, ids] of kinds) {
+        for (const id of ids) {
+          if (!isDemoId(id)) continue
+          await trackDelete(kind, id)
+          removed += 1
+        }
+      }
+      await load()
+      setBusy(`已清除 ${removed} 条演示记录`)
+    } catch (err) {
+      setError(`清除失败：${String(err)}`)
+      setBusy('')
+    }
+  }
+
+  const demoCount = assets.filter((item) => isDemoId(item.id)).length
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div
@@ -144,9 +198,30 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
               ))}
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-xs text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10">
-            关闭
-          </button>
+          <div className="flex items-center gap-1.5">
+            {demoCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => void clearDemo()}
+                className="rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-600 hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300"
+                title="删掉所有 id 以 demo- 开头的记录，不影响真实数据"
+              >
+                清除演示数据（{demoCount}）
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void fillDemo()}
+                className="rounded-lg bg-gray-100 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-200 dark:bg-white/10 dark:text-gray-300"
+                title="生成一批假素材和假消耗，用来看界面效果；id 以 demo- 开头，可一键清除"
+              >
+                填充演示数据
+              </button>
+            )}
+            <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-xs text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10">
+              关闭
+            </button>
+          </div>
         </div>
 
         {error && <div className="mx-5 mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-500/10 dark:text-red-300">{error}</div>}
