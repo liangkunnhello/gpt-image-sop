@@ -65,6 +65,13 @@ export interface SpendRecord {
   media?: string
   /** 报表里的产品名 */
   productName?: string
+  /**
+   * 报表里的预览地址。
+   *
+   * 留着是为了「按图匹配」的兜底和第 3 级人工认领时能看图确认 ——
+   * 现在只存不用，但原始地址丢了就再也找不回来了（报表文件会覆盖）。
+   */
+  previewUrl?: string
   /** 报表里的设计 / 优化师，用于按人汇总 */
   designer?: string
   optimizer?: string

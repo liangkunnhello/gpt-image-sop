@@ -7,6 +7,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
 import { ensureImageCached, ensureImageThumbnailCached } from '../../lib/imageCache'
+import { recordLineage } from '../../lib/trackDb'
+import SopSupplementModal from '../SopSupplementModal'
 import type { TaskRecord } from '../../types'
 import {
   STAGE_LABEL,
@@ -50,6 +52,7 @@ const FIELD_LABEL: Array<[keyof ColumnMapping, string, boolean]> = [
   ['designer', '设计', false],
   ['optimizer', '优化师', false],
   ['abnormal', '是否异常', false],
+  ['previewUrl', '预览地址', false],
 ]
 
 function fmtMoney(value: number) {
@@ -64,6 +67,8 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
   const [imports, setImports] = useState<ImportRecord[]>([])
   const [lineage, setLineage] = useState<LineageRecord[]>([])
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
+  // 从素材详情点「以此为基础再生成」时，把对应任务卡交给补充生成弹窗
+  const [derivingTask, setDerivingTask] = useState<TaskRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -181,10 +186,21 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
             byAsset={byAsset}
             byCard={byCard}
             lineageMap={lineageMap}
+            allCards={byCard}
+            onDerive={setDerivingTask}
+            onRefresh={load}
             onClose={() => setSelectedAssetId(null)}
           />
         )}
       </div>
+
+      {derivingTask && (
+        <SopSupplementModal
+          task={derivingTask}
+          existingCount={derivingTask.outputImages?.length ?? 0}
+          onClose={() => setDerivingTask(null)}
+        />
+      )}
     </div>
   )
 }
@@ -197,6 +213,9 @@ function AssetDetail({
   byAsset,
   byCard,
   lineageMap,
+  allCards,
+  onDerive,
+  onRefresh,
   onClose,
 }: {
   asset: AssetRecord
@@ -205,9 +224,14 @@ function AssetDetail({
   byAsset: ReturnType<typeof aggregateByAsset>
   byCard: ReturnType<typeof aggregateByCard>
   lineageMap: ReturnType<typeof buildLineageMap>
+  allCards: ReturnType<typeof aggregateByCard>
+  onDerive: (task: TaskRecord) => void
+  onRefresh: () => Promise<void>
   onClose: () => void
 }) {
   const [src, setSrc] = useState('')
+  const [parentPick, setParentPick] = useState('')
+  const [linking, setLinking] = useState(false)
   const stat = byAsset.get(asset.id)
   const series = useMemo(() => assetDailySeries(spend, asset.id), [spend, asset.id])
   const maxDay = Math.max(1, ...series.map((item) => item.spend))
@@ -279,6 +303,17 @@ function AssetDetail({
           {task && (
             <p className="mt-1 line-clamp-4 text-[11px] leading-relaxed text-gray-600 dark:text-gray-300">{task.prompt}</p>
           )}
+          {task?.sopText ? (
+            <button
+              type="button"
+              onClick={() => onDerive(task)}
+              className="mt-2 w-full rounded-lg bg-teal-50 px-3 py-1.5 text-[11px] text-teal-600 hover:bg-teal-100 dark:bg-teal-500/10 dark:text-teal-300"
+            >
+              以此为基础再生成（自动记为衍生）
+            </button>
+          ) : (
+            <p className="mt-2 text-[10px] text-gray-400">这张卡没有可复用的 SOP，无法直接衍生</p>
+          )}
         </div>
 
         <div>
@@ -314,6 +349,40 @@ function AssetDetail({
               )}
             </div>
           )}
+
+          {/* 手动补挂：历史卡的衍生关系当时没记录，只能人工补 */}
+          <div className="mt-2 flex items-center gap-1.5">
+            <select
+              value={parentPick}
+              onChange={(event) => setParentPick(event.target.value)}
+              className="min-w-0 flex-1 rounded border border-gray-200 bg-transparent px-1 py-1 text-[10px] dark:border-white/15"
+            >
+              <option value="">（选母卡，手动补挂）</option>
+              {[...allCards.values()]
+                .filter((card) => card.cardId !== cardId && !node?.parents.includes(card.cardId))
+                .sort((a, b) => b.totalSpend - a.totalSpend)
+                .slice(0, 200)
+                .map((card) => (
+                  <option key={card.cardId} value={card.cardId}>
+                    {card.cardId}（¥{fmtMoney(card.totalSpend)}）
+                  </option>
+                ))}
+            </select>
+            <button
+              type="button"
+              disabled={!parentPick || linking}
+              onClick={async () => {
+                setLinking(true)
+                await recordLineage(cardId, parentPick, 'manual')
+                await onRefresh()
+                setParentPick('')
+                setLinking(false)
+              }}
+              className="shrink-0 rounded bg-gray-900 px-2 py-1 text-[10px] text-white disabled:opacity-40 dark:bg-white dark:text-gray-900"
+            >
+              挂接
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -40,11 +40,13 @@ export interface ColumnMapping {
   optimizer: number
   /** 是否异常 */
   abnormal: number
+  /** 预览地址（可选，用于兜底匹配与人工看图确认） */
+  previewUrl: number
 }
 
 const EMPTY_MAPPING: ColumnMapping = {
   date: -1, spend: -1, platformId: -1, assetKey: -1,
-  media: -1, productName: -1, designer: -1, optimizer: -1, abnormal: -1,
+  media: -1, productName: -1, designer: -1, optimizer: -1, abnormal: -1, previewUrl: -1,
 }
 
 /** 表头关键词 → 业务字段。顺序有讲究：先匹配更具体的词，避免「日期」被「上传时间」抢走 */
@@ -59,6 +61,7 @@ const HEADER_HINTS: Array<[keyof ColumnMapping, string[]]> = [
   ['designer', ['设计', '设计师']],
   ['optimizer', ['优化师', '优化']],
   ['abnormal', ['异常']],
+  ['previewUrl', ['预览地址', '预览链接', '素材链接', '图片链接']],
   ['media', ['媒体', '渠道']],
 ]
 
@@ -364,6 +367,7 @@ export function buildSpendRecords(
       designer: cell(mapping.designer) || undefined,
       optimizer: cell(mapping.optimizer) || undefined,
       abnormal: cell(mapping.abnormal) === '1' || cell(mapping.abnormal) === '是' ? true : undefined,
+      previewUrl: cell(mapping.previewUrl) || undefined,
       importId,
     })
   })

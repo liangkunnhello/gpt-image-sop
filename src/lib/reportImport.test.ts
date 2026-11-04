@@ -154,7 +154,7 @@ describe('buildNameIndex + buildSpendRecords 匹配与幂等', () => {
       ['1002', '对不上的图', '30', '2026-11-03'],
     ],
   }
-  const mapping = { date: 3, spend: 2, platformId: 0, assetKey: 1, media: -1, productName: -1, designer: -1, optimizer: -1, abnormal: -1 }
+  const mapping = { date: 3, spend: 2, platformId: 0, assetKey: 1, media: -1, productName: -1, designer: -1, optimizer: -1, abnormal: -1, previewUrl: -1 }
 
   const nameIndex = buildNameIndex([
     { deliveredFileNames: { 'hash-a': '海报A.jpg' }, deliverFolder: '卡1' },
@@ -185,6 +185,17 @@ describe('buildNameIndex + buildSpendRecords 匹配与幂等', () => {
   it('合计等于所有行之和（真实报表可据此对账）', () => {
     const preview = buildSpendRecords(table, mapping, nameIndex, 'imp-1')
     expect(preview.totalSpend).toBe(180.75)
+  })
+
+  it('预览地址列能被识别，并原样存进流水（将来按图匹配与人工看图都要用）', () => {
+    const withPreview: SheetTable = {
+      headers: ['ID', '预览地址', '图片名称', '消耗', '日期'],
+      rows: [['2001', 'https://example.com/a.jpg', '海报C', '12', '2026-11-03']],
+    }
+    const m = detectMapping(withPreview.headers)
+    expect(m.previewUrl).toBe(1)
+    const preview = buildSpendRecords(withPreview, m, nameIndex, 'imp-3')
+    expect(preview.records[0].previewUrl).toBe('https://example.com/a.jpg')
   })
 
   it('缺日期的行被跳过并记录原因，不静默丢弃', () => {
