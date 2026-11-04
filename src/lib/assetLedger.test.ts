@@ -4,7 +4,10 @@ import {
   aggregateByAsset,
   aggregateByCard,
   aggregateByDate,
+  assetDailySeries,
   buildAssetsFromTasks,
+  buildLineageMap,
+  descendantCards,
   judgeStage,
   mergeAssets,
 } from './assetLedger'
@@ -212,5 +215,66 @@ describe('aggregateByCard', () => {
     expect(byCard.get('job-1')!.activeAssetCount).toBe(2)
     // 没投放的卡也要出现，消耗为 0
     expect(byCard.get('job-2')!.totalSpend).toBe(0)
+  })
+})
+
+describe('buildLineageMap 血缘', () => {
+  it('上下游都建出来', () => {
+    const map = buildLineageMap([
+      { cardId: 'b', parentCardId: 'a' },
+      { cardId: 'c', parentCardId: 'a' },
+    ])
+    expect(map.get('a')!.children.sort()).toEqual(['b', 'c'])
+    expect(map.get('b')!.parents).toEqual(['a'])
+  })
+
+  it('自己指向自己的脏数据被忽略', () => {
+    const map = buildLineageMap([{ cardId: 'a', parentCardId: 'a' }])
+    expect(map.size).toBe(0)
+  })
+
+  it('重复记录不会产生重复子节点', () => {
+    const map = buildLineageMap([
+      { cardId: 'b', parentCardId: 'a' },
+      { cardId: 'b', parentCardId: 'a' },
+    ])
+    expect(map.get('a')!.children).toEqual(['b'])
+  })
+})
+
+describe('descendantCards 家族消耗', () => {
+  const map = buildLineageMap([
+    { cardId: 'b', parentCardId: 'a' },
+    { cardId: 'c', parentCardId: 'b' },
+    { cardId: 'd', parentCardId: 'x' },
+  ])
+
+  it('沿血缘取全部后代（含自己）', () => {
+    expect(descendantCards('a', map).sort()).toEqual(['a', 'b', 'c'])
+    // 别的家族不串进来
+    expect(descendantCards('a', map)).not.toContain('d')
+  })
+
+  it('血缘成环时不死循环', () => {
+    const looped = buildLineageMap([
+      { cardId: 'b', parentCardId: 'a' },
+      { cardId: 'a', parentCardId: 'b' },
+    ])
+    expect(descendantCards('a', looped).sort()).toEqual(['a', 'b'])
+  })
+})
+
+describe('assetDailySeries', () => {
+  it('按日合并、升序、只取指定素材', () => {
+    const series = assetDailySeries([
+      spend({ id: '1', assetId: 'h1', date: '2026-11-02', spend: 10 }),
+      spend({ id: '2', assetId: 'h1', date: '2026-11-01', spend: 5 }),
+      spend({ id: '3', assetId: 'h1', date: '2026-11-02', spend: 2.5 }),
+      spend({ id: '4', assetId: 'h2', date: '2026-11-02', spend: 99 }),
+    ], 'h1')
+    expect(series).toEqual([
+      { date: '2026-11-01', spend: 5 },
+      { date: '2026-11-02', spend: 12.5 },
+    ])
   })
 })

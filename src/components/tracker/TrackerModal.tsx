@@ -6,14 +6,17 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
-import { ensureImageThumbnailCached } from '../../lib/imageCache'
+import { ensureImageCached, ensureImageThumbnailCached } from '../../lib/imageCache'
 import type { TaskRecord } from '../../types'
 import {
   STAGE_LABEL,
   aggregateByAsset,
   aggregateByCard,
   aggregateByDate,
+  assetDailySeries,
   buildAssetsFromTasks,
+  buildLineageMap,
+  descendantCards,
   mergeAssets,
 } from '../../lib/assetLedger'
 import {
@@ -31,6 +34,7 @@ import {
   trackPutMany,
   type AssetRecord,
   type ImportRecord,
+  type LineageRecord,
   type SpendRecord,
 } from '../../lib/trackDb'
 
@@ -58,6 +62,8 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
   const [assets, setAssets] = useState<AssetRecord[]>([])
   const [spend, setSpend] = useState<SpendRecord[]>([])
   const [imports, setImports] = useState<ImportRecord[]>([])
+  const [lineage, setLineage] = useState<LineageRecord[]>([])
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -65,18 +71,22 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
   const byAsset = useMemo(() => aggregateByAsset(spend), [spend])
   const byDate = useMemo(() => aggregateByDate(spend), [spend])
   const byCard = useMemo(() => aggregateByCard(assets, byAsset), [assets, byAsset])
+  const lineageMap = useMemo(() => buildLineageMap(lineage), [lineage])
+  const selectedAsset = selectedAssetId ? assets.find((item) => item.id === selectedAssetId) ?? null : null
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [a, s, i] = await Promise.all([
+      const [a, s, i, l] = await Promise.all([
         trackGetAll<AssetRecord>('assets'),
         trackGetAll<SpendRecord>('spend'),
         trackGetAll<ImportRecord>('imports'),
+        trackGetAll<LineageRecord>('lineage'),
       ])
       setAssets(a)
       setSpend(s)
       setImports(i)
+      setLineage(l)
     } catch (err) {
       setError(`读取本地数据失败：${String(err)}`)
     } finally {
@@ -106,7 +116,7 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div
-        className="flex h-[80vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900"
+        className="relative flex h-[80vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3 dark:border-white/10">
@@ -146,6 +156,7 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
               byAsset={byAsset}
               byCard={byCard}
               onRebuild={rebuildLedger}
+              onSelect={setSelectedAssetId}
             />
           ) : tab === 'unmatched' ? (
             <UnmatchedTab spend={spend} assets={assets} onDone={load} setBusy={setBusy} setError={setError} />
@@ -161,6 +172,149 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
             <StatsTab totalSpend={spend.reduce((sum, item) => sum + item.spend, 0)} byDate={byDate} imports={imports} byCard={byCard} assets={assets} />
           )}
         </div>
+
+        {selectedAsset && (
+          <AssetDetail
+            asset={selectedAsset}
+            tasks={tasks as TaskRecord[]}
+            spend={spend}
+            byAsset={byAsset}
+            byCard={byCard}
+            lineageMap={lineageMap}
+            onClose={() => setSelectedAssetId(null)}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 素材详情抽屉：单张图的日消耗曲线 + 它所属卡的血缘 */
+function AssetDetail({
+  asset,
+  tasks,
+  spend,
+  byAsset,
+  byCard,
+  lineageMap,
+  onClose,
+}: {
+  asset: AssetRecord
+  tasks: TaskRecord[]
+  spend: SpendRecord[]
+  byAsset: ReturnType<typeof aggregateByAsset>
+  byCard: ReturnType<typeof aggregateByCard>
+  lineageMap: ReturnType<typeof buildLineageMap>
+  onClose: () => void
+}) {
+  const [src, setSrc] = useState('')
+  const stat = byAsset.get(asset.id)
+  const series = useMemo(() => assetDailySeries(spend, asset.id), [spend, asset.id])
+  const maxDay = Math.max(1, ...series.map((item) => item.spend))
+  const task = tasks.find((item) => item.id === asset.taskId)
+  const cardId = asset.rootCardId ?? asset.taskId ?? ''
+  const node = lineageMap.get(cardId)
+  // 家族消耗：这张卡 + 它所有后代卡的消耗，才是一套创意的真实投入
+  const familyCards = useMemo(() => descendantCards(cardId, lineageMap), [cardId, lineageMap])
+  const familySpend = familyCards.reduce((sum, id) => sum + (byCard.get(id)?.totalSpend ?? 0), 0)
+
+  useEffect(() => {
+    let cancelled = false
+    ensureImageCached(asset.id)
+      .then((dataUrl) => { if (!cancelled && dataUrl) setSrc(dataUrl) })
+      .catch(() => { /* 图被清理了就只显示指标 */ })
+    return () => { cancelled = true }
+  }, [asset.id])
+
+  return (
+    <div className="absolute right-0 top-0 flex h-full w-[26rem] flex-col border-l border-gray-100 bg-white shadow-xl dark:border-white/10 dark:bg-gray-900">
+      <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5 dark:border-white/10">
+        <span className="text-xs font-medium text-gray-700 dark:text-gray-200">素材详情</span>
+        <button type="button" onClick={onClose} className="text-xs text-gray-400 hover:text-gray-600">关闭</button>
+      </div>
+      <div className="flex-1 overflow-auto p-4">
+        {src
+          ? <img src={src} alt="" className="mb-3 w-full rounded-lg object-contain" />
+          : <div className="mb-3 flex h-32 items-center justify-center rounded-lg bg-gray-50 text-[11px] text-gray-400 dark:bg-white/5">图片已被清理</div>}
+
+        <p className="mb-3 break-all font-mono text-[10px] text-gray-400">{asset.id}</p>
+
+        <div className="mb-4 grid grid-cols-3 gap-2">
+          <Metric label="累计消耗" value={stat ? `¥${fmtMoney(stat.totalSpend)}` : '-'} />
+          <Metric label="投放天数" value={String(stat?.activeDays ?? 0)} />
+          <Metric label="日均" value={stat ? `¥${fmtMoney(stat.dailyAverage)}` : '-'} />
+        </div>
+
+        <div className="mb-4">
+          <p className="mb-1.5 text-[11px] text-gray-500 dark:text-gray-400">日消耗</p>
+          {!series.length ? (
+            <p className="text-[11px] text-gray-400">还没有投放数据</p>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {series.map((item) => (
+                <div key={item.date} className="flex items-center gap-2 text-[10px]">
+                  <span className="w-16 shrink-0 font-mono text-gray-500">{item.date}</span>
+                  <div className="h-1.5 flex-1 overflow-hidden rounded bg-gray-100 dark:bg-white/10">
+                    <div className="h-full rounded bg-blue-400" style={{ width: `${(item.spend / maxDay) * 100}%` }} />
+                  </div>
+                  <span className="w-16 shrink-0 text-right text-gray-600 dark:text-gray-300">¥{fmtMoney(item.spend)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="mb-4">
+          <p className="mb-1.5 text-[11px] text-gray-500 dark:text-gray-400">投放信息</p>
+          <div className="flex flex-col gap-1 text-[11px] text-gray-600 dark:text-gray-300">
+            <p>阶段：<span className="text-gray-800 dark:text-gray-100">{STAGE_LABEL[stat?.stage ?? 'created']}</span></p>
+            <p>最后投放：{stat?.lastDate ?? '-'}</p>
+            <p className="break-all">平台素材 ID：{asset.platformIds.length ? asset.platformIds.join('、') : '未匹配'}</p>
+          </div>
+        </div>
+
+        <div className="mb-4">
+          <p className="mb-1.5 text-[11px] text-gray-500 dark:text-gray-400">来源任务卡</p>
+          <p className="break-all font-mono text-[10px] text-gray-500">{cardId || '-'}</p>
+          {task && (
+            <p className="mt-1 line-clamp-4 text-[11px] leading-relaxed text-gray-600 dark:text-gray-300">{task.prompt}</p>
+          )}
+        </div>
+
+        <div>
+          <p className="mb-1.5 text-[11px] text-gray-500 dark:text-gray-400">血缘</p>
+          {!node ? (
+            <p className="text-[11px] text-gray-400">这张卡没有衍生关系</p>
+          ) : (
+            <div className="flex flex-col gap-1.5 text-[11px]">
+              {node.parents.length > 0 && (
+                <p className="text-gray-600 dark:text-gray-300">
+                  衍生自：
+                  {node.parents.map((id) => (
+                    <span key={id} className="ml-1 font-mono text-[10px] text-gray-500">
+                      {id}（¥{fmtMoney(byCard.get(id)?.totalSpend ?? 0)}）
+                    </span>
+                  ))}
+                </p>
+              )}
+              {node.children.length > 0 && (
+                <p className="text-gray-600 dark:text-gray-300">
+                  衍生出 {node.children.length} 张：
+                  {node.children.map((id) => (
+                    <span key={id} className="ml-1 font-mono text-[10px] text-gray-500">
+                      {id}（¥{fmtMoney(byCard.get(id)?.totalSpend ?? 0)}）
+                    </span>
+                  ))}
+                </p>
+              )}
+              {familyCards.length > 1 && (
+                <p className="rounded bg-blue-50 px-2 py-1 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
+                  这一套（含衍生）共 {familyCards.length} 张卡，合计 ¥{fmtMoney(familySpend)}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -171,11 +325,13 @@ function AssetsTab({
   byAsset,
   byCard,
   onRebuild,
+  onSelect,
 }: {
   assets: AssetRecord[]
   byAsset: ReturnType<typeof aggregateByAsset>
   byCard: ReturnType<typeof aggregateByCard>
   onRebuild: () => void
+  onSelect: (assetId: string) => void
 }) {
   const [stageFilter, setStageFilter] = useState<'all' | 'running' | 'declining' | 'created' | 'stale'>('all')
   const deployed = assets.filter((item) => byAsset.has(item.id))
@@ -239,7 +395,11 @@ function AssetsTab({
           </thead>
           <tbody>
             {rows.slice(0, 200).map(({ asset, stat }) => (
-              <tr key={asset.id} className="border-b border-gray-50 dark:border-white/5">
+              <tr
+                key={asset.id}
+                onClick={() => onSelect(asset.id)}
+                className="cursor-pointer border-b border-gray-50 hover:bg-gray-50 dark:border-white/5 dark:hover:bg-white/5"
+              >
                 <td className="py-1.5">
                   <div className="flex items-center gap-2">
                     <AssetThumb imageId={asset.id} />

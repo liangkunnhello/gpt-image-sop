@@ -216,3 +216,70 @@ export const STAGE_LABEL: Record<AssetStage, string> = {
   declining: '衰退中',
   stale: '已停投',
 }
+
+/** 血缘关系图：某张卡的上下游 */
+export interface LineageNode {
+  cardId: string
+  children: string[]
+  parents: string[]
+}
+
+/**
+ * 把血缘记录整理成「每张卡的上游/下游」。
+ *
+ * 为什么两头都存：详情页要同时回答「这张卡从哪来」和「它又衍生出了谁」。
+ * 只建一边的话，查另一头要全表扫。
+ */
+export function buildLineageMap(records: Array<{ cardId: string; parentCardId: string }>): Map<string, LineageNode> {
+  const map = new Map<string, LineageNode>()
+  const ensure = (cardId: string) => {
+    let node = map.get(cardId)
+    if (!node) {
+      node = { cardId, children: [], parents: [] }
+      map.set(cardId, node)
+    }
+    return node
+  }
+  for (const record of records) {
+    if (!record.cardId || !record.parentCardId || record.cardId === record.parentCardId) continue
+    const parent = ensure(record.parentCardId)
+    const child = ensure(record.cardId)
+    if (!parent.children.includes(record.cardId)) parent.children.push(record.cardId)
+    if (!child.parents.includes(record.parentCardId)) child.parents.push(record.parentCardId)
+  }
+  return map
+}
+
+/**
+ * 沿着血缘往下把所有后代卡找齐（含自己）。
+ *
+ * 用来算「这一套创意整体花了多少钱」：只看一张卡的消耗会低估，
+ * 因为真正的量往往在衍生出来的几版上。
+ * 用 visited 防环 —— 血缘是人工可补的，理论上可能补出环。
+ */
+export function descendantCards(startCardId: string, map: Map<string, LineageNode>): string[] {
+  const out: string[] = []
+  const visited = new Set<string>()
+  const stack = [startCardId]
+  while (stack.length) {
+    const cardId = stack.pop() as string
+    if (visited.has(cardId)) continue
+    visited.add(cardId)
+    out.push(cardId)
+    const node = map.get(cardId)
+    if (node) stack.push(...node.children)
+  }
+  return out
+}
+
+/** 某个素材按日的消耗序列，详情页画曲线用 */
+export function assetDailySeries(records: SpendRecord[], assetId: string): Array<{ date: string; spend: number }> {
+  const byDate = new Map<string, number>()
+  for (const record of records) {
+    if (record.assetId !== assetId) continue
+    byDate.set(record.date, (byDate.get(record.date) ?? 0) + record.spend)
+  }
+  return [...byDate.entries()]
+    .map(([date, spend]) => ({ date, spend: Math.round(spend * 100) / 100 }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+}
