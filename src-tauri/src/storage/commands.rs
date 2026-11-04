@@ -10,8 +10,20 @@ use tauri::State;
 use super::images::encode_file;
 use super::{
     Doc, FileMeta, ImageStat, Kind, Result, Storage, StorageError, StorageInfo, StorageState,
-    CONVERSATIONS, TASKS,
+    CONVERSATIONS, TASKS, TRACK_ASSETS, TRACK_IMPORTS, TRACK_LINEAGE, TRACK_SPEND,
 };
+
+/// 素材跟踪用到的四张表。前端只传短名，表名在这里做白名单 ——
+/// docs_get_all / doc_put 内部是按表名格式化拼 SQL 的，不能放任意字符串进去
+fn track_table(kind: &str) -> Result<&'static str> {
+    match kind {
+        "assets" => Ok(TRACK_ASSETS),
+        "spend" => Ok(TRACK_SPEND),
+        "lineage" => Ok(TRACK_LINEAGE),
+        "imports" => Ok(TRACK_IMPORTS),
+        other => Err(StorageError::new("invalid", format!("未知的素材跟踪类型：{other}"))),
+    }
+}
 
 const SOURCES: [&str; 3] = ["upload", "generated", "mask"];
 
@@ -108,6 +120,37 @@ pub async fn tasks_commit_deletion(
         s.commit_task_deletion(&deleted_ids, &tasks, &conversations)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn track_get_all(state: State<'_, StorageState>, kind: String) -> Result<Response> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.docs_get_all(table))
+        .await
+        .map(Response::new)
+}
+
+#[tauri::command]
+pub async fn track_put(
+    state: State<'_, StorageState>,
+    kind: String,
+    id: String,
+    data: String,
+) -> Result<()> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.doc_put(table, &Doc { id, data })).await
+}
+
+#[tauri::command]
+pub async fn track_delete(state: State<'_, StorageState>, kind: String, id: String) -> Result<()> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.doc_delete(table, &id)).await
+}
+
+#[tauri::command]
+pub async fn track_clear(state: State<'_, StorageState>, kind: String) -> Result<()> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.docs_clear(table)).await
 }
 
 #[tauri::command]

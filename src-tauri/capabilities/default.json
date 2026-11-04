@@ -13,6 +13,7 @@
     "files",
     "app-update",
     "http-request",
+    "asset-track",
     "network-proxy",
     "close-watch",
     "log:default",

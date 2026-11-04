@@ -1,10 +1,19 @@
 const DB_NAME = 'gpt-image-playground'
 // v4：缩略图 store 按 thumbnailVersion 建索引，启动时不读取图片即可知道哪些缺少缩略图
-const DB_VERSION = 4
+// v5：素材投放跟踪的四张表（台账 / 消耗流水 / 血缘 / 导入批次）
+const DB_VERSION = 5
 export const STORE_TASKS = 'tasks'
 export const STORE_IMAGES = 'images'
 export const STORE_THUMBNAILS = 'thumbnails'
 export const STORE_AGENT_CONVERSATIONS = 'agentConversations'
+/** 素材台账：一张图一条，主键是图片内容哈希 */
+export const STORE_TRACK_ASSETS = 'trackAssets'
+/** 消耗流水：平台素材 × 日 一条 */
+export const STORE_TRACK_SPEND = 'trackSpend'
+/** 任务卡血缘：衍生关系 */
+export const STORE_TRACK_LINEAGE = 'trackLineage'
+/** 导入批次：记录每次报表导入的对账信息 */
+export const STORE_TRACK_IMPORTS = 'trackImports'
 export const THUMBNAIL_VERSION_INDEX = 'thumbnailVersion'
 
 let dbPromise: Promise<IDBDatabase> | null = null
@@ -51,6 +60,10 @@ export function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_AGENT_CONVERSATIONS)) {
         db.createObjectStore(STORE_AGENT_CONVERSATIONS, { keyPath: 'id' })
+      }
+      // v5：素材跟踪，结构与其他 store 一致（主键 id + JSON 里的字段）
+      for (const store of [STORE_TRACK_ASSETS, STORE_TRACK_SPEND, STORE_TRACK_LINEAGE, STORE_TRACK_IMPORTS]) {
+        if (!db.objectStoreNames.contains(store)) db.createObjectStore(store, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => {

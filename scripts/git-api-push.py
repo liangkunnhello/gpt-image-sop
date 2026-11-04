@@ -10,6 +10,8 @@
 import base64
 import json
 import subprocess
+import sys
+import urllib.error
 import urllib.request
 
 OWNER = 'liangkunnhello'
@@ -64,9 +66,19 @@ def remote_blobs(tree_sha):
     return items
 
 
-ref = api(f'/repos/{OWNER}/{REPO}/git/ref/heads/main')
+# 目标分支：默认 main，可用第一个参数指定（远端还没有该分支时从 main 拉）
+BRANCH = sys.argv[1] if len(sys.argv) > 1 else 'main'
+try:
+    ref = api(f'/repos/{OWNER}/{REPO}/git/ref/heads/{BRANCH}')
+    branch_exists = True
+except urllib.error.HTTPError as err:
+    if err.code != 404:
+        raise
+    # 新分支：以远端 main 为基础，把本地改动整体应用上去
+    ref = api(f'/repos/{OWNER}/{REPO}/git/ref/heads/main')
+    branch_exists = False
 head_sha = ref['object']['sha']
-print('远端 HEAD', head_sha)
+print(f'目标分支 {BRANCH}（{"已有" if branch_exists else "新建，基于 main"}），远端 HEAD {head_sha}')
 commit = api(f'/repos/{OWNER}/{REPO}/git/commits/{head_sha}')
 base_tree = commit['tree']['sha']
 
@@ -124,5 +136,12 @@ local_sha = git('rev-parse', 'HEAD').decode().strip()
 print('本地 commit', local_sha)
 print('SHA 一致' if local_sha == new_commit['sha'] else 'SHA 不同（内容一致，远端以自己的提交序号为准）')
 
-api(f'/repos/{OWNER}/{REPO}/git/refs/heads/main', 'PATCH', {'sha': new_commit['sha'], 'force': False})
-print('main 已更新')
+if branch_exists:
+    api(f'/repos/{OWNER}/{REPO}/git/refs/heads/{BRANCH}', 'PATCH', {'sha': new_commit['sha'], 'force': False})
+    print(f'{BRANCH} 已更新')
+else:
+    api(f'/repos/{OWNER}/{REPO}/git/refs', 'POST', {
+        'ref': f'refs/heads/{BRANCH}',
+        'sha': new_commit['sha'],
+    })
+    print(f'{BRANCH} 已创建')

@@ -31,10 +31,26 @@ CREATE TABLE thumbnails (
 -- 孤儿清理按文件路径核对记录（文件名不一定等于 id）
 CREATE INDEX images_file ON images (file);
 CREATE INDEX thumbnails_file ON thumbnails (file);
+", "
+-- 素材投放跟踪（track 分支）：素材台账、消耗流水、任务卡血缘、导入批次
+--
+-- 结构刻意与 tasks 一致（id + data JSON + updated_at），原因有两个：
+-- 1) 客户端 SQLite 和网页 IndexedDB 能用同一套读写代码，不必为聚合查询写两套 SQL；
+-- 2) 新增字段不用改 schema —— JSON 里加键就行，前端 normalize 补默认值。
+-- 代价是聚合要在前端内存里算，素材量级在几万以内完全够用。
+CREATE TABLE IF NOT EXISTS track_assets (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS track_spend (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS track_lineage (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS track_imports (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS track_spend_updated ON track_spend (updated_at);
 "];
 
 pub const TASKS: &str = "tasks";
 pub const CONVERSATIONS: &str = "agent_conversations";
+pub const TRACK_ASSETS: &str = "track_assets";
+pub const TRACK_SPEND: &str = "track_spend";
+pub const TRACK_LINEAGE: &str = "track_lineage";
+pub const TRACK_IMPORTS: &str = "track_imports";
 
 /// 返回给前端的错误，code 供前端识别（例如 unavailable 表示数据目录不可用，前端据此弹窗提示）
 #[derive(Debug, Clone, Serialize)]
