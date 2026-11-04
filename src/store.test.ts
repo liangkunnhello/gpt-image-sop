@@ -148,7 +148,8 @@ import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, cardStatsMap, stopCard, submitSopTasks, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
+import { acquireBatchSlot, resetBatchGate } from './lib/batchGate'
+import { TASK_STOPPED_MESSAGE, addImagesFromFiles, cardExpectedCount, cardOutputGap, cardStatsMap, stopCard, submitSopTasks, clearSubmittedInput, countResumableTasks, isResumableTask, outputGap, resumeCard, resumeTask, claimCardDeliverFolder, clearData, clearFailedTasks, collectFailedOutputImages, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, purgeAllTrashedOutputImages, purgeTrashedOutputImages, reapplyTargetIndexes, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, retryTask, reuseConfig, setImageQcVerdict, stopAgentResponse, submitAgentMessage, submitTask, sweepStuckBatchTasks, taskMatchesFilterStatus, taskMatchesSearchQuery, stopTask, trashOutputImage, trashOutputImages, useStore } from './store'
 import { useSopStore } from './lib/sopStore'
 import { cardFolderName, deliverableOutputImages } from './lib/deliver'
 import { visibleOutputImages } from './lib/taskState'
@@ -7208,5 +7209,66 @@ describe('出图请求的并发', () => {
 
     // 提交即发：三条都立刻出去，没有任何本机闸门
     await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledTimes(3))
+  })
+})
+
+/**
+ * 真实事故：mw1rsl4k1iw3xs 在 490 条那批里永远停在 running ——
+ * 同批 488 条都出了图，它 40 分钟没有任何状态变化，界面上一直转圈。
+ * 原因是它卡在「等并发名额」这一步，执行链已经不在了，却没有人给它写终态。
+ */
+describe('掉队任务收尾', () => {
+  const JOB = 'job-stuck-sweep'
+
+  beforeEach(() => {
+    resetBatchGate()
+    useStore.setState({ tasks: [], showToast: vi.fn() })
+  })
+  afterEach(() => resetBatchGate())
+
+  it('一批跑空后，卡在 running 的任务被自动标成失败', () => {
+    const now = Date.now()
+    const stuck = task({
+      id: 'stuck-1',
+      sopJobId: JOB,
+      status: 'running',
+      error: null,
+      createdAt: now - 5 * 60_000,
+      startedAt: now - 5 * 60_000,
+      finishedAt: null,
+      elapsed: null,
+    })
+    useStore.setState({ tasks: [stuck] })
+
+    sweepStuckBatchTasks(JOB)
+
+    const after = useStore.getState().tasks.find((item) => item.id === 'stuck-1')!
+    expect(after.status).toBe('error')
+    expect(after.error).toContain('排队阶段中断')
+    expect(after.finishedAt).toBeTruthy()
+  })
+
+  it('这一批还有任务在跑时不碰', async () => {
+    const now = Date.now()
+    const stuck = task({ id: 'stuck-2', sopJobId: JOB, status: 'running', createdAt: now - 5 * 60_000 })
+    useStore.setState({ tasks: [stuck] })
+    const release = await acquireBatchSlot(JOB)
+    sweepStuckBatchTasks(JOB)
+    expect(useStore.getState().tasks[0].status).toBe('running')
+    release()
+  })
+
+  it('宽限期内的新卡不判：建卡到真正执行之间有空档', () => {
+    const stuck = task({ id: 'stuck-3', sopJobId: JOB, status: 'running', createdAt: Date.now() })
+    useStore.setState({ tasks: [stuck] })
+    sweepStuckBatchTasks(JOB)
+    expect(useStore.getState().tasks[0].status).toBe('running')
+  })
+
+  it('只处理本批，别的批次不受影响', () => {
+    const other = task({ id: 'other-1', sopJobId: 'job-other', status: 'running', createdAt: Date.now() - 5 * 60_000 })
+    useStore.setState({ tasks: [other] })
+    sweepStuckBatchTasks(JOB)
+    expect(useStore.getState().tasks[0].status).toBe('running')
   })
 })

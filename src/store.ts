@@ -69,7 +69,7 @@ import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { runWithConcurrency, splitBatchPrompts } from './lib/batchPrompts'
-import { acquireBatchSlot, batchKeyOf, setBatchGateLimit } from './lib/batchGate'
+import { acquireBatchSlot, batchKeyOf, getBatchActive, getBatchWaiting, setBatchGateLimit } from './lib/batchGate'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { blobToDataUrl, dataUrlToBytes, fileToDataUrl } from './lib/dataUrl'
 import { cacheImage, cacheThumbnail, clearImageCaches, deleteCachedImage, deleteImageCacheEntry, ensureImageCached, scheduleMissingThumbnailBackfill } from './lib/imageCache'
@@ -5114,6 +5114,51 @@ async function executeAgentRound(
  * 建卡仍然是同步的：卡片立刻出现在界面上，用户马上能看整批进度，
  * 只是「什么时候真发请求」要等名额。
  */
+/**
+ * 判「掉队」的宽限时间。
+ *
+ * 建卡与真正开始执行是两段：批量提交时逐张 setTasks → await putTask → executeTask，
+ * 中间那个 await 里，上一张卡可能刚好跑完并触发本检查 —— 此时这张新卡 status 是
+ * running、还没进 taskExecutions、也还没去要名额，会被误判成卡死。
+ * 用 60 秒宽限把这种「还没轮到」的正常任务排除掉；真卡死的任务是以分钟计的。
+ */
+const STUCK_GRACE_MS = 60_000
+
+/**
+ * 一批已经跑空，却还有任务停在 running —— 把这类「掉队」的任务收尾。
+ *
+ * 三个判据必须同时成立，缺一个就会误伤：
+ * 1. 这一批没有正在跑的名额；
+ * 2. 这一批没有人在等名额 —— 正常排队的任务就在等待队列里，绝不能碰；
+ * 3. 任务不在 taskExecutions 里，且已经 running 超过宽限时间 ——
+ *    说明它的执行链已经不在了，不可能再有人给它写终态。
+ *
+ * 三条都满足还停在 running 的，只可能是从队列里丢掉的那条：它的
+ * `await acquireBatchSlot` 永远不会返回，重试不了、停止也救不回来，
+ * 界面上就是一个永远转圈的「进行中」。
+ * 真实案例：mw1rsl4k1iw3xs，同批 488 条都出了图，它卡了 40 分钟没有任何状态变化。
+ */
+export function sweepStuckBatchTasks(key: string) {
+  if (getBatchActive(key) > 0 || getBatchWaiting(key) > 0) return
+  const now = Date.now()
+  const stuck = useStore.getState().tasks.filter((item) => (
+    batchKeyOf(item) === key
+    && item.status === 'running'
+    && !item.sopPlaceholder
+    && !taskExecutions.has(item.id)
+    && now - (item.startedAt ?? item.createdAt) > STUCK_GRACE_MS
+  ))
+  if (!stuck.length) return
+  for (const item of stuck) {
+    updateTaskInStore(item.id, {
+      ...createTaskErrorPatch(item, '任务在排队阶段中断，已自动结束（可点「继续」重跑）', now),
+      falRecoverable: false,
+      customRecoverable: false,
+    })
+  }
+  showTaskCompletionNotification('有任务未能开始', `${stuck.length} 条任务在排队阶段中断，已自动结束。`, 'task-failure')
+}
+
 async function executeTask(taskId: string) {
   const task = useStore.getState().tasks.find((item) => item.id === taskId)
   if (!task) return
@@ -5126,6 +5171,12 @@ async function executeTask(taskId: string) {
     await runTaskExecution(taskId)
   } finally {
     release()
+    /**
+     * 名额还回来之后自检一次：这一批如果已经跑空，
+     * 把掉在队列外面、永远不会再被调度的任务收尾。
+     * 放在 finally 里是因为「最后一条结束」正好是唯一能判断整批静止的时刻。
+     */
+    sweepStuckBatchTasks(key)
   }
 }
 

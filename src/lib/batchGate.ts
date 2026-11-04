@@ -113,6 +113,16 @@ export function acquireBatchSlot(key: string): Promise<() => void> {
     const queue = waiters.get(key) ?? []
     queue.push(() => resolve(release))
     waiters.set(key, queue)
+    /**
+     * 入队之后再抢一次名额。
+     *
+     * 上面那次 notify() 会同步通知订阅者，期间名额可能刚好被还回来、drain 也在那一刻跑完；
+     * 而那时这个等待者还没进队列，等于被跳过一次。之后再没人唤醒它，
+     * 任务就会永远停在 acquireBatchSlot 上 —— 状态一直是 running、不写库、也不报错。
+     * 真实案例 mw1rsl4k1iw3xs：同一批 488 条都出了图，它卡了 40 分钟没动静。
+     * 这里补一次 drain，把「刚好错过」的等待者立刻放行。
+     */
+    drain(key)
   })
 }
 
