@@ -71,7 +71,9 @@ function expectNoExecutableContent(el: HTMLElement) {
   for (const url of urls) expect(url).not.toMatch(/^\s*(javascript|vbscript|data):/i)
 }
 
-describe('MarkdownRenderer 安全性', () => {
+// 这两个块要做真实的 HTML 解析 + 挂载，并发全量跑时会被 CPU 竞争拖过默认 5s；
+// 单独跑只要 1.2s，所以放宽超时而不是改断言。
+describe('MarkdownRenderer 安全性', { timeout: 20000 }, () => {
   it('不渲染原始 HTML、事件属性和危险标签', async () => {
     const el = await render(MALICIOUS_MARKDOWN)
 
@@ -138,7 +140,7 @@ describe('MarkdownRenderer 安全性', () => {
   })
 })
 
-describe('MarkdownRenderer 回退到 react-markdown', () => {
+describe('MarkdownRenderer 回退到 react-markdown', { timeout: 20000 }, () => {
   it('不渲染原始 HTML，危险链接被替换', async () => {
     // 让 streamdown 加载失败，走旧浏览器使用的 react-markdown 路径
     vi.resetModules()

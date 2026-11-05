@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gpt-sop-tracker-v2.0.0-track.14'
+const CACHE_NAME = 'gpt-sop-tracker-v2.0.0-track.15'
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './pwa-icon.svg']
 const APP_SHELL_URLS = new Set(APP_SHELL.map((path) => new URL(path, self.registration.scope).href))
 const ASSETS_PATH = new URL('./assets/', self.registration.scope).pathname
