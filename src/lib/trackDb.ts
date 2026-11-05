@@ -168,6 +168,37 @@ export async function trackGetAll<T>(kind: TrackKind): Promise<T[]> {
   })
 }
 
+/**
+ * 按日期区间读消耗流水。
+ *
+ * 不带区间就是全量 —— 但客户端**必须**带：几百万行会被拼成一个几 GB 的字符串传进 webview，
+ * 直接 OOM。报表本来就是按天看的，按区间取才合理，也能走 track_spend_date 索引。
+ *
+ * 网页版没有索引可用（IndexedDB 只能 getAll），拿全量后在内存里过滤；
+ * 那条路径只用于本地调试，不作为主要使用方式。
+ */
+export async function trackSpendRange<T extends { date?: string }>(
+  from: string,
+  to: string,
+): Promise<T[]> {
+  if (isTauri) {
+    const raw = await call<T[] | string>('track_spend_query', {
+      from: from || null,
+      to: to || null,
+    })
+    if (typeof raw === 'string') return raw ? (JSON.parse(raw) as T[]) : []
+    return raw ?? []
+  }
+  const all = await trackGetAll<T>('spend')
+  if (!from && !to) return all
+  return all.filter((item) => {
+    const date = item.date ?? ''
+    if (from && date < from) return false
+    if (to && date > to) return false
+    return true
+  })
+}
+
 export async function trackPut(kind: TrackKind, id: string, data: unknown): Promise<void> {
   if (isTauri) {
     await call('track_put', { kind, id, data: JSON.stringify(data) })
@@ -186,11 +217,18 @@ export async function trackPut(kind: TrackKind, id: string, data: unknown): Prom
 export async function trackPutMany(kind: TrackKind, items: Array<{ id: string; data: unknown }>): Promise<void> {
   if (!items.length) return
   if (isTauri) {
-    // Tauri 侧命令是逐条的，串行提交即可：写的是同一个 SQLite，每次都是独立事务，
-    // 比一条大事务慢一点，但胜在失败能定位到具体哪条
-    for (const item of items) {
-      await call('track_put', { kind, id: item.id, data: JSON.stringify(item.data) })
-    }
+    /*
+     * 整批走一个事务。
+     *
+     * 原来是逐条 invoke：每条一个独立事务，导入 8000 行报表就是 8000 次 fsync，
+     * 客户端上要十几秒。改成单事务批量插入后是亚秒级。
+     * 代价是失败时整批回滚（拿不到「具体哪条坏」），但写入前已经校验过 JSON，
+     * 实际出错基本只剩磁盘满这类整批都写不了的情况。
+     */
+    await call('track_put_many', {
+      kind,
+      items: items.map((item) => ({ id: item.id, data: JSON.stringify(item.data) })),
+    })
     return
   }
   const db = await openDB()

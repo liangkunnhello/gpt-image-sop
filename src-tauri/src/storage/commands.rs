@@ -141,6 +141,35 @@ pub async fn track_put(
     run(state, move |s| s.doc_put(table, &Doc { id, data })).await
 }
 
+/// 批量写入。导入报表一次几千条，逐条 invoke 每条一个事务，
+/// 客户端上光 fsync 就要十几秒；这里整批走一个事务。
+#[tauri::command]
+pub async fn track_put_many(
+    state: State<'_, StorageState>,
+    kind: String,
+    items: Vec<Doc>,
+) -> Result<()> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.docs_put_many(table, &items)).await
+}
+
+/// 按日期区间取消耗流水（走后加的 spend_date 索引）。
+///
+/// 不带区间时等价于全量，但调用方应该总是带上：全量在百万条以上会把
+/// 整个结果拼成一个巨型 JSON 字符串，webview 扛不住。
+#[tauri::command]
+pub async fn track_spend_query(
+    state: State<'_, StorageState>,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<Response> {
+    run(state, move |s| {
+        s.docs_query_range(TRACK_SPEND, from.as_deref(), to.as_deref())
+    })
+    .await
+    .map(Response::new)
+}
+
 #[tauri::command]
 pub async fn track_delete(state: State<'_, StorageState>, kind: String, id: String) -> Result<()> {
     let table = track_table(&kind)?;

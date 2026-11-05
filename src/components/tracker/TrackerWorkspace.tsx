@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
 import { ensureImageCached, ensureImageThumbnailCached } from '../../lib/imageCache'
-import { recordLineage } from '../../lib/trackDb'
+import { recordLineage, trackSpendRange } from '../../lib/trackDb'
 import { buildDemoBundle, isDemoId, type DemoImageRef } from '../../lib/demoData'
 import { useSopStore } from '../../lib/sopStore'
 import {
@@ -126,12 +126,18 @@ export default function TrackerWorkspace() {
   const lineageMap = useMemo(() => buildLineageMap(lineage), [lineage])
   const selectedAsset = selectedAssetId ? scopedAssets.find((item) => item.id === selectedAssetId) ?? null : null
 
-  const load = useCallback(async () => {
+  /**
+   * 只读当前日期区间的消耗流水。
+   *
+   * 以前是 `trackGetAll('spend')` 全表拉：几百万行会被拼成一个几 GB 的字符串传进 webview，
+   * 直接 OOM。改成按区间查之后走 `track_spend_date` 索引，日常只加载看的那几十天。
+   */
+  const load = useCallback(async (from: string, to: string) => {
     setLoading(true)
     try {
       const [a, s, i, l] = await Promise.all([
         trackGetAll<AssetRecord>('assets'),
-        trackGetAll<SpendRecord>('spend'),
+        trackSpendRange<SpendRecord>(from, to),
         trackGetAll<ImportRecord>('imports'),
         trackGetAll<LineageRecord>('lineage'),
       ])
@@ -146,7 +152,10 @@ export default function TrackerWorkspace() {
     }
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  /** 供子组件回调用的无参版本：固定按当前区间重读 */
+  const reload = useCallback(() => load(range.from, range.to), [load, range.from, range.to])
+
+  useEffect(() => { void reload() }, [reload])
 
   /** 重新扫任务卡建台账。已有记录的投放数据会保留（mergeAssets 负责） */
   const rebuildLedger = async () => {
@@ -197,7 +206,7 @@ export default function TrackerWorkspace() {
       await trackPutMany('spend', bundle.spend.map((item) => ({ id: item.id, data: item })))
       await trackPutMany('lineage', bundle.lineage.map((item) => ({ id: item.id, data: item })))
       await trackPutMany('imports', bundle.imports.map((item) => ({ id: item.id, data: item })))
-      await load()
+      await reload()
       const picture = bundle.withRealImage > 0
         ? `，其中 ${bundle.withRealImage} 个挂了本地真实图片`
         : '（本地还没有图片，缩略图会显示灰块）'
@@ -226,7 +235,7 @@ export default function TrackerWorkspace() {
           removed += 1
         }
       }
-      await load()
+      await reload()
       setBusy(`已清除 ${removed} 条演示记录`)
     } catch (err) {
       setError(`清除失败：${String(err)}`)
@@ -262,10 +271,10 @@ export default function TrackerWorkspace() {
       }
       await trackPutMany('spend', plan.spend.map((item) => ({ id: item.id, data: item })))
       await trackPutMany('assets', plan.assets.map((item) => ({ id: item.id, data: item })))
-      await load()
+      await reload()
       setBusy(
         `已模拟关联 ${plan.linkedPlatforms} 个平台素材、${plan.linkedRecords} 条流水，` +
-        `落到 ${plan.usedAssets} 个本地素材上。这是调试数据，可随时还原。`,
+        `落到 ${plan.usedAssets} 个本地素材上（仅当前日期范围）。这是调试数据，可随时还原。`,
       )
     } catch (err) {
       setError(`模拟关联失败：${String(err)}`)
@@ -284,8 +293,8 @@ export default function TrackerWorkspace() {
       }
       await trackPutMany('spend', plan.spend.map((item) => ({ id: item.id, data: item })))
       await trackPutMany('assets', plan.assets.map((item) => ({ id: item.id, data: item })))
-      await load()
-      setBusy(`已还原 ${plan.linkedRecords} 条模拟关联，它们回到「待认领」`)
+      await reload()
+      setBusy(`已还原 ${plan.linkedRecords} 条模拟关联（仅当前日期范围），它们回到「待认领」`)
     } catch (err) {
       setError(`还原失败：${String(err)}`)
       setBusy('')
@@ -398,7 +407,7 @@ export default function TrackerWorkspace() {
             )}
             <button
               type="button"
-              onClick={() => void load()}
+              onClick={() => void reload()}
               className="rounded-lg px-2 py-1 text-[11px] text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10"
               title="重新读取本地数据"
             >
@@ -451,12 +460,17 @@ export default function TrackerWorkspace() {
               onView={setViewingImageId}
             />
           ) : tab === 'unmatched' ? (
-            <UnmatchedTab spend={spend} assets={assets} onDone={load} setBusy={setBusy} setError={setError} />
+            <UnmatchedTab spend={spend} assets={assets} onDone={reload} setBusy={setBusy} setError={setError} />
           ) : tab === 'import' ? (
             <ImportTab
               tasks={tasks as TaskRecord[]}
               assets={assets}
-              onDone={load}
+              onDone={reload}
+              onImported={(next) => {
+                // 当前区间已经覆盖这批数据就不用动；不覆盖才切，避免把用户正在看的范围缩成一天
+                const covered = (!range.from || next.from >= range.from) && (!range.to || next.to <= range.to)
+                if (!covered) setRange(next)
+              }}
               setBusy={setBusy}
               setError={setError}
             />
@@ -480,7 +494,7 @@ export default function TrackerWorkspace() {
             lineageMap={lineageMap}
             allCards={byCard}
             onDerive={setDerivingTask}
-            onRefresh={load}
+            onRefresh={reload}
             onView={setViewingImageId}
             onClose={() => setSelectedAssetId(null)}
           />
@@ -680,7 +694,8 @@ function AssetDetail({
         <p className="mb-3 break-all font-mono text-[10px] text-gray-400">{asset.id}</p>
 
         <div className="mb-4 grid grid-cols-3 gap-2">
-          <Metric label="累计消耗" value={stat ? `¥${fmtMoney(stat.totalSpend)}` : '-'} />
+          {/* 口径是「当前日期范围」，不是历史累计 —— 数据按区间加载，改回累计会拿不到全量 */}
+          <Metric label="区间消耗" value={stat ? `¥${fmtMoney(stat.totalSpend)}` : '-'} />
           <Metric label="投放天数" value={String(stat?.activeDays ?? 0)} />
           <Metric label="日均" value={stat ? `¥${fmtMoney(stat.dailyAverage)}` : '-'} />
         </div>
@@ -852,7 +867,7 @@ function AssetsTab({
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="素材总数" value={String(assets.length)} />
         <Metric label="已投放" value={String(deployed.length)} />
-        <Metric label="累计消耗" value={`¥${fmtMoney(totalSpend)}`} />
+        <Metric label="区间消耗" value={`¥${fmtMoney(totalSpend)}`} />
         <Metric label="任务卡" value={String(byCard.size)} />
       </div>
 
@@ -1139,12 +1154,15 @@ function ImportTab({
   tasks,
   assets,
   onDone,
+  onImported,
   setBusy,
   setError,
 }: {
   tasks: TaskRecord[]
   assets: AssetRecord[]
   onDone: () => Promise<void>
+  /** 导入成功后把本批数据的日期范围报上来，用于「导入的日期不在当前筛选里」时自动切过去 */
+  onImported?: (range: { from: string; to: string }) => void
   setBusy: (value: string) => void
   setError: (value: string) => void
 }) {
@@ -1218,6 +1236,9 @@ function ImportTab({
       setTable(null)
       setMapping(null)
       await onDone()
+      // 本批数据不在当前筛选范围内时把范围切过去，否则「导入成功但列表是空的」
+      const dates = result.records.map((item) => item.date).filter(Boolean).sort()
+      if (dates.length) onImported?.({ from: dates[0], to: dates[dates.length - 1] })
     } catch (err) {
       setError(`导入失败：${String(err)}`)
       setBusy('')

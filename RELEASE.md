@@ -1,3 +1,64 @@
+## 2.0.0-track.14（2026-11-05）
+
+### 性能：消耗数据从「全表拉 + 内存聚合」改成「按日期区间查」
+
+背景：原来的做法是 `SELECT data FROM track_spend` 全表读，几百万行会被拼成一个
+**几 GB 的单个字符串**传进 webview，必然 OOM。实测 8209 行时拼接 1.7ms、
+`JSON.parse` 6.9ms、聚合 1.5ms，体积 2.42MB —— 目前毫无压力，但增长不可控。
+
+**1. 表加「虚拟生成列」，旧数据零迁移**
+
+```sql
+ALTER TABLE track_spend ADD COLUMN spend_date TEXT
+  GENERATED ALWAYS AS (CASE WHEN json_valid(data) THEN json_extract(data, '$.date') END) VIRTUAL;
+-- 另有 spend_asset / spend_platform / spend_amount
+CREATE INDEX track_spend_date ON track_spend (spend_date);
+CREATE INDEX track_spend_asset ON track_spend (spend_asset);
+DROP INDEX track_spend_updated;  -- 从没被任何查询用过，只增加写入开销
+```
+
+- 用 VIRTUAL 不用 STORED：查询时即时计算，**老数据不用回填、不占空间**；
+- 外面套 `json_valid` 兜底：脏数据返回 NULL，不会让整条查询报 `malformed JSON`；
+- 不用「真列 + 逐行迁移」：迁移中途失败数据库就打不开了，生成列加不上也不影响原有读写。
+
+**2. 新增按区间查询命令 `track_spend_query(from, to)`**
+
+`WHERE spend_date >= ? AND spend_date <= ?`，实测 `EXPLAIN QUERY PLAN` 走索引：
+`SEARCH track_spend USING INDEX track_spend_date`。
+
+**3. 新增批量写入命令 `track_put_many`**
+
+原来导入 8000 行要 invoke 8000 次、每次一个独立事务（8000 次 fsync，客户端十几秒）。
+改成整批一个事务，失败整批回滚。
+
+**4. 前端按当前日期范围加载**
+
+`load()` 从 `trackGetAll('spend')` 改成 `trackSpendRange(from, to)`，
+切换日期快捷项即重新查询。
+
+### 两个连带的行为变化（必须知道）
+
+- **「累计消耗」改名为「区间消耗」**：数据按区间加载，看到的永远是所选日期的消耗，
+  再叫「累计」会误导；
+- **导入后自动切日期范围**：如果导入的报表不落在当前筛选内，会自动把范围切到那一天 ——
+  否则会「导入成功但列表是空的」。
+
+### 容量预期（按实测外推）
+
+| 总条数 | 改前 | 改后（看 30 天） |
+|---|---|---|
+| 8 千（现在） | 无感 | 无感 |
+| 100 万 | 打开 5~15 秒、内存 1.2GB | 只加载 30 天的量，毫秒级 |
+| 1000 万 | 必崩 | 可用（总量大，但单次只取区间） |
+
+注意：**「全部时间」仍然会全量加载**，千万级时不要点它。
+
+### 验证
+
+- SQL 语法与索引在 SQLite 3.49 上验证通过（含脏数据兜底、EXPLAIN 走索引）
+- 前端实测：全部 ¥229,073.57 / 28 行 → 近 7 天 ¥101,573.50 / 22 行 → 切回全部恢复
+- `tsc -b` 通过，**168 文件 / 2196 用例全绿**
+
 ## 2.0.0-track.13（2026-11-05）
 
 ### 新增：素材报表点行直接看素材详情

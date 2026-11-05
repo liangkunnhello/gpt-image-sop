@@ -4,6 +4,8 @@ description = "素材投放跟踪：读写素材台账、消耗流水、任务�
 commands.allow = [
   "track_get_all",
   "track_put",
+  "track_put_many",
+  "track_spend_query",
   "track_delete",
   "track_clear",
 ]
