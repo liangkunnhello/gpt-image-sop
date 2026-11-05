@@ -86,6 +86,8 @@ export default function TrackerWorkspace() {
   const [imports, setImports] = useState<ImportRecord[]>([])
   const [lineage, setLineage] = useState<LineageRecord[]>([])
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
+  // 双击预览的大图（null 表示不显示）
+  const [viewingImageId, setViewingImageId] = useState<string | null>(null)
   // 从素材详情点「以此为基础再生成」时，把对应任务卡交给补充生成弹窗
   const [derivingTask, setDerivingTask] = useState<TaskRecord | null>(null)
   const [loading, setLoading] = useState(true)
@@ -448,6 +450,7 @@ export default function TrackerWorkspace() {
               byCard={byCard}
               onRebuild={rebuildLedger}
               onSelect={setSelectedAssetId}
+              onView={setViewingImageId}
             />
           ) : tab === 'unmatched' ? (
             <UnmatchedTab spend={spend} assets={assets} onDone={load} setBusy={setBusy} setError={setError} />
@@ -481,10 +484,15 @@ export default function TrackerWorkspace() {
             allCards={byCard}
             onDerive={setDerivingTask}
             onRefresh={load}
+            onView={setViewingImageId}
             onClose={() => setSelectedAssetId(null)}
           />
         )}
       </div>
+
+      {viewingImageId && (
+        <ImageViewer imageId={viewingImageId} onClose={() => setViewingImageId(null)} />
+      )}
 
       {derivingTask && (
         <SopSupplementModal
@@ -550,6 +558,7 @@ function AssetDetail({
   allCards,
   onDerive,
   onRefresh,
+  onView,
   onClose,
 }: {
   asset: AssetRecord
@@ -561,6 +570,7 @@ function AssetDetail({
   allCards: ReturnType<typeof aggregateByCard>
   onDerive: (task: TaskRecord) => void
   onRefresh: () => Promise<void>
+  onView: (imageId: string) => void
   onClose: () => void
 }) {
   const [src, setSrc] = useState('')
@@ -591,15 +601,32 @@ function AssetDetail({
   }, [previewImageId])
 
   return (
-    <div className="absolute right-0 top-0 flex h-full w-[26rem] flex-col border-l border-gray-100 bg-white shadow-xl dark:border-white/10 dark:bg-gray-900">
+    /*
+     * 抽屉不再 absolute 覆盖：它作为 flex 子项把内容区挤窄，
+     * 网格的 auto-fill 会自动少一列、卡片等比缩小 ——
+     * 覆盖式会把右边那列图片直接盖住，用户看不到也点不到。
+     */
+    <div className="flex h-full w-[24rem] shrink-0 flex-col border-l border-gray-100 bg-white dark:border-white/10 dark:bg-gray-900">
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5 dark:border-white/10">
         <span className="text-xs font-medium text-gray-700 dark:text-gray-200">素材详情</span>
         <button type="button" onClick={onClose} className="text-xs text-gray-400 hover:text-gray-600">关闭</button>
       </div>
       <div className="flex-1 overflow-auto p-4">
-        {src
-          ? <img src={src} alt="" className="mb-3 w-full rounded-lg object-contain" />
-          : <div className="mb-3 flex h-32 items-center justify-center rounded-lg bg-gray-50 text-[11px] text-gray-400 dark:bg-white/5">图片已被清理</div>}
+        {/*
+          限高是必须的：竖版海报的原始比例接近 1:2，按宽度铺满会占掉整整一屏，
+          下面的消耗和血缘全被挤到看不见的地方。contain 保证整张图完整不漏。
+        */}
+        <button
+          type="button"
+          onClick={() => onView(previewImageId)}
+          className="mb-1.5 flex w-full cursor-zoom-in items-center justify-center overflow-hidden rounded-lg bg-gray-50 dark:bg-white/5"
+          title="点击查看大图"
+        >
+          {src
+            ? <img src={src} alt="" className="max-h-[38vh] w-full object-contain" />
+            : <div className="flex h-28 items-center justify-center text-[11px] text-gray-400">图片已被清理</div>}
+        </button>
+        {src && <p className="mb-3 text-[10px] text-gray-400">点击图片查看大图</p>}
 
         <p className="mb-3 break-all font-mono text-[10px] text-gray-400">{asset.id}</p>
 
@@ -740,14 +767,31 @@ function AssetsTab({
   byCard,
   onRebuild,
   onSelect,
+  onView,
 }: {
   assets: AssetRecord[]
   byAsset: ReturnType<typeof aggregateByAsset>
   byCard: ReturnType<typeof aggregateByCard>
   onRebuild: () => void
   onSelect: (assetId: string) => void
+  onView: (imageId: string) => void
 }) {
   const [stageFilter, setStageFilter] = useState<'all' | 'running' | 'declining' | 'created' | 'stale'>('all')
+  /**
+   * 单击开详情、双击看大图，两个事件必然一起触发（双击 = 两次 click + 一次 dblclick）。
+   * 用一个短延时把单击推后：双击时先取消，就不会出现「详情闪一下再弹大图」。
+   */
+  const clickTimer = useRef<number | null>(null)
+  const selectLater = (assetId: string) => {
+    if (clickTimer.current) window.clearTimeout(clickTimer.current)
+    clickTimer.current = window.setTimeout(() => onSelect(assetId), 220)
+  }
+  const cancelSelect = () => {
+    if (clickTimer.current) {
+      window.clearTimeout(clickTimer.current)
+      clickTimer.current = null
+    }
+  }
   const deployed = assets.filter((item) => byAsset.has(item.id))
   const totalSpend = [...byAsset.values()].reduce((sum, item) => sum + item.totalSpend, 0)
 
@@ -800,18 +844,28 @@ function AssetsTab({
          * 网格而不是表格：台账最主要的用途是「看图判断这张要不要继续投」，
          * 表格里缩略图只有 44px 宽，根本认不出画面。
          */
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        /*
+         * auto-fill 而不是固定列数：详情抽屉打开后内容区会变窄，
+         * 固定列数会把卡片硬挤扁，auto-fill 会自动少一列、卡片等比缩小。
+         */
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(170px,1fr))]">
           {rows.slice(0, 300).map(({ asset, stat }) => {
             const stage = stat?.stage ?? 'created'
             return (
               <button
                 key={asset.id}
                 type="button"
-                onClick={() => onSelect(asset.id)}
+                onClick={() => selectLater(asset.id)}
+                onDoubleClick={() => {
+                  cancelSelect()
+                  onView(assetImageId(asset))
+                }}
+                title="单击看详情，双击看大图"
                 className="group flex flex-col overflow-hidden rounded-xl border border-gray-100 bg-white text-left transition hover:border-blue-200 hover:shadow-md dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-blue-500/40"
               >
                 <div className="relative aspect-[4/3] w-full overflow-hidden bg-gray-50 dark:bg-white/5">
-                  <AssetThumb imageId={assetImageId(asset)} className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
+                  {/* contain：海报比例各异，cover 会把竖版两侧的文案裁掉 */}
+                  <AssetThumb imageId={assetImageId(asset)} className="h-full w-full object-contain" />
                   <div className="absolute left-1.5 top-1.5">
                     <StageBadge stage={stage} />
                   </div>
@@ -852,7 +906,7 @@ function AssetsTab({
  */
 function AssetThumb({
   imageId,
-  className = 'h-8 w-11 rounded object-cover',
+  className = 'h-8 w-11 rounded object-contain',
 }: {
   imageId: string
   /** 尺寸交给调用方：表格里是小方图，网格卡片里要铺满 */
@@ -1289,6 +1343,69 @@ function StatsTab({
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * 大图查看器。
+ *
+ * 双击网格卡片、或点详情里的图打开。图片按 contain 铺满可视区，**不裁切** ——
+ * 海报文案常常贴着边，裁掉就判断不了这张图能不能用。
+ * Esc / 点背景 / 点右上角都能关。
+ */
+function ImageViewer({ imageId, onClose }: { imageId: string; onClose: () => void }) {
+  const [src, setSrc] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    ensureImageCached(imageId)
+      .then((dataUrl) => {
+        if (cancelled) return
+        if (dataUrl) setSrc(dataUrl)
+        else setFailed(true)
+      })
+      .catch(() => { if (!cancelled) setFailed(true) })
+    return () => { cancelled = true }
+  }, [imageId])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-6 backdrop-blur-sm"
+      onClick={onClose}
+      role="presentation"
+    >
+      {src ? (
+        <img
+          src={src}
+          alt=""
+          className="max-h-full max-w-full rounded object-contain shadow-2xl"
+          onClick={(event) => event.stopPropagation()}
+        />
+      ) : (
+        <p className="text-xs text-white/60">
+          {failed ? '图片已被清理，或本地没有这张图' : '正在加载…'}
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute right-5 top-5 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/80 hover:bg-white/20"
+      >
+        关闭（Esc）
+      </button>
+      <p className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 font-mono text-[10px] text-white/40">
+        {imageId.slice(0, 16)}
+      </p>
     </div>
   )
 }
