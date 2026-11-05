@@ -17,6 +17,7 @@ import TaskGrid from './components/TaskGrid'
 import AgentWorkspace from './components/AgentWorkspace'
 import InputBar from './components/InputBar'
 import SopDirectionTree from './components/SopDirectionTree'
+import TrackerWorkspace from './components/tracker/TrackerWorkspace'
 import SopLibraryModal from './components/SopLibraryModal'
 import ExtraRequirementsModal from './components/ExtraRequirementsModal'
 import TrashModal from './components/TrashModal'
@@ -190,10 +191,10 @@ export default function App() {
       })
   }, [])
 
-  // 画廊模式整页锁死，只有任务卡区域滚动；Agent 模式仍然整页滚
+  // 画廊与投放跟踪整页锁死，只有内部内容区滚动；Agent 模式仍然整页滚
   useEffect(() => {
     const root = document.documentElement
-    root.classList.toggle('gallery-fixed-scroll', appMode === 'gallery')
+    root.classList.toggle('gallery-fixed-scroll', appMode !== 'agent')
     return () => root.classList.remove('gallery-fixed-scroll')
   }, [appMode])
 
@@ -213,6 +214,8 @@ export default function App() {
       <Header />
       {appMode === 'agent' ? (
         <AgentWorkspace />
+      ) : appMode === 'tracker' ? (
+        <TrackerWorkspace />
       ) : (
         <main data-home-main data-drag-select-surface className="flex min-h-0 flex-col">
           <div className="safe-area-x mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col">
@@ -231,7 +234,8 @@ export default function App() {
           </div>
         </main>
       )}
-      <InputBar />
+      {/* 投放跟踪是数据页，不需要出图输入框 */}
+      {appMode !== 'tracker' && <InputBar />}
       <SopLibraryModal />
       <ExtraRequirementsModal />
       <TrashModal />

@@ -1555,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "gpt-image-playground"
-version = "2.0.0-track.8"
+version = "2.0.0-track.9"
 dependencies = [
  "log",
  "percent-encoding",

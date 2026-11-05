@@ -644,6 +644,19 @@ export const useStore = create<AppState>()(
       // Mode
       appMode: 'gallery',
       setAppMode: (appMode) => {
+        if (appMode === 'tracker') {
+          // 投放跟踪不需要校验 API 配置，直接切；但要先把 Agent 的输入草稿存下来，
+          // 否则从 Agent 切过来再切回去，刚打的字没了
+          const state = get()
+          set({
+            appMode,
+            agentInputDrafts: saveActiveAgentInputDrafts(state),
+            agentMobileHeaderVisible: false,
+            selectedTaskIds: [],
+            selectedFavoriteCollectionIds: [],
+          })
+          return
+        }
         if (appMode === 'gallery') {
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)

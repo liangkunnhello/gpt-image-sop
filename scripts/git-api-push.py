@@ -11,6 +11,7 @@ import base64
 import json
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -21,15 +22,34 @@ REPO_DIR = r'C:\Users\admin\Videos\gpt_image_playground'
 TOKEN = subprocess.check_output(['gh', 'auth', 'token'], text=True).strip()
 
 
-def api(path, method='GET', body=None):
+def api(path, method='GET', body=None, retries=4):
+    """调 GitHub API。
+
+    GitHub 侧偶发 500/502（建 blob、建 tree 都会遇到），重试一次基本就过；
+    只在 5xx 和网络错误时重试，4xx 是真的参数问题，重试没有意义。
+    """
     url = 'https://api.github.com' + path
     data = json.dumps(body).encode('utf-8') if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header('Authorization', 'Bearer ' + TOKEN)
-    req.add_header('Accept', 'application/vnd.github+json')
-    req.add_header('Content-Type', 'application/json')
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read().decode('utf-8'))
+    last = None
+    for attempt in range(retries):
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header('Authorization', 'Bearer ' + TOKEN)
+        req.add_header('Accept', 'application/vnd.github+json')
+        req.add_header('Content-Type', 'application/json')
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read().decode('utf-8'))
+        except urllib.error.HTTPError as err:
+            if err.code < 500:
+                raise
+            last = err
+        except (urllib.error.URLError, TimeoutError) as err:
+            last = err
+        if attempt < retries - 1:
+            wait = 2 ** attempt
+            print(f'  API 暂时失败（{last}），{wait} 秒后重试…')
+            time.sleep(wait)
+    raise last
 
 
 def git(*args):

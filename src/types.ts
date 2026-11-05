@@ -3,7 +3,13 @@
 export type ApiMode = 'images' | 'responses'
 export const REASONING_EFFORT_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number]
-export type AppMode = 'gallery' | 'agent'
+/**
+ * 顶层视图。
+ *
+ * tracker（投放跟踪）与画廊、Agent 同级：它要铺开看几十个素材和日期筛选，
+ * 弹窗那点空间塞不下。
+ */
+export type AppMode = 'gallery' | 'agent' | 'tracker'
 /**
  * SOP 模式图生图的保真档：决定底图里哪些东西必须保留、哪些允许重画。
  *

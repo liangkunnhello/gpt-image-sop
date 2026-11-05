@@ -1,5 +1,8 @@
 /**
- * 素材投放跟踪面板：台账 / 导入 / 统计。
+ * 素材投放跟踪（全屏视图，与画廊 / Agent 同级）。
+ *
+ * 之所以从弹窗提上来：台账要看几十个素材的缩略图，还要同时挂日期范围和
+ * 业务线→产品→方向三层筛选，弹窗那点宽度塞不下。
  *
  * 打开时把四张表读进内存（素材量级在几万以内），所有筛选和聚合都在前端算 ——
  * 存储层刻意做成 id + JSON，就是为了不在这里写第二套 SQL。
@@ -9,6 +12,18 @@ import { useStore } from '../../store'
 import { ensureImageCached, ensureImageThumbnailCached } from '../../lib/imageCache'
 import { recordLineage } from '../../lib/trackDb'
 import { buildDemoBundle, isDemoId, type DemoImageRef } from '../../lib/demoData'
+import { useSopStore } from '../../lib/sopStore'
+import {
+  buildProductTree,
+  filterSpendByAssets,
+  filterSpendByRange,
+  presetRange,
+  rangeLabel,
+  scopeAssetsForNode,
+  type DateRange,
+  type RangePreset,
+  type TreeNode,
+} from '../../lib/trackerFilter'
 import { countSimulated, planRestoreMatches, planSimulateMatches } from '../../lib/simulateMatch'
 import SopSupplementModal from '../SopSupplementModal'
 import type { TaskRecord } from '../../types'
@@ -63,7 +78,7 @@ function fmtMoney(value: number) {
   return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-export default function TrackerModal({ onClose }: { onClose: () => void }) {
+export default function TrackerWorkspace() {
   const tasks = useStore((state) => state.tasks)
   const [tab, setTab] = useState<Tab>('assets')
   const [assets, setAssets] = useState<AssetRecord[]>([])
@@ -77,11 +92,39 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
 
-  const byAsset = useMemo(() => aggregateByAsset(spend), [spend])
-  const byDate = useMemo(() => aggregateByDate(spend), [spend])
-  const byCard = useMemo(() => aggregateByCard(assets, byAsset), [assets, byAsset])
+  // 顶层筛选：产品树节点 + 日期范围。两者都是纯展示层筛选，不改库里的数据
+  const directions = useSopStore((state) => state.directions)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [range, setRange] = useState<DateRange>(() => presetRange('all'))
+
+  /**
+   * 没有对应任务卡的素材数（演示数据、任务卡已删的老数据）。
+   *
+   * 它们挂不到任何方向上，但确实占着台账和消耗 —— 必须计入「未归属」，
+   * 否则用户点任何方向都会发现数字对不上。
+   */
+  const orphanAssetCount = useMemo(() => {
+    const known = new Set((tasks as TaskRecord[]).map((task) => task.id))
+    return assets.filter((asset) => !asset.taskId || !known.has(asset.taskId)).length
+  }, [tasks, assets])
+
+  const tree = useMemo(
+    () => buildProductTree(directions, tasks as TaskRecord[], orphanAssetCount),
+    [directions, tasks, orphanAssetCount],
+  )
+  const scopedAssets = useMemo(
+    () => scopeAssetsForNode(assets, tasks as TaskRecord[], directions, tree, selectedNodeId),
+    [assets, tasks, directions, tree, selectedNodeId],
+  )
+  // 先按日期裁流水，再裁成「只属于当前素材」—— 未匹配流水不该混进筛选后的合计
+  const rangedSpend = useMemo(() => filterSpendByRange(spend, range), [spend, range])
+  const scopedSpend = useMemo(() => filterSpendByAssets(rangedSpend, scopedAssets), [rangedSpend, scopedAssets])
+
+  const byAsset = useMemo(() => aggregateByAsset(scopedSpend), [scopedSpend])
+  const byDate = useMemo(() => aggregateByDate(scopedSpend), [scopedSpend])
+  const byCard = useMemo(() => aggregateByCard(scopedAssets, byAsset), [scopedAssets, byAsset])
   const lineageMap = useMemo(() => buildLineageMap(lineage), [lineage])
-  const selectedAsset = selectedAssetId ? assets.find((item) => item.id === selectedAssetId) ?? null : null
+  const selectedAsset = selectedAssetId ? scopedAssets.find((item) => item.id === selectedAssetId) ?? null : null
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -252,32 +295,69 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
   const demoCount = assets.filter((item) => isDemoId(item.id)).length
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div
-        className="relative flex h-[80vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3 dark:border-white/10">
-          <div className="flex items-center gap-4">
-            <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">素材投放跟踪</h2>
-            <div className="flex gap-1">
-              {([['assets', '素材台账'], ['unmatched', '待认领'], ['import', '导入报表'], ['stats', '消耗统计']] as Array<[Tab, string]>).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setTab(key)}
-                  className={`rounded-lg px-2.5 py-1 text-xs transition ${
-                    tab === key
-                      ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
-                      : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-white/5'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
+    <main data-home-main className="flex min-h-0 flex-1 flex-col">
+      {/* 工具条：页签 + 日期范围 + 调试动作。全屏后不再需要关闭按钮 */}
+      <div className="shrink-0 border-b border-gray-100 bg-white/70 px-4 py-2 backdrop-blur dark:border-white/10 dark:bg-gray-950/60">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex gap-1">
+            {([['assets', '素材台账'], ['unmatched', '待认领'], ['import', '导入报表'], ['stats', '消耗统计']] as Array<[Tab, string]>).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                className={`rounded-lg px-2.5 py-1 text-xs transition ${
+                  tab === key
+                    ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
+                    : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-white/5'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* 日期范围：起止各一个日期控件，右侧是常用快捷项 */}
+          <div className="flex items-center gap-1.5 rounded-lg bg-black/[0.04] px-2 py-1 dark:bg-white/[0.06]">
+            <input
+              type="date"
+              value={range.from}
+              onChange={(event) => setRange((prev) => ({ ...prev, from: event.target.value }))}
+              className="rounded bg-transparent px-1 py-0.5 text-[11px] text-gray-700 outline-none dark:text-gray-200 dark:[color-scheme:dark]"
+              aria-label="开始日期"
+            />
+            <span className="text-[11px] text-gray-400">至</span>
+            <input
+              type="date"
+              value={range.to}
+              onChange={(event) => setRange((prev) => ({ ...prev, to: event.target.value }))}
+              className="rounded bg-transparent px-1 py-0.5 text-[11px] text-gray-700 outline-none dark:text-gray-200 dark:[color-scheme:dark]"
+              aria-label="结束日期"
+            />
+            <div className="ml-1 flex gap-0.5">
+              {([['today', '今天'], ['7d', '近7天'], ['30d', '近30天'], ['all', '全部']] as Array<[RangePreset, string]>).map(([key, label]) => {
+                const preset = presetRange(key)
+                const active = preset.from === range.from && preset.to === range.to
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setRange(preset)}
+                    className={`rounded px-1.5 py-0.5 text-[10px] transition ${
+                      active
+                        ? 'bg-white text-gray-800 shadow-sm dark:bg-white/15 dark:text-white'
+                        : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
             </div>
           </div>
-          <div className="flex items-center gap-1.5">
+
+          <span className="text-[11px] text-gray-400">统计范围：{rangeLabel(range)}</span>
+
+          <div className="ml-auto flex items-center gap-1.5">
             {simulatedCount > 0 ? (
               <button
                 type="button"
@@ -316,21 +396,54 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
                 填充演示数据
               </button>
             )}
-            <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-xs text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10">
-              关闭
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="rounded-lg px-2 py-1 text-[11px] text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10"
+              title="重新读取本地数据"
+            >
+              刷新
             </button>
           </div>
         </div>
 
-        {error && <div className="mx-5 mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-500/10 dark:text-red-300">{error}</div>}
-        {busy && <div className="mx-5 mt-3 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">{busy}</div>}
+        {(busy || error) && (
+          <p className={`mt-1.5 text-[11px] ${error ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'}`}>
+            {error || busy}
+          </p>
+        )}
+      </div>
 
-        <div className="flex-1 overflow-auto px-5 py-4">
+      <div className="relative flex min-h-0 flex-1">
+        {/* 左侧产品树：业务线 → 产品 → 方向 */}
+        <aside className="w-56 shrink-0 overflow-y-auto border-r border-gray-100 px-2 py-3 dark:border-white/10">
+          <div className="mb-1.5 flex items-center justify-between px-1">
+            <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400">业务线 / 产品 / 方向</span>
+            {selectedNodeId && (
+              <button
+                type="button"
+                onClick={() => setSelectedNodeId(null)}
+                className="text-[10px] text-blue-500 hover:underline"
+              >
+                清除
+              </button>
+            )}
+          </div>
+          {!tree.length ? (
+            <p className="px-1 py-3 text-[11px] leading-relaxed text-gray-400">
+              还没有方向。到画廊左侧建好「业务线 → 产品 → 方向」之后，这里就能按层级筛选素材。
+            </p>
+          ) : (
+            <TreeBranch nodes={tree} depth={0} selectedId={selectedNodeId} onSelect={setSelectedNodeId} />
+          )}
+        </aside>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {loading ? (
-            <p className="text-xs text-gray-400">读取中…</p>
+            <p className="py-16 text-center text-xs text-gray-400">正在读取本地数据…</p>
           ) : tab === 'assets' ? (
             <AssetsTab
-              assets={assets}
+              assets={scopedAssets}
               byAsset={byAsset}
               byCard={byCard}
               onRebuild={rebuildLedger}
@@ -347,7 +460,13 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
               setError={setError}
             />
           ) : (
-            <StatsTab totalSpend={spend.reduce((sum, item) => sum + item.spend, 0)} byDate={byDate} imports={imports} byCard={byCard} assets={assets} />
+            <StatsTab
+              totalSpend={scopedSpend.reduce((sum, item) => sum + item.spend, 0)}
+              byDate={byDate}
+              imports={imports}
+              byCard={byCard}
+              assets={scopedAssets}
+            />
           )}
         </div>
 
@@ -355,7 +474,7 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
           <AssetDetail
             asset={selectedAsset}
             tasks={tasks as TaskRecord[]}
-            spend={spend}
+            spend={scopedSpend}
             byAsset={byAsset}
             byCard={byCard}
             lineageMap={lineageMap}
@@ -374,7 +493,49 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
           onClose={() => setDerivingTask(null)}
         />
       )}
-    </div>
+    </main>
+  )
+}
+
+/** 产品树的一个分支：递归渲染「业务线 → 产品 → 方向」 */
+function TreeBranch({
+  nodes,
+  depth,
+  selectedId,
+  onSelect,
+}: {
+  nodes: TreeNode[]
+  depth: number
+  selectedId: string | null
+  onSelect: (id: string | null) => void
+}) {
+  return (
+    <>
+      {nodes.map((node) => {
+        const active = selectedId === node.id
+        return (
+          <div key={node.id}>
+            <button
+              type="button"
+              onClick={() => onSelect(active ? null : node.id)}
+              className={`flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-[11px] transition ${
+                active
+                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
+                  : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/5'
+              }`}
+              style={{ paddingLeft: 6 + depth * 12 }}
+              title={`${node.name}（${node.taskCount} 张卡）`}
+            >
+              <span className="min-w-0 flex-1 truncate">{node.name}</span>
+              <span className="shrink-0 text-[10px] text-gray-400">{node.taskCount}</span>
+            </button>
+            {node.children.length > 0 && (
+              <TreeBranch nodes={node.children} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />
+            )}
+          </div>
+        )
+      })}
+    </>
   )
 }
 
@@ -603,14 +764,14 @@ function AssetsTab({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="素材总数" value={String(assets.length)} />
         <Metric label="已投放" value={String(deployed.length)} />
         <Metric label="累计消耗" value={`¥${fmtMoney(totalSpend)}`} />
         <Metric label="任务卡" value={String(byCard.size)} />
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex gap-1">
           {(['all', 'running', 'declining', 'stale', 'created'] as const).map((key) => (
             <button
@@ -631,52 +792,52 @@ function AssetsTab({
       </div>
 
       {!assets.length ? (
-        <p className="py-10 text-center text-xs text-gray-400">
+        <p className="py-16 text-center text-xs text-gray-400">
           还没有素材记录。点右上角「扫描任务卡建台账」，把已生成的图片收进来。
         </p>
       ) : (
-        <table className="w-full text-xs">
-          <thead className="text-gray-400">
-            <tr className="border-b border-gray-100 dark:border-white/10">
-              <th className="py-1.5 text-left font-normal">素材</th>
-              <th className="py-1.5 text-right font-normal">累计消耗</th>
-              <th className="py-1.5 text-right font-normal">投放天数</th>
-              <th className="py-1.5 text-right font-normal">日均</th>
-              <th className="py-1.5 text-right font-normal">最后投放</th>
-              <th className="py-1.5 text-right font-normal">阶段</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.slice(0, 200).map(({ asset, stat }) => (
-              <tr
+        /*
+         * 网格而不是表格：台账最主要的用途是「看图判断这张要不要继续投」，
+         * 表格里缩略图只有 44px 宽，根本认不出画面。
+         */
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {rows.slice(0, 300).map(({ asset, stat }) => {
+            const stage = stat?.stage ?? 'created'
+            return (
+              <button
                 key={asset.id}
+                type="button"
                 onClick={() => onSelect(asset.id)}
-                className="cursor-pointer border-b border-gray-50 hover:bg-gray-50 dark:border-white/5 dark:hover:bg-white/5"
+                className="group flex flex-col overflow-hidden rounded-xl border border-gray-100 bg-white text-left transition hover:border-blue-200 hover:shadow-md dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-blue-500/40"
               >
-                <td className="py-1.5">
-                  <div className="flex items-center gap-2">
-                    <AssetThumb imageId={assetImageId(asset)} />
-                    <div className="min-w-0">
-                      <span className="font-mono text-gray-700 dark:text-gray-200">{asset.id.slice(0, 8)}</span>
-                      {asset.platformIds.length > 0 && (
-                        <span className="ml-2 text-[10px] text-gray-400">平台ID {asset.platformIds.length} 个</span>
-                      )}
-                    </div>
+                <div className="relative aspect-[4/3] w-full overflow-hidden bg-gray-50 dark:bg-white/5">
+                  <AssetThumb imageId={assetImageId(asset)} className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
+                  <div className="absolute left-1.5 top-1.5">
+                    <StageBadge stage={stage} />
                   </div>
-                </td>
-                <td className="py-1.5 text-right text-gray-700 dark:text-gray-200">{stat ? `¥${fmtMoney(stat.totalSpend)}` : '-'}</td>
-                <td className="py-1.5 text-right text-gray-500">{stat?.activeDays ?? '-'}</td>
-                <td className="py-1.5 text-right text-gray-500">{stat ? `¥${fmtMoney(stat.dailyAverage)}` : '-'}</td>
-                <td className="py-1.5 text-right text-gray-500">{stat?.lastDate ?? '-'}</td>
-                <td className="py-1.5 text-right">
-                  <StageBadge stage={stat?.stage ?? 'created'} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  <div className="absolute bottom-1.5 right-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[11px] font-medium text-white">
+                    {stat ? `¥${fmtMoney(stat.totalSpend)}` : '未投放'}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1 p-2">
+                  <div className="flex items-center justify-between gap-1 text-[10px] text-gray-400">
+                    <span className="truncate font-mono">{asset.id.slice(0, 8)}</span>
+                    {asset.platformIds.length > 0 && <span className="shrink-0">{asset.platformIds.length} 个ID</span>}
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-gray-600 dark:text-gray-300">
+                    <span>{stat ? `${stat.activeDays} 天` : '—'}</span>
+                    <span>{stat ? `日均 ¥${fmtMoney(stat.dailyAverage)}` : '—'}</span>
+                  </div>
+                  <p className="truncate text-[10px] text-gray-400">
+                    最后投放 {stat?.lastDate ?? '—'}
+                  </p>
+                </div>
+              </button>
+            )
+          })}
+        </div>
       )}
-      {rows.length > 200 && <p className="text-[11px] text-gray-400">只显示前 200 条（按消耗降序），共 {rows.length} 条</p>}
+      {rows.length > 300 && <p className="text-[11px] text-gray-400">只显示前 300 条（按消耗降序），共 {rows.length} 条</p>}
     </div>
   )
 }
@@ -689,7 +850,14 @@ function AssetsTab({
  * 不用 IntersectionObserver 是因为这里最多渲染 200 行，
  * 缩略图本身有缓存，重复打开不会重复解码。
  */
-function AssetThumb({ imageId }: { imageId: string }) {
+function AssetThumb({
+  imageId,
+  className = 'h-8 w-11 rounded object-cover',
+}: {
+  imageId: string
+  /** 尺寸交给调用方：表格里是小方图，网格卡片里要铺满 */
+  className?: string
+}) {
   const [src, setSrc] = useState('')
   useEffect(() => {
     let cancelled = false
@@ -701,8 +869,14 @@ function AssetThumb({ imageId }: { imageId: string }) {
     return () => { cancelled = true }
   }, [imageId])
   return src
-    ? <img src={src} alt="" className="h-8 w-11 rounded object-cover" />
-    : <div className="h-8 w-11 rounded bg-gray-100 dark:bg-white/10" />
+    ? <img src={src} alt="" className={className} />
+    : (
+      <div className={`${className} flex items-center justify-center bg-gray-100 dark:bg-white/10`}>
+        <svg className="h-1/3 max-h-6 w-1/3 max-w-6 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} d="M4 16l4.5-4.5a2 2 0 012.8 0L16 16m-2-2l1.5-1.5a2 2 0 012.8 0L20 14M4 6h16v12H4z" />
+        </svg>
+      </div>
+    )
 }
 
 function StageBadge({ stage }: { stage: keyof typeof STAGE_LABEL }) {
