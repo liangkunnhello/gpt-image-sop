@@ -8,7 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
 import { ensureImageCached, ensureImageThumbnailCached } from '../../lib/imageCache'
 import { recordLineage } from '../../lib/trackDb'
-import { buildDemoBundle, isDemoId } from '../../lib/demoData'
+import { buildDemoBundle, isDemoId, type DemoImageRef } from '../../lib/demoData'
+import { countSimulated, planRestoreMatches, planSimulateMatches } from '../../lib/simulateMatch'
 import SopSupplementModal from '../SopSupplementModal'
 import type { TaskRecord } from '../../types'
 import {
@@ -17,6 +18,7 @@ import {
   aggregateByCard,
   aggregateByDate,
   assetDailySeries,
+  assetImageId,
   buildAssetsFromTasks,
   buildLineageMap,
   descendantCards,
@@ -121,23 +123,42 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
   }
 
   /**
+   * 本地已有的真实图片，供演示数据挂载。
+   *
+   * 只收已出图、非回收站、非占位卡 —— 占位卡的 outputImages 是空的，
+   * 回收站里的图可能已被清理，挂上去只会变成灰块。
+   */
+  const realImagePool = useMemo<DemoImageRef[]>(() => {
+    const pool: DemoImageRef[] = []
+    for (const task of tasks as TaskRecord[]) {
+      if (task.deletedAt || task.sopPlaceholder) continue
+      for (const imageId of task.outputImages ?? []) pool.push({ imageId, taskId: task.id })
+    }
+    return pool
+  }, [tasks])
+
+  /**
    * 填充演示数据。
    *
    * track 版是独立数据目录，新装上是空的 —— 没导入过报表就看不到台账/统计/血缘的效果。
    * 演示数据的 id 全部以 demo- 开头，清除时按前缀删，不会碰到真实数据。
+   * 本地有图就挂到真实图上（缩略图能显示），没有才退回编造哈希。
    */
   const fillDemo = async () => {
     setBusy('正在生成演示数据…')
     setError('')
     try {
       const today = new Date().toISOString().slice(0, 10)
-      const bundle = buildDemoBundle(today)
+      const bundle = buildDemoBundle(today, realImagePool)
       await trackPutMany('assets', bundle.assets.map((item) => ({ id: item.id, data: item })))
       await trackPutMany('spend', bundle.spend.map((item) => ({ id: item.id, data: item })))
       await trackPutMany('lineage', bundle.lineage.map((item) => ({ id: item.id, data: item })))
       await trackPutMany('imports', bundle.imports.map((item) => ({ id: item.id, data: item })))
       await load()
-      setBusy(`已填充 ${bundle.assets.length} 个演示素材、${bundle.spend.length} 条流水。右上角可一键清除。`)
+      const picture = bundle.withRealImage > 0
+        ? `，其中 ${bundle.withRealImage} 个挂了本地真实图片`
+        : '（本地还没有图片，缩略图会显示灰块）'
+      setBusy(`已填充 ${bundle.assets.length} 个演示素材${picture}、${bundle.spend.length} 条流水。右上角可一键清除。`)
     } catch (err) {
       setError(`填充演示数据失败：${String(err)}`)
       setBusy('')
@@ -166,6 +187,56 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
       setBusy(`已清除 ${removed} 条演示记录`)
     } catch (err) {
       setError(`清除失败：${String(err)}`)
+      setBusy('')
+    }
+  }
+
+  const simulatedCount = useMemo(() => countSimulated(spend), [spend])
+
+  /**
+   * 一键模拟关联（调试用）。
+   *
+   * 导入的报表常常大批对不上本地图，台账里消耗几乎是 0，界面效果没法看。
+   * 这里把未匹配的流水轮流挂到本地素材上，全部打上 simulated 标记，可一键还原。
+   * 只挂真实素材 —— 演示素材会被清除，真流水挂上去就成了悬空记录。
+   */
+  const simulateMatches = async () => {
+    setBusy('正在模拟关联…')
+    setError('')
+    try {
+      const plan = planSimulateMatches(spend, assets)
+      if (!plan.linkedRecords) {
+        setBusy('没有可模拟的流水：要么还没导入报表，要么都已经匹配上了')
+        return
+      }
+      await trackPutMany('spend', plan.spend.map((item) => ({ id: item.id, data: item })))
+      await trackPutMany('assets', plan.assets.map((item) => ({ id: item.id, data: item })))
+      await load()
+      setBusy(
+        `已模拟关联 ${plan.linkedPlatforms} 个平台素材、${plan.linkedRecords} 条流水，` +
+        `落到 ${plan.usedAssets} 个本地素材上。这是调试数据，可随时还原。`,
+      )
+    } catch (err) {
+      setError(`模拟关联失败：${String(err)}`)
+      setBusy('')
+    }
+  }
+
+  const restoreMatches = async () => {
+    setBusy('正在还原模拟关联…')
+    setError('')
+    try {
+      const plan = planRestoreMatches(spend, assets)
+      if (!plan.spend.length) {
+        setBusy('没有模拟关联需要还原')
+        return
+      }
+      await trackPutMany('spend', plan.spend.map((item) => ({ id: item.id, data: item })))
+      await trackPutMany('assets', plan.assets.map((item) => ({ id: item.id, data: item })))
+      await load()
+      setBusy(`已还原 ${plan.linkedRecords} 条模拟关联，它们回到「待认领」`)
+    } catch (err) {
+      setError(`还原失败：${String(err)}`)
       setBusy('')
     }
   }
@@ -199,6 +270,25 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            {simulatedCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => void restoreMatches()}
+                className="rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-600 hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300"
+                title="把模拟关联的流水退回未匹配状态，真匹配的记录不受影响"
+              >
+                还原模拟关联（{simulatedCount}）
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void simulateMatches()}
+                className="rounded-lg bg-gray-100 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-200 dark:bg-white/10 dark:text-gray-300"
+                title="调试用：把认不到本地图的报表流水临时挂到本地素材上，可一键还原"
+              >
+                模拟关联
+              </button>
+            )}
             {demoCount > 0 ? (
               <button
                 type="button"
@@ -316,14 +406,20 @@ function AssetDetail({
   // 家族消耗：这张卡 + 它所有后代卡的消耗，才是一套创意的真实投入
   const familyCards = useMemo(() => descendantCards(cardId, lineageMap), [cardId, lineageMap])
   const familySpend = familyCards.reduce((sum, id) => sum + (byCard.get(id)?.totalSpend ?? 0), 0)
+  // 模拟关联的条数：让用户知道这个素材的消耗里有多少是调试数据
+  const simulatedHere = spend.reduce(
+    (count, record) => count + (record.assetId === asset.id && record.simulated ? 1 : 0), 0)
+
+  // 演示素材的 id 是 demo- 开头，真实图片哈希在 imageId 里，必须走 assetImageId
+  const previewImageId = assetImageId(asset)
 
   useEffect(() => {
     let cancelled = false
-    ensureImageCached(asset.id)
+    ensureImageCached(previewImageId)
       .then((dataUrl) => { if (!cancelled && dataUrl) setSrc(dataUrl) })
       .catch(() => { /* 图被清理了就只显示指标 */ })
     return () => { cancelled = true }
-  }, [asset.id])
+  }, [previewImageId])
 
   return (
     <div className="absolute right-0 top-0 flex h-full w-[26rem] flex-col border-l border-gray-100 bg-white shadow-xl dark:border-white/10 dark:bg-gray-900">
@@ -369,6 +465,11 @@ function AssetDetail({
             <p>阶段：<span className="text-gray-800 dark:text-gray-100">{STAGE_LABEL[stat?.stage ?? 'created']}</span></p>
             <p>最后投放：{stat?.lastDate ?? '-'}</p>
             <p className="break-all">平台素材 ID：{asset.platformIds.length ? asset.platformIds.join('、') : '未匹配'}</p>
+            {simulatedHere > 0 && (
+              <p className="text-amber-600 dark:text-amber-400">
+                其中 {simulatedHere} 条为模拟关联（调试用，未真实匹配）
+              </p>
+            )}
           </div>
         </div>
 
@@ -546,7 +647,7 @@ function AssetsTab({
               >
                 <td className="py-1.5">
                   <div className="flex items-center gap-2">
-                    <AssetThumb imageId={asset.id} />
+                    <AssetThumb imageId={assetImageId(asset)} />
                     <div className="min-w-0">
                       <span className="font-mono text-gray-700 dark:text-gray-200">{asset.id.slice(0, 8)}</span>
                       {asset.platformIds.length > 0 && (
@@ -688,7 +789,15 @@ function UnmatchedTab({
   const totalSpend = groups.reduce((sum, item) => sum + item.spend, 0)
 
   if (!groups.length) {
-    return <p className="py-10 text-center text-xs text-gray-400">没有待认领的数据。导入报表后，认不到本地图的素材会出现在这里。</p>
+    return (
+      <div className="py-10 text-center text-xs text-gray-400">
+        <p>没有待认领的数据。导入报表后，认不到本地图的素材会出现在这里。</p>
+        <p className="mt-2 text-[11px] text-gray-400">
+          如果刚导入就一条都没有，可能是报表已经全部匹配上，也可能还没导报表 ——
+          想看台账效果可以先点右上角的「模拟关联」（调试用，可一键还原）。
+        </p>
+      </div>
+    )
   }
 
   return (

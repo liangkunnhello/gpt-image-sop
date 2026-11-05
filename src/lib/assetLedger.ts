@@ -70,6 +70,8 @@ export function mergeAssets(existing: AssetRecord[], scanned: AssetRecord[]): As
       lastSpendDate: old.lastSpendDate,
       parentAssetId: old.parentAssetId,
       rootCardId: old.rootCardId ?? asset.rootCardId,
+      // 演示素材的真实图哈希只在建档时写过一次，别被扫描结果的空值覆盖
+      imageId: old.imageId ?? asset.imageId,
       stageOverride: old.stageOverride,
       note: old.note,
     })
@@ -215,6 +217,17 @@ export const STAGE_LABEL: Record<AssetStage, string> = {
   running: '投放中',
   declining: '衰退中',
   stale: '已停投',
+}
+
+/**
+ * 取素材对应的真实图片哈希，用来加载缩略图和原图。
+ *
+ * 真实素材的 `id` 就是图片哈希，演示素材的 `id` 是 `demo-` 开头的编造值、
+ * 真实哈希另存在 `imageId` 里。所有读图的地方都走这里，避免有人直接用 `asset.id`
+ * 导致演示素材永远加载不出图。
+ */
+export function assetImageId(asset: { id: string; imageId?: string }): string {
+  return asset.imageId || asset.id
 }
 
 /** 血缘关系图：某张卡的上下游 */

@@ -27,8 +27,21 @@ export type AssetStage =
   | 'stale'
 
 export interface AssetRecord {
-  /** 图片内容哈希，等于 images.id */
+  /**
+   * 素材记录主键。
+   *
+   * 真实素材就是图片内容哈希（`images.id`）；演示素材是 `demo-` 开头的编造 id。
+   * 这样演示数据才能按前缀一键清除 —— 所以**不能**把图片哈希当主键，
+   * 否则清除逻辑会认不出来。
+   */
   id: string
+  /**
+   * 真实图片哈希，用于加载缩略图和原图。
+   *
+   * 演示素材用这个字段挂到本地真实图片上（`id` 仍是 demo- 前缀），
+   * 真实素材不填，缺省即等于 `id`（见 `assetImageId`）。
+   */
+  imageId?: string
   /** 来源任务卡 */
   taskId?: string
   /** 血缘根卡（同一母体衍生出来的共用这个 id） */
@@ -79,6 +92,14 @@ export interface SpendRecord {
   abnormal?: boolean
   /** 来源批次，便于整批撤销 */
   importId: string
+  /**
+   * 调试用：这条关联是「模拟」出来的，不是真匹配。
+   *
+   * 导入的报表常常大批对不上本地图，台账看不到消耗就调不了界面。
+   * 模拟关联把未匹配的流水临时挂到本地图片上，靠这个标记一键还原 ——
+   * 还原只认这个标记，绝不会动真匹配出来的关联。
+   */
+  simulated?: boolean
 }
 
 export interface LineageRecord {
