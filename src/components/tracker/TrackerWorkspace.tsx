@@ -914,6 +914,11 @@ function AssetThumb({
 }) {
   const [src, setSrc] = useState('')
   useEffect(() => {
+    // 排行里可能拿不到代表素材（演示数据、老数据），空 id 不去查库
+    if (!imageId) {
+      setSrc('')
+      return
+    }
     let cancelled = false
     ensureImageThumbnailCached(imageId)
       .then((thumbnail) => {
@@ -1275,6 +1280,37 @@ function StatsTab({
   const maxDay = Math.max(1, ...byDate.map((item) => item.spend))
   const cards = [...byCard.values()].sort((a, b) => b.totalSpend - a.totalSpend).slice(0, 20)
 
+  const tasks = useStore((state) => state.tasks)
+  const setDetailTaskId = useStore((state) => state.setDetailTaskId)
+  const knownTaskIds = useMemo(() => new Set(tasks.map((task) => task.id)), [tasks])
+
+  /**
+   * 每张任务卡挑一个「代表素材」，用来当缩略图和双击目标。
+   *
+   * 排行里的 cardId 是血缘根（真实数据里就是 sopJobId），不是任务 id，
+   * 而任务卡详情要的是任务 id —— 所以从素材反查它的 taskId，比拿 sopJobId 去猜可靠。
+   * 优先挑有真实图片的那条：没图的行缩略图是空的，看着像坏了。
+   */
+  const representative = useMemo(() => {
+    const map = new Map<string, AssetRecord>()
+    for (const asset of assets) {
+      const cardId = asset.rootCardId ?? asset.taskId
+      if (!cardId) continue
+      const prev = map.get(cardId)
+      if (!prev || (!prev.imageId && asset.imageId)) map.set(cardId, asset)
+    }
+    return map
+  }, [assets])
+
+  /** 双击排行行：打开这张任务卡的详情（和画廊里点卡片是同一个弹窗） */
+  const openCardDetail = (cardId: string) => {
+    const asset = representative.get(cardId)
+    const taskId = asset?.taskId
+    // 演示数据 / 任务卡已删的，任务列表里没有对应记录，弹出来只会是空的
+    if (!taskId || !knownTaskIds.has(taskId)) return
+    setDetailTaskId(taskId)
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-3 gap-3">
@@ -1316,14 +1352,34 @@ function StatsTab({
               </tr>
             </thead>
             <tbody>
-              {cards.map((card) => (
-                <tr key={card.cardId} className="border-b border-gray-50 dark:border-white/5">
-                  <td className="py-1 font-mono text-gray-600 dark:text-gray-300">{card.cardId}</td>
-                  <td className="py-1 text-right text-gray-500">{card.assetCount}</td>
-                  <td className="py-1 text-right text-gray-500">{card.activeAssetCount}</td>
-                  <td className="py-1 text-right text-gray-700 dark:text-gray-200">¥{fmtMoney(card.totalSpend)}</td>
-                </tr>
-              ))}
+              {cards.map((card) => {
+                const sample = representative.get(card.cardId)
+                const openable = Boolean(sample?.taskId && knownTaskIds.has(sample.taskId))
+                return (
+                  <tr
+                    key={card.cardId}
+                    onDoubleClick={() => openCardDetail(card.cardId)}
+                    title={openable ? '双击查看任务卡详情' : '这张卡没有对应的任务记录，无法打开详情'}
+                    className={`border-b border-gray-50 dark:border-white/5 ${
+                      openable ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5' : ''
+                    }`}
+                  >
+                    <td className="py-1">
+                      <div className="flex items-center gap-2">
+                        <AssetThumb
+                          imageId={sample ? assetImageId(sample) : ''}
+                          // 竖版海报：给到 36x48 才看得出画面，再大会把 20 行排行拉得太长
+                          className="h-12 w-9 shrink-0 rounded object-contain"
+                        />
+                        <span className="truncate font-mono text-gray-600 dark:text-gray-300">{card.cardId}</span>
+                      </div>
+                    </td>
+                    <td className="py-1 text-right text-gray-500">{card.assetCount}</td>
+                    <td className="py-1 text-right text-gray-500">{card.activeAssetCount}</td>
+                    <td className="py-1 text-right text-gray-700 dark:text-gray-200">¥{fmtMoney(card.totalSpend)}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
           <p className="mt-1 text-[10px] text-gray-400">共 {assets.length} 个素材</p>
