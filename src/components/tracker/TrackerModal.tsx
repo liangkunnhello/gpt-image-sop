@@ -206,7 +206,15 @@ export default function TrackerModal({ onClose }: { onClose: () => void }) {
     try {
       const plan = planSimulateMatches(spend, assets)
       if (!plan.linkedRecords) {
-        setBusy('没有可模拟的流水：要么还没导入报表，要么都已经匹配上了')
+        // 三种情况要分清，否则用户会以为「导入成功但什么都没发生」
+        const pending = spend.filter((item) => !item.assetId).length
+        if (!assets.length) {
+          setBusy('本地还没有素材可挂 —— 先点「扫描任务卡建台账」，或先出几张图')
+        } else if (pending) {
+          setBusy(`有 ${pending} 条流水认不到本地图，但都没有可挂的素材，先建台账再来`)
+        } else {
+          setBusy('没有未匹配的流水，全部都已经匹配上了')
+        }
         return
       }
       await trackPutMany('spend', plan.spend.map((item) => ({ id: item.id, data: item })))
