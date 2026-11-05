@@ -31,7 +31,6 @@ import {
   STAGE_LABEL,
   aggregateByAsset,
   aggregateByCard,
-  aggregateByDate,
   assetDailySeries,
   assetImageId,
   buildAssetsFromTasks,
@@ -123,7 +122,6 @@ export default function TrackerWorkspace() {
   const scopedSpend = useMemo(() => filterSpendByAssets(rangedSpend, scopedAssets), [rangedSpend, scopedAssets])
 
   const byAsset = useMemo(() => aggregateByAsset(scopedSpend), [scopedSpend])
-  const byDate = useMemo(() => aggregateByDate(scopedSpend), [scopedSpend])
   const byCard = useMemo(() => aggregateByCard(scopedAssets, byAsset), [scopedAssets, byAsset])
   const lineageMap = useMemo(() => buildLineageMap(lineage), [lineage])
   const selectedAsset = selectedAssetId ? scopedAssets.find((item) => item.id === selectedAssetId) ?? null : null
@@ -302,7 +300,7 @@ export default function TrackerWorkspace() {
       <div className="shrink-0 border-b border-gray-100 bg-white/70 px-4 py-2 backdrop-blur dark:border-white/10 dark:bg-gray-950/60">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className="flex gap-1">
-            {([['assets', '素材台账'], ['unmatched', '待认领'], ['import', '导入报表'], ['stats', '消耗统计']] as Array<[Tab, string]>).map(([key, label]) => (
+            {([['assets', '素材台账'], ['unmatched', '待认领'], ['import', '导入报表'], ['stats', '素材报表']] as Array<[Tab, string]>).map(([key, label]) => (
               <button
                 key={key}
                 type="button"
@@ -463,11 +461,9 @@ export default function TrackerWorkspace() {
               setError={setError}
             />
           ) : (
-            <StatsTab
-              totalSpend={scopedSpend.reduce((sum, item) => sum + item.spend, 0)}
-              byDate={byDate}
+            <AssetReportTab
+              spend={scopedSpend}
               imports={imports}
-              byCard={byCard}
               assets={scopedAssets}
             />
           )}
@@ -1264,131 +1260,335 @@ function ImportTab({
   )
 }
 
-function StatsTab({
-  totalSpend,
-  byDate,
+/** 报表维度：素材 / 任务卡 / 产品 */
+type ReportDimension = 'asset' | 'card' | 'product'
+
+interface ReportRow {
+  key: string
+  /** 主列文字 */
+  label: string
+  /** 主列下面的小字 */
+  sublabel: string
+  /** 第二列（素材维度显示所属任务卡，其余维度显示素材数） */
+  secondary: string
+  /** 缩略图用的图片哈希 */
+  imageId?: string
+  /** 双击打开任务卡详情用；素材维度取该素材所属任务，其余维度取代表素材的任务 */
+  taskId?: string
+  media: string[]
+  spend: number
+  days: number
+  /** 最近 7 天逐日消耗，给趋势迷你图用 */
+  series: number[]
+  /** 任务卡 / 产品维度下包含多少素材 */
+  assetCount: number
+}
+
+/** 迷你趋势图：一条折线，不画坐标轴 —— 看的是「往上还是往下」，不是精确读值 */
+function Sparkline({ values }: { values: number[] }) {
+  if (!values.length || values.every((value) => value === 0)) {
+    return <span className="text-[10px] text-gray-300 dark:text-gray-600">—</span>
+  }
+  const width = 64
+  const height = 18
+  const max = Math.max(...values)
+  const step = values.length > 1 ? width / (values.length - 1) : width
+  const points = values
+    .map((value, index) => `${(index * step).toFixed(1)},${(height - 2 - (value / max) * (height - 4)).toFixed(1)}`)
+    .join(' ')
+  return (
+    <svg width={width} height={height} className="overflow-visible" aria-hidden="true">
+      <polyline points={points} fill="none" stroke="#60a5fa" strokeWidth={1.3} strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+/**
+ * 素材报表。
+ *
+ * 布局参考投放后台的报表页：上面一排筛选（维度 / 媒体 / 产品 / 设计 / 优化师 / 搜索），
+ * 下面一张带合计的明细表，每行右侧一条近 7 日趋势。
+ *
+ * 三个刻意的取舍：
+ * 1. **未匹配的流水不进表**：它们没有素材也没有任务卡，硬塞进来就是一堆空行把真数据挤下去；
+ * 2. **趋势轴取「数据里最近 7 个有消耗的日期」**，不是自然日 —— 中间空档会把折线压平，看着像没投；
+ * 3. 合计行放表头下面第一行（和投放后台一致），比塞到表格最底部更容易看到。
+ */
+function AssetReportTab({
+  spend,
   imports,
-  byCard,
   assets,
 }: {
-  totalSpend: number
-  byDate: ReturnType<typeof aggregateByDate>
+  spend: SpendRecord[]
   imports: ImportRecord[]
-  byCard: ReturnType<typeof aggregateByCard>
   assets: AssetRecord[]
 }) {
-  const maxDay = Math.max(1, ...byDate.map((item) => item.spend))
-  const cards = [...byCard.values()].sort((a, b) => b.totalSpend - a.totalSpend).slice(0, 20)
-
   const tasks = useStore((state) => state.tasks)
   const setDetailTaskId = useStore((state) => state.setDetailTaskId)
   const knownTaskIds = useMemo(() => new Set(tasks.map((task) => task.id)), [tasks])
+  const assetById = useMemo(() => new Map(assets.map((item) => [item.id, item])), [assets])
 
-  /**
-   * 每张任务卡挑一个「代表素材」，用来当缩略图和双击目标。
-   *
-   * 排行里的 cardId 是血缘根（真实数据里就是 sopJobId），不是任务 id，
-   * 而任务卡详情要的是任务 id —— 所以从素材反查它的 taskId，比拿 sopJobId 去猜可靠。
-   * 优先挑有真实图片的那条：没图的行缩略图是空的，看着像坏了。
-   */
-  const representative = useMemo(() => {
-    const map = new Map<string, AssetRecord>()
-    for (const asset of assets) {
-      const cardId = asset.rootCardId ?? asset.taskId
-      if (!cardId) continue
-      const prev = map.get(cardId)
-      if (!prev || (!prev.imageId && asset.imageId)) map.set(cardId, asset)
+  const [dimension, setDimension] = useState<ReportDimension>('asset')
+  const [mediaFilter, setMediaFilter] = useState('')
+  const [productFilter, setProductFilter] = useState('')
+  const [designerFilter, setDesignerFilter] = useState('')
+  const [optimizerFilter, setOptimizerFilter] = useState('')
+  const [keyword, setKeyword] = useState('')
+
+  const filtered = useMemo(() => spend.filter((record) => (
+    (!mediaFilter || record.media === mediaFilter) &&
+    (!productFilter || record.productName === productFilter) &&
+    (!designerFilter || record.designer === designerFilter) &&
+    (!optimizerFilter || record.optimizer === optimizerFilter)
+  )), [spend, mediaFilter, productFilter, designerFilter, optimizerFilter])
+
+  /** 筛选项从全量数据里取，不从当前结果里取 —— 否则选完一项，其余选项会凭空消失 */
+  const options = useMemo(() => {
+    const collect = (pick: (record: SpendRecord) => string | undefined) =>
+      [...new Set(spend.map(pick).filter((value): value is string => Boolean(value)))].sort()
+    return {
+      media: collect((record) => record.media),
+      product: collect((record) => record.productName),
+      designer: collect((record) => record.designer),
+      optimizer: collect((record) => record.optimizer),
     }
-    return map
-  }, [assets])
+  }, [spend])
 
-  /** 双击排行行：打开这张任务卡的详情（和画廊里点卡片是同一个弹窗） */
-  const openCardDetail = (cardId: string) => {
-    const asset = representative.get(cardId)
-    const taskId = asset?.taskId
-    // 演示数据 / 任务卡已删的，任务列表里没有对应记录，弹出来只会是空的
+  const allDates = useMemo(() => [...new Set(filtered.map((record) => record.date))].sort(), [filtered])
+  const trendDates = useMemo(() => allDates.slice(-7), [allDates])
+
+  const rows = useMemo<ReportRow[]>(() => {
+    type Bucket = {
+      spend: number
+      days: Set<string>
+      byDate: Map<string, number>
+      media: Set<string>
+      assetIds: Set<string>
+    }
+    const buckets = new Map<string, Bucket>()
+
+    for (const record of filtered) {
+      // 未匹配的流水没有素材也没有任务卡，报表里不出现
+      if (!record.assetId) continue
+      const asset = assetById.get(record.assetId)
+      const key = dimension === 'asset'
+        ? record.assetId
+        : dimension === 'card'
+          ? (asset?.rootCardId ?? asset?.taskId ?? '未归属任务卡')
+          : (record.productName || '未标注产品')
+
+      const bucket = buckets.get(key) ?? {
+        spend: 0, days: new Set<string>(), byDate: new Map<string, number>(),
+        media: new Set<string>(), assetIds: new Set<string>(),
+      }
+      bucket.spend += record.spend
+      bucket.days.add(record.date)
+      bucket.byDate.set(record.date, (bucket.byDate.get(record.date) ?? 0) + record.spend)
+      if (record.media) bucket.media.add(record.media)
+      bucket.assetIds.add(record.assetId)
+      buckets.set(key, bucket)
+    }
+
+    const out: ReportRow[] = []
+    for (const [key, bucket] of buckets) {
+      // 代表素材：优先挑有真实图片的，否则缩略图那格会一直是空的
+      let sample: AssetRecord | undefined
+      for (const assetId of bucket.assetIds) {
+        const asset = assetById.get(assetId)
+        if (!asset) continue
+        if (!sample || (!sample.imageId && asset.imageId)) sample = asset
+        if (sample.imageId) break
+      }
+
+      const assetCount = bucket.assetIds.size
+      out.push({
+        key,
+        label: dimension === 'asset' ? key.slice(0, 8) : key,
+        sublabel: dimension === 'asset'
+          ? `${sample?.platformIds.length ?? 0} 个平台ID`
+          : `${assetCount} 个素材`,
+        // 素材维度看「这张图属于哪张卡」比再看一遍平台 ID 有用（平台 ID 已经在小字里了）
+        secondary: dimension === 'asset'
+          ? (sample?.rootCardId ?? sample?.taskId ?? '—')
+          : `${assetCount} 个`,
+        imageId: sample ? assetImageId(sample) : undefined,
+        taskId: sample?.taskId,
+        media: [...bucket.media],
+        spend: Math.round(bucket.spend * 100) / 100,
+        days: bucket.days.size,
+        series: trendDates.map((date) => Math.round((bucket.byDate.get(date) ?? 0) * 100) / 100),
+        assetCount,
+      })
+    }
+
+    return out.sort((a, b) => b.spend - a.spend)
+  }, [filtered, dimension, assetById, trendDates])
+
+  const visibleRows = useMemo(() => {
+    const text = keyword.trim().toLowerCase()
+    const matched = text
+      ? rows.filter((row) => row.label.toLowerCase().includes(text) || row.sublabel.toLowerCase().includes(text))
+      : rows
+    return matched.slice(0, 100)
+  }, [rows, keyword])
+
+  const totalSpend = rows.reduce((sum, row) => sum + row.spend, 0)
+  const matchedAssetCount = useMemo(() => {
+    const set = new Set<string>()
+    for (const record of filtered) if (record.assetId) set.add(record.assetId)
+    return set.size
+  }, [filtered])
+
+  /** 双击打开任务卡详情：任务列表里没有这条记录就不弹（演示数据、卡已删） */
+  const openCardDetail = (taskId?: string) => {
     if (!taskId || !knownTaskIds.has(taskId)) return
     setDetailTaskId(taskId)
   }
 
+  const picks: Array<{ label: string; value: string; onChange: (value: string) => void; options: string[] }> = [
+    { label: '媒体', value: mediaFilter, onChange: setMediaFilter, options: options.media },
+    { label: '产品', value: productFilter, onChange: setProductFilter, options: options.product },
+    { label: '设计', value: designerFilter, onChange: setDesignerFilter, options: options.designer },
+    { label: '优化师', value: optimizerFilter, onChange: setOptimizerFilter, options: options.optimizer },
+  ]
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-3 gap-3">
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="汇总消耗" value={`¥${fmtMoney(totalSpend)}`} />
-        <Metric label="投放天数" value={String(byDate.length)} />
-        <Metric label="导入批次" value={String(imports.length)} />
+        <Metric label="素材数" value={String(matchedAssetCount)} />
+        <Metric label="投放天数" value={String(allDates.length)} />
+        <Metric label="日均" value={allDates.length ? `¥${fmtMoney(totalSpend / allDates.length)}` : '—'} />
       </div>
 
-      <div>
-        <p className="mb-2 text-xs font-medium text-gray-600 dark:text-gray-300">单日消耗</p>
-        {!byDate.length ? (
-          <p className="text-xs text-gray-400">还没有数据，先去「导入报表」。</p>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {byDate.slice(-30).map((item) => (
-              <div key={item.date} className="flex items-center gap-2 text-[11px]">
-                <span className="w-20 shrink-0 font-mono text-gray-500">{item.date}</span>
-                <div className="h-2 flex-1 overflow-hidden rounded bg-gray-100 dark:bg-white/10">
-                  <div className="h-full rounded bg-blue-400" style={{ width: `${(item.spend / maxDay) * 100}%` }} />
-                </div>
-                <span className="w-24 shrink-0 text-right text-gray-600 dark:text-gray-300">¥{fmtMoney(item.spend)}</span>
-                <span className="w-16 shrink-0 text-right text-gray-400">{item.assetCount} 素材</span>
-              </div>
+      {/* 筛选条：维度切换 + 四个下拉 + 搜索 */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-100 bg-white/60 p-2 dark:border-white/10 dark:bg-white/[0.03]">
+        <div className="flex gap-0.5 rounded-lg bg-black/[0.04] p-0.5 dark:bg-white/[0.06]">
+          {([['asset', '素材'], ['card', '任务卡'], ['product', '产品']] as Array<[ReportDimension, string]>).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setDimension(key)}
+              className={`rounded px-2 py-1 text-[11px] transition ${
+                dimension === key
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-white/15 dark:text-white'
+                  : 'text-gray-500 hover:text-gray-800 dark:text-gray-400'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {picks.map((pick) => (
+          <select
+            key={pick.label}
+            value={pick.value}
+            onChange={(event) => pick.onChange(event.target.value)}
+            className="rounded-lg border border-gray-200 bg-transparent px-2 py-1 text-[11px] text-gray-600 outline-none dark:border-white/15 dark:text-gray-300"
+            aria-label={pick.label}
+          >
+            <option value="">{`全部${pick.label}`}</option>
+            {pick.options.map((option) => (
+              <option key={option} value={option}>{option}</option>
             ))}
-          </div>
-        )}
+          </select>
+        ))}
+
+        <input
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+          placeholder="搜索素材 / 任务卡 / 产品"
+          className="ml-auto w-52 rounded-lg border border-gray-200 bg-transparent px-2 py-1 text-[11px] text-gray-600 outline-none placeholder:text-gray-400 dark:border-white/15 dark:text-gray-300"
+        />
       </div>
 
-      {cards.length > 0 && (
-        <div>
-          <p className="mb-2 text-xs font-medium text-gray-600 dark:text-gray-300">任务卡消耗（前 20）</p>
-          <table className="w-full text-[11px]">
+      {!rows.length ? (
+        <p className="py-14 text-center text-xs text-gray-400">
+          {spend.length ? '当前筛选条件下没有数据' : '还没有数据，先去「导入报表」。'}
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full table-fixed text-[11px]">
+            {/* 定宽表：不定宽时「天数」和「近7日趋势」会挤在一起，消耗列又被推到屏幕最右边 */}
+            <colgroup>
+              <col />
+              <col className="w-[9.5rem]" />
+              <col className="w-[10rem]" />
+              <col className="w-12" />
+              <col className="w-24" />
+              <col className="w-24" />
+            </colgroup>
             <thead className="text-gray-400">
               <tr className="border-b border-gray-100 dark:border-white/10">
-                <th className="py-1 text-left font-normal">任务卡</th>
-                <th className="py-1 text-right font-normal">素材数</th>
-                <th className="py-1 text-right font-normal">已投放</th>
-                <th className="py-1 text-right font-normal">累计消耗</th>
+                <th className="py-1.5 pr-3 text-left font-normal">{dimension === 'asset' ? '素材' : dimension === 'card' ? '任务卡' : '产品'}</th>
+                <th className="py-1.5 pr-3 text-left font-normal">{dimension === 'asset' ? '任务卡' : '素材数'}</th>
+                <th className="py-1.5 pr-3 text-left font-normal">媒体</th>
+                <th className="py-1.5 pr-3 text-right font-normal">天数</th>
+                <th className="py-1.5 pr-3 text-left font-normal">近7日趋势</th>
+                <th className="py-1.5 text-right font-normal">消耗</th>
               </tr>
             </thead>
             <tbody>
-              {cards.map((card) => {
-                const sample = representative.get(card.cardId)
-                const openable = Boolean(sample?.taskId && knownTaskIds.has(sample.taskId))
+              {/* 合计放第一行，和投放后台一致：先看总数再看明细 */}
+              <tr className="border-b border-gray-100 bg-gray-50/70 font-medium dark:border-white/10 dark:bg-white/[0.04]">
+                <td className="py-1.5 pr-3 text-gray-600 dark:text-gray-300">合计</td>
+                {/* 合计行的第二列跟表头对齐：素材维度那一列是「任务卡」，塞素材数没意义 */}
+                <td className="py-1.5 pr-3 text-gray-500">{dimension === 'asset' ? '—' : `${matchedAssetCount} 个`}</td>
+                <td className="py-1.5 pr-3 text-gray-400">—</td>
+                <td className="py-1.5 pr-3 text-right text-gray-500">{allDates.length}</td>
+                <td className="py-1.5 pr-3 text-gray-400">—</td>
+                <td className="py-1.5 text-right text-gray-800 dark:text-gray-100">¥{fmtMoney(totalSpend)}</td>
+              </tr>
+
+              {visibleRows.map((row) => {
+                const openable = Boolean(row.taskId && knownTaskIds.has(row.taskId))
                 return (
                   <tr
-                    key={card.cardId}
-                    onDoubleClick={() => openCardDetail(card.cardId)}
-                    title={openable ? '双击查看任务卡详情' : '这张卡没有对应的任务记录，无法打开详情'}
+                    key={row.key}
+                    onDoubleClick={() => openCardDetail(row.taskId)}
+                    title={openable ? '双击查看任务卡详情' : '这条没有对应的任务记录，无法打开详情'}
                     className={`border-b border-gray-50 dark:border-white/5 ${
                       openable ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5' : ''
                     }`}
                   >
-                    <td className="py-1">
+                    <td className="py-1.5 pr-3">
                       <div className="flex items-center gap-2">
                         <AssetThumb
-                          imageId={sample ? assetImageId(sample) : ''}
-                          // 竖版海报：给到 36x48 才看得出画面，再大会把 20 行排行拉得太长
-                          className="h-12 w-9 shrink-0 rounded object-contain"
+                          imageId={row.imageId ?? ''}
+                          className="h-10 w-7 shrink-0 rounded object-contain"
                         />
-                        <span className="truncate font-mono text-gray-600 dark:text-gray-300">{card.cardId}</span>
+                        <div className="min-w-0">
+                          <p className="truncate font-mono text-gray-700 dark:text-gray-200">{row.label}</p>
+                          <p className="truncate text-[10px] text-gray-400">{row.sublabel}</p>
+                        </div>
                       </div>
                     </td>
-                    <td className="py-1 text-right text-gray-500">{card.assetCount}</td>
-                    <td className="py-1 text-right text-gray-500">{card.activeAssetCount}</td>
-                    <td className="py-1 text-right text-gray-700 dark:text-gray-200">¥{fmtMoney(card.totalSpend)}</td>
+                    <td className="truncate py-1.5 pr-3 font-mono text-gray-500" title={row.secondary}>{row.secondary}</td>
+                    <td className="truncate py-1.5 pr-3 text-gray-500" title={row.media.join('、')}>
+                      {row.media.length ? row.media.join('、') : '—'}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right text-gray-500">{row.days}</td>
+                    <td className="py-1.5 pr-3">
+                      <Sparkline values={row.series} />
+                    </td>
+                    <td className="py-1.5 text-right text-gray-700 dark:text-gray-200">¥{fmtMoney(row.spend)}</td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
-          <p className="mt-1 text-[10px] text-gray-400">共 {assets.length} 个素材</p>
+          {rows.length > visibleRows.length && (
+            <p className="mt-1 text-[10px] text-gray-400">
+              只显示前 {visibleRows.length} 条（按消耗降序），共 {rows.length} 条
+            </p>
+          )}
         </div>
       )}
 
       {imports.length > 0 && (
         <div>
-          <p className="mb-2 text-xs font-medium text-gray-600 dark:text-gray-300">导入记录</p>
+          <p className="mb-1.5 text-xs font-medium text-gray-600 dark:text-gray-300">导入记录</p>
           <div className="flex flex-col gap-1 text-[11px] text-gray-500">
             {[...imports].sort((a, b) => b.importedAt - a.importedAt).slice(0, 10).map((item) => (
               <div key={item.id} className="flex justify-between">
