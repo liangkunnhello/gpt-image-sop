@@ -465,6 +465,7 @@ export default function TrackerWorkspace() {
               spend={scopedSpend}
               imports={imports}
               assets={scopedAssets}
+              onOpenAsset={setSelectedAssetId}
             />
           )}
         </div>
@@ -543,6 +544,47 @@ function TreeBranch({
   )
 }
 
+/**
+ * 日消耗折线。
+ *
+ * 用折线而不是一排横条：要看的是「哪天起量、哪天掉」，折线更容易看出拐点。
+ * 每个点带 title，悬停能看到具体日期和金额。
+ */
+function SpendTrend({ series }: { series: Array<{ date: string; spend: number }> }) {
+  const width = 300
+  const height = 96
+  const pad = 6
+  const max = Math.max(1, ...series.map((item) => item.spend))
+  const step = series.length > 1 ? (width - pad * 2) / (series.length - 1) : 0
+  const points = series.map((item, index) => ({
+    x: pad + index * step,
+    y: height - pad - (item.spend / max) * (height - pad * 2),
+    date: item.date,
+    spend: item.spend,
+  }))
+  const line = points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ')
+  const baseline = (height - pad).toFixed(1)
+  const area = `${pad.toFixed(1)},${baseline} ${line} ${(pad + (series.length - 1) * step).toFixed(1)},${baseline}`
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="日消耗趋势">
+        <polygon points={area} fill="rgba(96,165,250,0.16)" />
+        <polyline points={line} fill="none" stroke="#60a5fa" strokeWidth={1.6} strokeLinejoin="round" />
+        {points.map((point) => (
+          <circle key={point.date} cx={point.x} cy={point.y} r={2.2} fill="#3b82f6">
+            <title>{`${point.date} ¥${fmtMoney(point.spend)}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="mt-1 flex justify-between text-[10px] text-gray-400">
+        <span className="font-mono">{series[0].date}</span>
+        <span className="font-mono">{series[series.length - 1].date}</span>
+      </div>
+    </div>
+  )
+}
+
 /** 素材详情抽屉：单张图的日消耗曲线 + 它所属卡的血缘 */
 function AssetDetail({
   asset,
@@ -574,13 +616,21 @@ function AssetDetail({
   const [linking, setLinking] = useState(false)
   const stat = byAsset.get(asset.id)
   const series = useMemo(() => assetDailySeries(spend, asset.id), [spend, asset.id])
-  const maxDay = Math.max(1, ...series.map((item) => item.spend))
   const task = tasks.find((item) => item.id === asset.taskId)
   const cardId = asset.rootCardId ?? asset.taskId ?? ''
   const node = lineageMap.get(cardId)
   // 家族消耗：这张卡 + 它所有后代卡的消耗，才是一套创意的真实投入
   const familyCards = useMemo(() => descendantCards(cardId, lineageMap), [cardId, lineageMap])
   const familySpend = familyCards.reduce((sum, id) => sum + (byCard.get(id)?.totalSpend ?? 0), 0)
+  /** 这个素材在报表里的最新一条流水，用来展示媒体 / 设计 / 优化师 */
+  const latestSpend = useMemo(() => {
+    let latest: SpendRecord | undefined
+    for (const record of spend) {
+      if (record.assetId !== asset.id) continue
+      if (!latest || record.date > latest.date) latest = record
+    }
+    return latest
+  }, [spend, asset.id])
   // 模拟关联的条数：让用户知道这个素材的消耗里有多少是调试数据
   const simulatedHere = spend.reduce(
     (count, record) => count + (record.assetId === asset.id && record.simulated ? 1 : 0), 0)
@@ -603,9 +653,12 @@ function AssetDetail({
      * 覆盖式会把右边那列图片直接盖住，用户看不到也点不到。
      */
     <div className="flex h-full w-[24rem] shrink-0 flex-col border-l border-gray-100 bg-white dark:border-white/10 dark:bg-gray-900">
-      <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5 dark:border-white/10">
-        <span className="text-xs font-medium text-gray-700 dark:text-gray-200">素材详情</span>
-        <button type="button" onClick={onClose} className="text-xs text-gray-400 hover:text-gray-600">关闭</button>
+      <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 py-2.5 dark:border-white/10">
+        {/* 标题用报表里的图片名称；没有就退回哈希前 8 位，至少能对上列表 */}
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-gray-700 dark:text-gray-200" title={asset.id}>
+          {asset.reportNames[0] || asset.id.slice(0, 8)}
+        </span>
+        <button type="button" onClick={onClose} className="shrink-0 text-xs text-gray-400 hover:text-gray-600">关闭</button>
       </div>
       <div className="flex-1 overflow-auto p-4">
         {/*
@@ -634,21 +687,9 @@ function AssetDetail({
 
         <div className="mb-4">
           <p className="mb-1.5 text-[11px] text-gray-500 dark:text-gray-400">日消耗</p>
-          {!series.length ? (
-            <p className="text-[11px] text-gray-400">还没有投放数据</p>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {series.map((item) => (
-                <div key={item.date} className="flex items-center gap-2 text-[10px]">
-                  <span className="w-16 shrink-0 font-mono text-gray-500">{item.date}</span>
-                  <div className="h-1.5 flex-1 overflow-hidden rounded bg-gray-100 dark:bg-white/10">
-                    <div className="h-full rounded bg-blue-400" style={{ width: `${(item.spend / maxDay) * 100}%` }} />
-                  </div>
-                  <span className="w-16 shrink-0 text-right text-gray-600 dark:text-gray-300">¥{fmtMoney(item.spend)}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          {!series.length
+            ? <p className="text-[11px] text-gray-400">还没有投放数据</p>
+            : <SpendTrend series={series} />}
         </div>
 
         <div className="mb-4">
@@ -656,6 +697,10 @@ function AssetDetail({
           <div className="flex flex-col gap-1 text-[11px] text-gray-600 dark:text-gray-300">
             <p>阶段：<span className="text-gray-800 dark:text-gray-100">{STAGE_LABEL[stat?.stage ?? 'created']}</span></p>
             <p>最后投放：{stat?.lastDate ?? '-'}</p>
+            {latestSpend?.media && <p>媒体：{latestSpend.media}</p>}
+            {latestSpend?.productName && <p>产品：{latestSpend.productName}</p>}
+            {latestSpend?.designer && <p>设计：{latestSpend.designer}</p>}
+            {latestSpend?.optimizer && <p>优化师：{latestSpend.optimizer}</p>}
             <p className="break-all">平台素材 ID：{asset.platformIds.length ? asset.platformIds.join('、') : '未匹配'}</p>
             {simulatedHere > 0 && (
               <p className="text-amber-600 dark:text-amber-400">
@@ -1265,6 +1310,8 @@ type ReportDimension = 'asset' | 'card' | 'product'
 
 interface ReportRow {
   key: string
+  /** 代表素材 id：单击行时打开它的详情（素材维度就是本行，其他维度是代表素材） */
+  assetId?: string
   /** 主列文字 */
   label: string
   /** 主列下面的小字 */
@@ -1318,10 +1365,13 @@ function AssetReportTab({
   spend,
   imports,
   assets,
+  onOpenAsset,
 }: {
   spend: SpendRecord[]
   imports: ImportRecord[]
   assets: AssetRecord[]
+  /** 单击行打开素材详情（和素材台账里点卡片是同一个抽屉） */
+  onOpenAsset: (assetId: string) => void
 }) {
   const tasks = useStore((state) => state.tasks)
   const setDetailTaskId = useStore((state) => state.setDetailTaskId)
@@ -1334,6 +1384,23 @@ function AssetReportTab({
   const [designerFilter, setDesignerFilter] = useState('')
   const [optimizerFilter, setOptimizerFilter] = useState('')
   const [keyword, setKeyword] = useState('')
+
+  /**
+   * 单击开素材详情、双击开任务卡详情。
+   * 双击必然先触发两次 click，所以单击要推后一点；双击时先取消，避免抽屉闪一下。
+   */
+  const clickTimer = useRef<number | null>(null)
+  const openAssetLater = (assetId?: string) => {
+    if (!assetId) return
+    if (clickTimer.current) window.clearTimeout(clickTimer.current)
+    clickTimer.current = window.setTimeout(() => onOpenAsset(assetId), 220)
+  }
+  const cancelOpenAsset = () => {
+    if (clickTimer.current) {
+      window.clearTimeout(clickTimer.current)
+      clickTimer.current = null
+    }
+  }
 
   const filtered = useMemo(() => spend.filter((record) => (
     (!mediaFilter || record.media === mediaFilter) &&
@@ -1403,6 +1470,7 @@ function AssetReportTab({
       const assetCount = bucket.assetIds.size
       out.push({
         key,
+        assetId: dimension === 'asset' ? key : sample?.id,
         label: dimension === 'asset' ? key.slice(0, 8) : key,
         sublabel: dimension === 'asset'
           ? `${sample?.platformIds.length ?? 0} 个平台ID`
@@ -1546,11 +1614,13 @@ function AssetReportTab({
                 return (
                   <tr
                     key={row.key}
-                    onDoubleClick={() => openCardDetail(row.taskId)}
-                    title={openable ? '双击查看任务卡详情' : '这条没有对应的任务记录，无法打开详情'}
-                    className={`border-b border-gray-50 dark:border-white/5 ${
-                      openable ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5' : ''
-                    }`}
+                    onClick={() => openAssetLater(row.assetId)}
+                    onDoubleClick={() => {
+                      cancelOpenAsset()
+                      openCardDetail(row.taskId)
+                    }}
+                    title={openable ? '单击看素材详情，双击看任务卡详情' : '单击查看素材详情'}
+                    className="cursor-pointer border-b border-gray-50 hover:bg-gray-50 dark:border-white/5 dark:hover:bg-white/5"
                   >
                     <td className="py-1.5 pr-3">
                       <div className="flex items-center gap-2">
