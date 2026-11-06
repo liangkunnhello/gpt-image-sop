@@ -227,6 +227,27 @@ export async function trackSpendRange<T extends { date?: string }>(
   })
 }
 
+/**
+ * 库里最新一条流水的日期（可能为空）。
+ *
+ * 用来回答「我明明导入了，为什么数字没变」：很多时候数据已经进库了，
+ * 只是当前筛选区间的上限比它早。界面拿这个值跟区间上界比一比就能提示出来，
+ * 不用用户自己去猜日期。
+ */
+export async function trackSpendLatest(): Promise<string | null> {
+  if (isTauri) {
+    const raw = await call<string | null>('track_spend_latest')
+    return raw || null
+  }
+  const all = await trackGetAll<{ date?: string }>('spend')
+  let latest = ''
+  for (const item of all) {
+    const date = item.date ?? ''
+    if (date > latest) latest = date
+  }
+  return latest || null
+}
+
 export async function trackPut(kind: TrackKind, id: string, data: unknown): Promise<void> {
   if (isTauri) {
     await call('track_put', { kind, id, data: JSON.stringify(data) })

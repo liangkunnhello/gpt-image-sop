@@ -6,6 +6,7 @@ commands.allow = [
   "track_put",
   "track_put_many",
   "track_spend_query",
+  "track_spend_latest",
   "track_delete",
   "track_clear",
 ]

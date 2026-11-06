@@ -313,6 +313,21 @@ impl Storage {
         Ok(out)
     }
 
+    /// 库里最新一条消耗流水的日期（`spend_date` 上的索引，毫秒级）。
+    ///
+    /// 用途：导入（界面 / 命令行 / 采集工具钩子都可能写库）之后，前端要知道
+    /// 「库里其实已经有更新的数据，只是不在当前筛选区间里」。没有这个信号，
+    /// 用户点了刷新看到数字没变，只会以为导入失败了。
+    pub fn spend_latest_date(&self) -> Result<Option<String>> {
+        let conn = self.lock();
+        let latest: Option<String> = conn.query_row(
+            "SELECT max(spend_date) FROM track_spend",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(latest)
+    }
+
     /// 批量写入：整批放在一个事务里，失败整批回滚。
     ///
     /// 逐条 `doc_put` 是「一条一个事务」，导入 8000 条报表就是 8000 次 fsync，

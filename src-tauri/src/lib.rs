@@ -46,6 +46,7 @@ pub fn run() {
             storage::commands::track_put,
             storage::commands::track_put_many,
             storage::commands::track_spend_query,
+            storage::commands::track_spend_latest,
             storage::commands::track_delete,
             storage::commands::track_clear,
             storage::commands::task_put,

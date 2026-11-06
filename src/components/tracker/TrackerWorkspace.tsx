@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
 import { ensureImageCached, ensureImageThumbnailCached } from '../../lib/imageCache'
-import { recordLineage, trackSpendRange } from '../../lib/trackDb'
+import { recordLineage, trackSpendLatest, trackSpendRange } from '../../lib/trackDb'
 import { buildDemoBundle, isDemoId, type DemoImageRef } from '../../lib/demoData'
 import { useSopStore } from '../../lib/sopStore'
 import {
@@ -94,6 +94,14 @@ export default function TrackerWorkspace() {
   const [assets, setAssets] = useState<AssetRecord[]>([])
   const [spend, setSpend] = useState<SpendRecord[]>([])
   const [imports, setImports] = useState<ImportRecord[]>([])
+  /**
+   * 库里最新一条流水的日期。
+   *
+   * 界面按区间取数，所以「导入了却看不到」几乎总是这个原因：数据在库里，
+   * 但落在当前区间之外（比如手工把范围停在 11-04，导入的是 11-05）。
+   * 有这个值就能直接提示，而不是让用户怀疑导入失败。
+   */
+  const [latestSpendDate, setLatestSpendDate] = useState<string | null>(null)
   /**
    * 批量导入逐文件对账结果。
    *
@@ -220,12 +228,15 @@ export default function TrackerWorkspace() {
   const load = useCallback(async (from: string, to: string) => {
     setLoading(true)
     try {
-      const [a, s, i, l] = await Promise.all([
+      const [a, s, i, l, latest] = await Promise.all([
         trackGetAll<AssetRecord>('assets'),
         trackSpendRange<SpendRecord>(from, to),
         trackGetAll<ImportRecord>('imports'),
         trackGetAll<LineageRecord>('lineage'),
+        // 多一次轻量查询（走索引），换「有没有新数据没进区间」的判断
+        trackSpendLatest().catch(() => null),
       ])
+      setLatestSpendDate(latest)
       /*
        * 读出来之后顺手补一次「外部素材的方向归属」。
        *
@@ -525,7 +536,17 @@ export default function TrackerWorkspace() {
           {/* 日期区间收进面板：快捷项（今天/近7天/近30天/全部）挪到面板左侧，工具条只留一个按钮 */}
           <DateRangePicker value={range} onChange={changeRange} />
 
-          <span className="text-[11px] text-gray-400">统计范围：{rangeLabel(range)}</span>
+          <span className="text-[11px] text-gray-400">
+            统计范围：{rangeLabel(range)}
+            <span className="ml-1.5 text-gray-300 dark:text-gray-600">|</span>
+            <span className="ml-1.5">{spend.length.toLocaleString('zh-CN')} 条流水</span>
+            {latestSpendDate && (
+              <>
+                <span className="ml-1.5 text-gray-300 dark:text-gray-600">|</span>
+                <span className="ml-1.5">库里最新 {latestSpendDate.slice(5)}</span>
+              </>
+            )}
+          </span>
 
           <div className="ml-auto flex items-center gap-1.5">
             {simulatedCount > 0 ? (
@@ -576,6 +597,36 @@ export default function TrackerWorkspace() {
             </button>
           </div>
         </div>
+
+        {/*
+          「导入成功了，怎么数字没变」——九成是数据落在当前区间之外。
+          导入口子有三个（界面、命令行、采集工具钩子），后两个不会经过界面的
+          切区间逻辑，所以这里统一兜住：只要库里有比区间上限更新的流水就提示。
+        */}
+        {latestSpendDate && range.to && latestSpendDate > range.to && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+            <span>
+              库里已有 <b className="font-mono font-medium">{latestSpendDate}</b> 的流水，当前区间只到{' '}
+              <b className="font-mono font-medium">{range.to}</b>
+            </span>
+            <span className="ml-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setRange({ from: latestSpendDate, to: latestSpendDate })}
+                className="rounded bg-amber-500 px-1.5 py-0.5 text-white hover:bg-amber-600"
+              >
+                只看这天
+              </button>
+              <button
+                type="button"
+                onClick={() => setRange(presetRange('7d'))}
+                className="rounded border border-amber-300 px-1.5 py-0.5 hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15"
+              >
+                切到近 7 天
+              </button>
+            </span>
+          </div>
+        )}
 
         {(busy || error) && (
           <p className={`mt-1.5 text-[11px] ${error ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'}`}>

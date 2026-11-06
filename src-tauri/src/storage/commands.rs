@@ -171,6 +171,11 @@ pub async fn track_spend_query(
 }
 
 #[tauri::command]
+pub async fn track_spend_latest(state: State<'_, StorageState>) -> Result<Option<String>> {
+    run(state, |s| s.spend_latest_date()).await
+}
+
+#[tauri::command]
 pub async fn track_delete(state: State<'_, StorageState>, kind: String, id: String) -> Result<()> {
     let table = track_table(&kind)?;
     run(state, move |s| s.doc_delete(table, &id)).await
