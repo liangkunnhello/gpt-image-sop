@@ -4,11 +4,23 @@ import { buildTaskFolderName, type TaskCopySource } from './taskFolderName'
 import type { TaskRecord } from '../types'
 import type { SopDirectionNode } from '../types'
 
-/** 后处理成品的文件名：序号 + 分辨率，重跑时同名覆盖 */
-export function finishedFileName(index: number, size: string | undefined, format: string | undefined): string {
+/**
+ * 后处理成品的文件名：序号 + 分辨率，重跑时同名覆盖。
+ *
+ * `extra` 是「同一个请求返回的第几张」（从 0 开始）。渠道偶尔无视 `n: 1` 一次回好几张，
+ * 多的图以前按「序号 +1」接着排，会撞上下一条提示词的文件名（两个任务互相覆盖）。
+ * 现在挂在本任务序号后面：`470-2560x1440.jpg`、`470-2-2560x1440.jpg`。
+ */
+export function finishedFileName(
+  index: number,
+  size: string | undefined,
+  format: string | undefined,
+  extra = 0,
+): string {
   const ext = format === 'webp' ? 'webp' : format === 'png' ? 'png' : 'jpg'
   const label = (size ?? '').trim() || 'auto'
-  return `${String(index + 1).padStart(2, '0')}-${label}.${ext}`.replace(/[\\/:*?"<>|]/g, '_')
+  const suffix = extra > 0 ? `-${extra + 1}` : ''
+  return `${String(index + 1).padStart(2, '0')}${suffix}-${label}.${ext}`.replace(/[\\/:*?"<>|]/g, '_')
 }
 
 function nameOf(directions: SopDirectionNode[], id: string | undefined): string {

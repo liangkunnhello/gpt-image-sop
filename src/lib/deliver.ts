@@ -264,10 +264,20 @@ export function deliverImageFileName(
   ext: string,
   /** 用这张卡实际占到的文件夹名当文件名前缀（带 -02 时文件名也跟着带，拷出去也分得清） */
   stemOverride?: string,
+  /**
+   * 同一个请求返回的第几张（从 0 开始）。
+   *
+   * 渠道偶尔会无视 `n: 1` 一次回 2~3 张。以前把多的图按「序号 +1」接着排，
+   * 直接撞上下一条提示词的序号 —— 两个任务写同一个文件名，后写的把先写的覆盖掉，
+   * 结果就是「同一张图出现两个编号」和「导出目录里有重复图」。
+   * 现在多的图挂在本任务序号后面：`-470`、`-470-2`、`-470-3`，永远不会串到别人那格。
+   */
+  extra = 0,
 ): string {
   const stem = stemOverride?.trim() || cardFolderName(task, context, realSize) || `task-${task.id.slice(0, 8)}`
   // Windows 单段文件名上限 255，留出扩展名与序号余量；先截模板再拼序号，序号不会被截掉
-  const name = `${stem.slice(0, 170)}-${String(sequence).padStart(2, '0')}`
+  const suffix = extra > 0 ? `-${extra + 1}` : ''
+  const name = `${stem.slice(0, 170)}-${String(sequence).padStart(2, '0')}${suffix}`
   return `${name}.${ext}`.replace(/[\\/:*?"<>|]/g, '_')
 }
 
@@ -356,7 +366,7 @@ export async function deliverTaskCard(
       if (!entry) continue
       const size = realSizeOf(entry.bytes, task)
       const blob = new Blob([new Uint8Array(entry.bytes)] as BlobPart[], { type: MIME_BY_EXT[entry.ext] ?? 'image/png' })
-      const name = deliverImageFileName(seqBase + read + 1, task, context, size, entry.ext, folder)
+      const name = deliverImageFileName(seqBase + 1, task, context, size, entry.ext, folder, read)
       files.push({ imageId, name, blob })
       read += 1
     }
@@ -409,7 +419,7 @@ export async function deliverTaskCard(
   for (const imageId of images) {
     const entry = await readImageBytes(imageId)
     if (!entry) continue
-    const name = deliverImageFileName(seqBase + written + 1, task, context, realSizeOf(entry.bytes, task), entry.ext, folder)
+    const name = deliverImageFileName(seqBase + 1, task, context, realSizeOf(entry.bytes, task), entry.ext, folder, written)
     try {
       // overwrite=true：重跑时覆盖同名成品，不留「名称 (2)」
       await saveFileToDir(
@@ -519,12 +529,15 @@ export async function deliveredFileRefsOf(
   const group = tasksOfCard(context.tasks, task)
   let cursor = 0
   let seq = 0
+  /** 同一请求多张图时，第 2 张起带 -2/-3 后缀，重放要和交付时算得一模一样 */
+  let extra = 0
   for (const item of group) {
     // 重放用的是「交付时的可交付列表」：回收站不参与，人工改判不合格的也不交
     const images = deliverableOutputImages({ ...item, trashedOutputImages: undefined })
     const index = images.indexOf(imageId)
     if (index >= 0) {
-      seq = sequenceBase(item, cursor) + index + 1
+      seq = sequenceBase(item, cursor) + 1
+      extra = index
       break
     }
     cursor += images.length
@@ -540,7 +553,7 @@ export async function deliveredFileRefsOf(
   }
   const exts = ext ? [ext] : ['jpg', 'jpeg', 'png', 'webp']
   for (const ext of exts) {
-    candidates.push({ dir, relative: `${folder}/${deliverImageFileName(seq, task, context, '', ext, folder)}` })
+    candidates.push({ dir, relative: `${folder}/${deliverImageFileName(seq, task, context, '', ext, folder, extra)}` })
   }
   return candidates
 }

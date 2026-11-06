@@ -23,6 +23,14 @@ describe('finishedFileName', () => {
     expect(finishedFileName(10, '800x600', 'png')).toBe('11-800x600.png')
   })
 
+  it('同请求多张图带 -2/-3 后缀，不会覆盖别的任务的成品', () => {
+    expect(finishedFileName(469, '2560x1440', 'jpeg', 0)).toBe('470-2560x1440.jpg')
+    expect(finishedFileName(469, '2560x1440', 'jpeg', 1)).toBe('470-2-2560x1440.jpg')
+    expect(finishedFileName(469, '2560x1440', 'jpeg', 2)).toBe('470-3-2560x1440.jpg')
+    // 471 号任务仍然写 471-…，和上面三张都不撞
+    expect(finishedFileName(470, '2560x1440', 'jpeg', 0)).toBe('471-2560x1440.jpg')
+  })
+
   it('没有尺寸时写 auto，重跑时同名覆盖', () => {
     expect(finishedFileName(0, undefined, 'jpeg')).toBe('01-auto.jpg')
     // 同一张图重跑，名字必须一致才能覆盖

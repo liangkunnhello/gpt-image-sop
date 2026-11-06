@@ -151,6 +151,22 @@ describe('交付的图片文件名', () => {
     expect(name.endsWith('-01.png')).toBe(true)
   })
 
+  it('一个请求回多张图时，多出来的挂在本任务序号后面，不抢下一条的编号', () => {
+    /*
+     * 真实事故：某个请求无视 n=1 回了 3 张，以前按「序号 +1」接着排，
+     * 于是 470 号任务写了 -470/-471/-472，而 471、472 号任务也写这三个名字，
+     * 互相覆盖 —— 用户看到的就是「同一张图两个编号」和「目录里有重复图」。
+     */
+    const task = cardTask({ sopJobId: 'job-1', sopPromptIndex: 470 })
+    const names = [0, 1, 2].map((extra) => deliverImageFileName(470, task, context, '2560x1440', 'jpg', undefined, extra))
+    expect(names[0].endsWith('-470.jpg')).toBe(true)
+    expect(names[1].endsWith('-470-2.jpg')).toBe(true)
+    expect(names[2].endsWith('-470-3.jpg')).toBe(true)
+    // 下一条任务仍然拿 471，不会和上面任何一张撞
+    const next = deliverImageFileName(471, cardTask({ id: 't2', sopJobId: 'job-1', sopPromptIndex: 471 }), context, '2560x1440', 'jpg', undefined, 0)
+    expect(names).not.toContain(next)
+  })
+
   it('非法字符不会带进文件名', () => {
     const name = deliverImageFileName(1, cardTask({ sopName: 'a/b:c*d' }), context, '1024x1024', 'png')
     expect(name).not.toMatch(/[\\/:*?"<>|]/)

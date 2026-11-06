@@ -64,13 +64,27 @@ export function elementDrawOrigin(el: PostElement, width: number, height: number
   return { x: el.x * width, y: el.y * height }
 }
 
-function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: number, height: number, logo: HTMLImageElement | null) {
+function drawElement(
+  ctx: CanvasRenderingContext2D,
+  el: PostElement,
+  width: number,
+  height: number,
+  logo: HTMLImageElement | null,
+  /**
+   * 画布相对模板画布的放大倍数。
+   *
+   * 模板来自灵境，画布基本是 1280×720；而生成图可能是 2560×1440。
+   * 位置是 0~1 的比例、会自动跟着画布走，但字号 / 字间距 / 描边是**像素值**，
+   * 不乘这个倍数的话，2K 画布上的字只有设计稿的四分之一大。
+   */
+  scale = 1,
+) {
   ctx.save()
   ctx.globalAlpha = el.opacity
   const { x, y } = elementDrawOrigin(el, width, height)
 
   if (el.kind === 'text') {
-    const size = Math.max(8, Math.round(el.fontSize))
+    const size = Math.max(8, Math.round(el.fontSize * scale))
     ctx.font = `${el.fontWeight} ${size}px ${POST_FONT_STACK}`
     ctx.fillStyle = el.color
     ctx.textBaseline = 'top'
@@ -78,7 +92,7 @@ function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: numb
     ctx.lineJoin = 'round'
     ctx.miterLimit = 2
     // 字间距：Chromium 支持，老内核没这个属性就跳过，不影响其它绘制
-    const spacing = Math.max(0, el.letterSpacing ?? 0)
+    const spacing = Math.max(0, (el.letterSpacing ?? 0) * scale)
     if (spacing > 0) {
       const ctxWithSpacing = ctx as CanvasRenderingContext2D & { letterSpacing?: string }
       if ('letterSpacing' in ctxWithSpacing) ctxWithSpacing.letterSpacing = `${spacing}px`
@@ -89,7 +103,7 @@ function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: numb
       const lineY = y + index * lineStep
       if (el.strokeWidth > 0) {
         // canvas 的描边是居中的：线宽加倍后填充盖掉内侧一半，留在外面的正好是 strokeWidth
-        ctx.lineWidth = el.strokeWidth * 2
+        ctx.lineWidth = el.strokeWidth * 2 * scale
         ctx.strokeStyle = el.strokeColor
         ctx.strokeText(line, x, lineY)
       }
@@ -105,21 +119,44 @@ function drawElement(ctx: CanvasRenderingContext2D, el: PostElement, width: numb
 }
 
 /**
- * 把原图按模板尺寸裁切铺满，再叠加模板里的文字与 logo。
- * 失败时抛错，调用方负责回退原图。
+ * 画布比模板画布高多少倍。
+ *
+ * 模板里的位置是 0~1 的比例，跟着画布走；但字号 / 字间距 / 描边是像素值，
+ * 必须按这个倍数放大，否则 2560×1440 的画布上字只有设计稿的一半大。
+ * 抽出来是为了能直接测（canvas 在测试环境里跑不起来）。
  */
-export async function applyPostTemplate(dataUrl: string, template: PostTemplate): Promise<string> {
+export function postTemplateScale(templateHeight: number, canvasHeight: number): number {
+  return templateHeight > 0 && canvasHeight > 0 ? canvasHeight / templateHeight : 1
+}
+
+/**
+ * 把原图铺满画布，再叠加模板里的文字与 logo。失败时抛错，调用方负责回退原图。
+ *
+ * **画布尺寸默认取原图自己的分辨率，而不是模板画布**：
+ * 灵境的模板画布普遍是 1280×720，早期的做法是「新建 1280×720 画布再把原图缩进去」，
+ * 结果 2560×1440 的生成图全被压成了 1280×720 —— 花了 2K 的钱，交付出去是 720p。
+ * 现在按原图尺寸出画布，元素用比例坐标、像素值按高度倍数放大，成品保真。
+ * 需要固定尺寸时（比如模板本身就是出图规格）传 `outputSize` 覆盖。
+ */
+export async function applyPostTemplate(
+  dataUrl: string,
+  template: PostTemplate,
+  outputSize?: { width: number; height: number },
+): Promise<string> {
   const source = await loadImage(dataUrl)
+  const canvasWidth = Math.max(1, Math.round(outputSize?.width ?? source.naturalWidth ?? template.width))
+  const canvasHeight = Math.max(1, Math.round(outputSize?.height ?? source.naturalHeight ?? template.height))
+  const scale = postTemplateScale(template.height, canvasHeight)
   const canvas = document.createElement('canvas')
-  canvas.width = template.width
-  canvas.height = template.height
+  canvas.width = canvasWidth
+  canvas.height = canvasHeight
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('浏览器不支持 Canvas')
 
   ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, template.width, template.height)
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight)
 
-  const rect = coverRect(source.naturalWidth, source.naturalHeight, template.width, template.height)
+  const rect = coverRect(source.naturalWidth, source.naturalHeight, canvasWidth, canvasHeight)
   ctx.drawImage(source, rect.x, rect.y, rect.width, rect.height)
 
   for (const element of template.elements) {
@@ -134,7 +171,7 @@ export async function applyPostTemplate(dataUrl: string, template: PostTemplate)
         continue
       }
     }
-    drawElement(ctx, element, template.width, template.height, logo)
+    drawElement(ctx, element, canvasWidth, canvasHeight, logo, scale)
   }
 
   return canvas.toDataURL('image/png')

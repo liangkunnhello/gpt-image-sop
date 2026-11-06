@@ -3193,7 +3193,7 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
         void writeFinishedImage(
           finishedFolder,
           // 模板设了体积上限时成品会被转成 WebP，后缀要跟实际编码一致
-          finishedFileName(finishedIndexBase + index, task.params.size, dataUrlFormat(outputDataUrl) ?? task.params.output_format),
+          finishedFileName(finishedIndexBase, task.params.size, dataUrlFormat(outputDataUrl) ?? task.params.output_format, index),
           outputDataUrl,
         )
       }
@@ -3390,9 +3390,10 @@ export async function reapplyPostTemplate(
       await writeFinishedImage(
         folder,
         finishedFileName(
-          (item.sopPromptIndex ? item.sopPromptIndex - 1 : 0) + index,
+          item.sopPromptIndex ? item.sopPromptIndex - 1 : 0,
           item.params.size,
           dataUrlFormat(dataUrl) ?? item.params.output_format,
+          index,
         ),
         dataUrl,
       )
