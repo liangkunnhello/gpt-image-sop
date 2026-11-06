@@ -22,11 +22,11 @@ import {
   scopeAssetsForNode,
   shiftDate,
   type DateRange,
-  type RangePreset,
   type TreeNode,
 } from '../../lib/trackerFilter'
 import { countSimulated, planRestoreMatches, planSimulateMatches } from '../../lib/simulateMatch'
 import SopSupplementModal from '../SopSupplementModal'
+import DateRangePicker from './DateRangePicker'
 import type { TaskRecord } from '../../types'
 import {
   STAGE_LABEL,
@@ -61,6 +61,14 @@ import {
 } from '../../lib/trackDb'
 
 type Tab = 'assets' | 'unmatched' | 'import' | 'stats'
+
+/** 页签挪到右侧后，左边空着不好看：给每个页签补一句这页在干什么 */
+const TAB_HINT: Record<Tab, string> = {
+  assets: '',
+  unmatched: '报表里有、但认不到本地图的平台素材',
+  import: '把平台的素材报表明细导进来（可多选 / 整个文件夹）',
+  stats: '按素材、任务卡、产品看区间消耗',
+}
 
 const FIELD_LABEL: Array<[keyof ColumnMapping, string, boolean]> = [
   ['date', '投放日期', true],
@@ -111,6 +119,13 @@ export default function TrackerWorkspace() {
    * 一进页面就全量读会把 webview 拖住。想看更长区间上面有「近30天 / 全部」。
    */
   const [range, setRange] = useState<DateRange>(() => presetRange('7d'))
+  /**
+   * 台账的阶段筛选。
+   *
+   * 提到父组件是因为它渲染在固定头部那行（和页签同一行）—— 那部分不在滚动容器里，
+   * 不能由 AssetsTab 自己持有。
+   */
+  const [stageFilter, setStageFilter] = useState<'all' | 'running' | 'declining' | 'created' | 'stale'>('all')
 
   /**
    * 没有对应任务卡的素材数（演示数据、任务卡已删的老数据）。
@@ -150,6 +165,16 @@ export default function TrackerWorkspace() {
   const byCard = useMemo(() => aggregateByCard(scopedAssets, byAsset), [scopedAssets, byAsset])
   const lineageMap = useMemo(() => buildLineageMap(lineage), [lineage])
   const selectedAsset = selectedAssetId ? scopedAssets.find((item) => item.id === selectedAssetId) ?? null : null
+
+  /** 顶部指标算在父组件：那一行在固定头部，不跟着卡片区滚 */
+  const deployedCount = useMemo(
+    () => scopedAssets.filter((asset) => byAsset.has(asset.id)).length,
+    [scopedAssets, byAsset],
+  )
+  const rangeSpend = useMemo(
+    () => [...byAsset.values()].reduce((sum, item) => sum + item.totalSpend, 0),
+    [byAsset],
+  )
 
   /**
    * 只读当前日期区间的消耗流水。
@@ -326,76 +351,35 @@ export default function TrackerWorkspace() {
     }
   }
 
+  /**
+   * 改区间。
+   *
+   * 「全部时间」会把库里所有流水读进内存（33 天就是 29 万条、113MB 的 JSON），
+   * 当前已经加载了很多行时先问一句 —— 用户知道自己在干什么就继续。
+   */
+  const changeRange = (next: DateRange) => {
+    const toAll = !next.from && !next.to && Boolean(range.from || range.to)
+    if (toAll && spend.length > 20000 && !window.confirm(
+      `「全部时间」会把库里所有消耗流水读进内存（当前已加载 ${spend.length.toLocaleString('zh-CN')} 条），可能要等几秒。确定吗？`,
+    )) return
+    setRange(next)
+  }
+
   const demoCount = assets.filter((item) => isDemoId(item.id)).length
 
   return (
     <main data-home-main className="flex min-h-0 flex-1 flex-col">
-      {/* 工具条：页签 + 日期范围 + 调试动作。全屏后不再需要关闭按钮 */}
-      <div className="shrink-0 border-b border-gray-100 bg-white/70 px-4 py-2 backdrop-blur dark:border-white/10 dark:bg-gray-950/60">
+      {/*
+       * 固定区（截图里的「蓝框」）：日期 + 台账指标 + 筛选/页签，全部不随内容滚动。
+       *
+       * 原来指标和阶段筛选是放在滚动容器里的，往下翻卡片时它们会一起滚走 ——
+       * 「现在看的是哪个区间、筛了哪一类」这种随时要看的信息不该跟着滚。
+       * 现在只有下面的卡片区滚动。
+       */}
+      <div className="relative z-30 shrink-0 border-b border-gray-100 bg-white/70 px-4 py-2 backdrop-blur dark:border-white/10 dark:bg-gray-950/60">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <div className="flex gap-1">
-            {([['assets', '素材台账'], ['unmatched', '待认领'], ['import', '导入报表'], ['stats', '素材报表']] as Array<[Tab, string]>).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setTab(key)}
-                className={`rounded-lg px-2.5 py-1 text-xs transition ${
-                  tab === key
-                    ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
-                    : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-white/5'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {/* 日期范围：起止各一个日期控件，右侧是常用快捷项 */}
-          <div className="flex items-center gap-1.5 rounded-lg bg-black/[0.04] px-2 py-1 dark:bg-white/[0.06]">
-            <input
-              type="date"
-              value={range.from}
-              onChange={(event) => setRange((prev) => ({ ...prev, from: event.target.value }))}
-              className="rounded bg-transparent px-1 py-0.5 text-[11px] text-gray-700 outline-none dark:text-gray-200 dark:[color-scheme:dark]"
-              aria-label="开始日期"
-            />
-            <span className="text-[11px] text-gray-400">至</span>
-            <input
-              type="date"
-              value={range.to}
-              onChange={(event) => setRange((prev) => ({ ...prev, to: event.target.value }))}
-              className="rounded bg-transparent px-1 py-0.5 text-[11px] text-gray-700 outline-none dark:text-gray-200 dark:[color-scheme:dark]"
-              aria-label="结束日期"
-            />
-            <div className="ml-1 flex gap-0.5">
-              {([['today', '今天'], ['7d', '近7天'], ['30d', '近30天'], ['all', '全部']] as Array<[RangePreset, string]>).map(([key, label]) => {
-                const preset = presetRange(key)
-                const active = preset.from === range.from && preset.to === range.to
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => {
-                      /*
-                       * 「全部时间」= 把库里所有流水读进内存再聚合。一天一份报表、
-                       * 几十天就几十万条，点下去要等好几秒、内存也吃紧，
-                       * 所以问一句 —— 用户知道自己在干什么就继续。
-                       */
-                      if (key === 'all' && !window.confirm('「全部时间」会把库里所有消耗流水读进内存（几十万条），可能要等几秒。确定切过去吗？')) return
-                      setRange(preset)
-                    }}
-                    className={`rounded px-1.5 py-0.5 text-[10px] transition ${
-                      active
-                        ? 'bg-white text-gray-800 shadow-sm dark:bg-white/15 dark:text-white'
-                        : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+          {/* 日期区间收进面板：快捷项（今天/近7天/近30天/全部）挪到面板左侧，工具条只留一个按钮 */}
+          <DateRangePicker value={range} onChange={changeRange} />
 
           <span className="text-[11px] text-gray-400">统计范围：{rangeLabel(range)}</span>
 
@@ -454,6 +438,69 @@ export default function TrackerWorkspace() {
             {error || busy}
           </p>
         )}
+
+        {tab === 'assets' && (
+          <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Metric label="素材总数" value={String(scopedAssets.length)} />
+            <Metric label="已投放" value={String(deployedCount)} />
+            <Metric label="区间消耗" value={`¥${fmtMoney(rangeSpend)}`} />
+            <Metric label="任务卡" value={String(byCard.size)} />
+          </div>
+        )}
+
+        {/* 左侧是本页的操作/说明，右侧是页签 —— 页签原来占着日期那一行，挪下来以后工具条只放日期 */}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {tab !== 'assets' && (
+            <p className="text-[11px] text-gray-400">{TAB_HINT[tab]}</p>
+          )}
+          {tab === 'assets' && (
+            <div className="flex gap-1">
+              {(['all', 'running', 'declining', 'stale', 'created'] as const).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setStageFilter(key)}
+                  className={`rounded-lg px-2 py-1 text-xs ${
+                    stageFilter === key
+                      ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
+                      : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10'
+                  }`}
+                >
+                  {key === 'all' ? '全部' : STAGE_LABEL[key]}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex gap-1">
+              {([['assets', '素材台账'], ['unmatched', '待认领'], ['import', '导入报表'], ['stats', '素材报表']] as Array<[Tab, string]>).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setTab(key)}
+                  className={`rounded-lg px-2.5 py-1 text-xs transition ${
+                    tab === key
+                      ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
+                      : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-white/5'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {tab === 'assets' && (
+              <button
+                type="button"
+                onClick={rebuildLedger}
+                className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs text-white hover:bg-blue-600"
+              >
+                扫描任务卡建台账
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="relative flex min-h-0 flex-1">
@@ -487,8 +534,7 @@ export default function TrackerWorkspace() {
             <AssetsTab
               assets={scopedAssets}
               byAsset={byAsset}
-              byCard={byCard}
-              onRebuild={rebuildLedger}
+              stageFilter={stageFilter}
               onSelect={setSelectedAssetId}
               onView={setViewingImageId}
             />
@@ -1008,19 +1054,17 @@ function AssetDetail({
 function AssetsTab({
   assets,
   byAsset,
-  byCard,
-  onRebuild,
+  stageFilter,
   onSelect,
   onView,
 }: {
   assets: AssetRecord[]
   byAsset: ReturnType<typeof aggregateByAsset>
-  byCard: ReturnType<typeof aggregateByCard>
-  onRebuild: () => void
+  /** 阶段筛选由父组件持有（渲染在固定头部那行） */
+  stageFilter: 'all' | 'running' | 'declining' | 'created' | 'stale'
   onSelect: (assetId: string) => void
   onView: (imageId: string) => void
 }) {
-  const [stageFilter, setStageFilter] = useState<'all' | 'running' | 'declining' | 'created' | 'stale'>('all')
   /**
    * 单击开详情、双击看大图，两个事件必然一起触发（双击 = 两次 click + 一次 dblclick）。
    * 用一个短延时把单击推后：双击时先取消，就不会出现「详情闪一下再弹大图」。
@@ -1036,8 +1080,6 @@ function AssetsTab({
       clickTimer.current = null
     }
   }
-  const deployed = assets.filter((item) => byAsset.has(item.id))
-  const totalSpend = [...byAsset.values()].reduce((sum, item) => sum + item.totalSpend, 0)
 
   const rows = useMemo(() => {
     return assets
@@ -1051,34 +1093,8 @@ function AssetsTab({
   }, [assets, byAsset, stageFilter])
 
   return (
+    /* 指标、阶段筛选、页签、扫描按钮都在父组件的固定头部，这里只剩卡片区（截图里的「红框」） */
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="素材总数" value={String(assets.length)} />
-        <Metric label="已投放" value={String(deployed.length)} />
-        <Metric label="区间消耗" value={`¥${fmtMoney(totalSpend)}`} />
-        <Metric label="任务卡" value={String(byCard.size)} />
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex gap-1">
-          {(['all', 'running', 'declining', 'stale', 'created'] as const).map((key) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setStageFilter(key)}
-              className={`rounded-lg px-2 py-1 text-xs ${
-                stageFilter === key ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10'
-              }`}
-            >
-              {key === 'all' ? '全部' : STAGE_LABEL[key]}
-            </button>
-          ))}
-        </div>
-        <button type="button" onClick={onRebuild} className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs text-white hover:bg-blue-600">
-          扫描任务卡建台账
-        </button>
-      </div>
-
       {!assets.length ? (
         <p className="py-16 text-center text-xs text-gray-400">
           还没有素材记录。点右上角「扫描任务卡建台账」，把已生成的图片收进来。
