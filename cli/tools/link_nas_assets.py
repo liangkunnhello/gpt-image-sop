@@ -273,6 +273,11 @@ def main() -> int:
         note = str(rel.parent).replace("\\", " / ")
         if note and note != "." and note not in (asset.get("note") or ""):
             asset["note"] = f"{asset['note']}；来源：{note}" if asset.get("note") else f"来源：{note}"
+        # 结构化留一份分类路径：软件里按它把素材归到「产品/方向」
+        # （`assetDirection.ts::matchDirectionByPath`）。只存 note 的话，
+        # 方向树改名/拆分之后就没法重新对上了。
+        if note and note != ".":
+            asset["dirPath"] = [part.strip() for part in note.split("/") if part.strip()]
         touched_assets[asset_id] = asset
         if base_asset:
             stats["merged_asset"] += 1

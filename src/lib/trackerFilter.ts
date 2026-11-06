@@ -93,6 +93,13 @@ export function buildProductTree(
    * 用户点任何一个方向都会发现「数字对不上」，也无从筛选它们。
    */
   extraUnassigned = 0,
+  /**
+   * 没有任务卡、但靠 `directionId` 归到某个方向的素材数（方向 id → 数量）。
+   *
+   * 这些素材不进任务计数，可点进去又能看到它们 —— 不补进节点数字的话，
+   * 会出现「方向显示 0，点开有一堆图」的怪现象。
+   */
+  extraDirectionCounts?: Map<string, number>,
 ): TreeNode[] {
   const alive = directions.filter((node) => !node.deletedAt)
   const aliveIds = new Set(alive.map((node) => node.id))
@@ -121,6 +128,14 @@ export function buildProductTree(
       continue
     }
     node.taskCount += 1
+  }
+
+  // 外部素材补进所属方向的计数（它们没有任务卡，靠 directionId 归属）
+  if (extraDirectionCounts) {
+    for (const [directionId, count] of extraDirectionCounts) {
+      const node = nodes.get(directionId)
+      if (node) node.taskCount += count
+    }
   }
 
   // 自底向上汇总：父节点的计数要含子孙，否则筛选「产品」时会看到 0
@@ -176,11 +191,19 @@ export function scopeAssetsForNode(
   const taskById = new Map(tasks.map((task) => [task.id, task]))
   const aliveIds = new Set(directions.filter((node) => !node.deletedAt).map((node) => node.id))
 
-  /** 素材所属方向：找不到任务卡 / 没挂方向 / 方向已删，都算没有方向 */
+  /**
+   * 素材所属方向：找不到任务卡 / 没挂方向 / 方向已删，都算没有方向。
+   *
+   * 优先看任务卡（卡上改方向，归属立刻跟着走）；任务卡没有方向时，
+   * 再看素材自己的 `directionId` —— 那是 NAS 接进来的外部素材按分类路径自动归属的，
+   * 它们没有任务卡，不认这个字段就永远进不了任何方向。
+   */
   const directionOf = (asset: AssetRecord): string | undefined => {
     const task = asset.taskId ? taskById.get(asset.taskId) : undefined
-    const dirId = task?.sopDirectionId
-    return dirId && aliveIds.has(dirId) ? dirId : undefined
+    const fromTask = task?.sopDirectionId
+    if (fromTask && aliveIds.has(fromTask)) return fromTask
+    const own = asset.directionId
+    return own && aliveIds.has(own) ? own : undefined
   }
 
   if (nodeId === UNASSIGNED_NODE_ID) {

@@ -62,6 +62,27 @@ export interface AssetRecord {
   lastSpendDate?: string
   /** 手动标注，优先级高于自动判定 */
   stageOverride?: AssetStage
+  /**
+   * 归属方向（`SopDirectionNode.id`，kind=direction）。
+   *
+   * 本地生成的素材靠 `taskId` → 任务卡的 `sopDirectionId` 找归属；
+   * 从 NAS 接进来的外部素材根本没有任务卡，只能单独存一个方向。
+   * 取归属时的优先级：任务卡 > 这个字段（见 `scopeAssetsForNode`）。
+   */
+  directionId?: string
+  /**
+   * 归属是怎么来的：
+   * - `auto`：按 NAS 分类路径（产品/方向目录名）自动匹配出来的
+   * - `manual`：人工改过，之后自动匹配不再覆盖
+   */
+  directionSource?: 'auto' | 'manual'
+  /**
+   * NAS 上的分类路径（如 `["保险","京东保","图标","横版"]`）。
+   *
+   * 留着它是为了「方向树改了以后能重算归属」——只存匹配结果的话，
+   * 产品改名或方向拆分之后就没法重新对上了。
+   */
+  dirPath?: string[]
   note?: string
 }
 

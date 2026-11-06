@@ -25,9 +25,10 @@ import {
   type TreeNode,
 } from '../../lib/trackerFilter'
 import { countSimulated, planRestoreMatches, planSimulateMatches } from '../../lib/simulateMatch'
+import { matchDirectionByPath, planAutoDirections, planMissingNodes } from '../../lib/assetDirection'
 import SopSupplementModal from '../SopSupplementModal'
 import DateRangePicker from './DateRangePicker'
-import type { TaskRecord } from '../../types'
+import type { SopDirectionNode, TaskRecord } from '../../types'
 import {
   STAGE_LABEL,
   aggregateByAsset,
@@ -128,19 +129,53 @@ export default function TrackerWorkspace() {
   const [stageFilter, setStageFilter] = useState<'all' | 'running' | 'declining' | 'created' | 'stale'>('all')
 
   /**
-   * 没有对应任务卡的素材数（演示数据、任务卡已删的老数据）。
+   * 素材 → 方向（任务卡优先，其次素材自己的 directionId）。
+   *
+   * 和 `scopeAssetsForNode` 里的判定保持一致：两边算得不一样，会出现
+   * 「树上说未归属、点开又能筛到」这种自相矛盾。
+   */
+  const directionIdOf = useMemo(() => {
+    const taskById = new Map((tasks as TaskRecord[]).map((task) => [task.id, task]))
+    const alive = new Set(directions.filter((node) => !node.deletedAt).map((node) => node.id))
+    return (asset: AssetRecord): string | undefined => {
+      const fromTask = asset.taskId ? taskById.get(asset.taskId)?.sopDirectionId : undefined
+      if (fromTask && alive.has(fromTask)) return fromTask
+      return asset.directionId && alive.has(asset.directionId) ? asset.directionId : undefined
+    }
+  }, [tasks, directions])
+
+  /**
+   * 没有任务卡、靠 directionId 归属的素材数（方向 id → 数量）。
+   *
+   * 任务卡已经带了方向的那批会计入节点原本的 taskCount，这里只补「没人算过」的，
+   * 否则同一个方向会被算两遍。
+   */
+  const externalCountByDirection = useMemo(() => {
+    const taskById = new Map((tasks as TaskRecord[]).map((task) => [task.id, task]))
+    const map = new Map<string, number>()
+    for (const asset of assets) {
+      if (asset.taskId && taskById.get(asset.taskId)?.sopDirectionId) continue
+      if (!asset.directionId) continue
+      map.set(asset.directionId, (map.get(asset.directionId) ?? 0) + 1)
+    }
+    return map
+  }, [assets, tasks])
+
+  /**
+   * 既没有任务卡、也没有 directionId 的素材（演示数据、任务卡已删的老数据、
+   * 分类路径没匹配上的外部素材）。
    *
    * 它们挂不到任何方向上，但确实占着台账和消耗 —— 必须计入「未归属」，
    * 否则用户点任何方向都会发现数字对不上。
    */
-  const orphanAssetCount = useMemo(() => {
-    const known = new Set((tasks as TaskRecord[]).map((task) => task.id))
-    return assets.filter((asset) => !asset.taskId || !known.has(asset.taskId)).length
-  }, [tasks, assets])
+  const orphanAssetCount = useMemo(
+    () => assets.filter((asset) => !directionIdOf(asset)).length,
+    [assets, directionIdOf],
+  )
 
   const tree = useMemo(
-    () => buildProductTree(directions, tasks as TaskRecord[], orphanAssetCount),
-    [directions, tasks, orphanAssetCount],
+    () => buildProductTree(directions, tasks as TaskRecord[], orphanAssetCount, externalCountByDirection),
+    [directions, tasks, orphanAssetCount, externalCountByDirection],
   )
   const scopedAssets = useMemo(
     () => scopeAssetsForNode(assets, tasks as TaskRecord[], directions, tree, selectedNodeId),
@@ -191,7 +226,27 @@ export default function TrackerWorkspace() {
         trackGetAll<ImportRecord>('imports'),
         trackGetAll<LineageRecord>('lineage'),
       ])
-      setAssets(a)
+      /*
+       * 读出来之后顺手补一次「外部素材的方向归属」。
+       *
+       * NAS 接进来的素材没有任务卡，方向只能靠分类路径算（`planAutoDirections`）。
+       * 放在加载阶段而不是按钮里：用户点什么都不用做，打开就是归好类的。
+       * 没配方向 / 人工改过的都不会被覆盖，所以这一步可以每次都跑。
+       */
+      const sopDirs = useSopStore.getState().directions
+      const assigned = planAutoDirections(a, sopDirs)
+      if (assigned.length) {
+        try {
+          await trackPutMany('assets', assigned.map((item) => ({ id: item.id, data: item })))
+          const byId = new Map(assigned.map((item) => [item.id, item]))
+          setAssets(a.map((item) => byId.get(item.id) ?? item))
+        } catch (err) {
+          console.warn('自动归属方向失败（不影响其它数据）：', err)
+          setAssets(a)
+        }
+      } else {
+        setAssets(a)
+      }
       setSpend(s)
       setImports(i)
       setLineage(l)
@@ -290,6 +345,95 @@ export default function TrackerWorkspace() {
     } catch (err) {
       setError(`清除失败：${String(err)}`)
       setBusy('')
+    }
+  }
+
+  /** 还能自动归属多少张（人工设定过、路径匹配不上的不算） */
+  const autoAssignPending = useMemo(() => planAutoDirections(assets, directions).length, [assets, directions])
+
+  /**
+   * 按 NAS 分类路径重新算一遍归属。
+   *
+   * 加载时会自动跑一次，这个按钮是给「刚在左边树里新建/改名了产品方向」用的：
+   * 树一变，原来匹配不上的路径可能就对上了。
+   */
+  const runAutoAssign = async () => {
+    setBusy('正在按分类路径归属…')
+    setError('')
+    try {
+      const updates = planAutoDirections(assets, directions)
+      if (!updates.length) {
+        setBusy('没有需要自动归属的素材（人工设定过的、分类路径匹配不上的都会跳过）')
+        return
+      }
+      await trackPutMany('assets', updates.map((item) => ({ id: item.id, data: item })))
+      const byId = new Map(updates.map((item) => [item.id, item]))
+      setAssets(assets.map((item) => byId.get(item.id) ?? item))
+      setBusy(`已按分类路径归属 ${updates.length} 个素材`)
+    } catch (err) {
+      setError(`自动归属失败：${String(err)}`)
+    }
+  }
+
+  /**
+   * 分类目录里有、方向树里没有的产品/方向。
+   *
+   * 采集工具的目录比手建的树细得多（卡券/QQ阅读-25元/插画、淘宝联盟/购物…），
+   * 这些素材有报表名、有消耗，就是没地方挂。算出来让用户一键补建。
+   */
+  const missingPlan = useMemo(() => planMissingNodes(assets, directions), [assets, directions])
+
+  /** 按计划补建业务线/产品/方向，建完立刻按路径归属（加载时会自动跑一遍） */
+  const createMissingNodes = async () => {
+    const plan = missingPlan
+    const total = plan.categories.length + plan.products.length + plan.directions.length
+    if (!total) {
+      setBusy('没有缺失的产品/方向（未知、_待确认 这类目录不会建）')
+      return
+    }
+    const samples = [
+      ...plan.categories.map((name) => `业务线「${name}」`),
+      ...plan.products.map((item) => `产品「${item.category}/${item.name}」`),
+      ...plan.directions.map((item) => `方向「${item.product}/${item.name}」`),
+    ]
+    const preview = `${samples.slice(0, 6).join('、')}${samples.length > 6 ? ` 等 ${samples.length} 个` : ''}`
+    const ok = window.confirm(
+      `将补建 ${plan.categories.length} 个业务线、${plan.products.length} 个产品、${plan.directions.length} 个方向，`
+      + `涉及 ${plan.assetCount} 张素材：\n\n${preview}\n\n建完可以随时在左边树里改名或移动。确定？`,
+    )
+    if (!ok) return
+    setBusy('正在补建方向树节点…')
+    setError('')
+    try {
+      const store = useSopStore.getState()
+      /** 现查现建：addNode 之后 store 已经更新，按名字能立刻拿到新节点 */
+      const findId = (kind: 'category' | 'product' | 'direction', name: string, parentId?: string) =>
+        useSopStore.getState().directions.find((node) => (
+          node.kind === kind
+          && !node.deletedAt
+          && node.name.trim() === name.trim()
+          // 只有方向是按「挂在哪个产品下」区分的；业务线和产品按名字唯一
+          && (kind !== 'direction' || (node.parentId ?? '') === (parentId ?? ''))
+        ))?.id
+
+      for (const name of plan.categories) {
+        if (!findId('category', name)) store.addNode(null, name, 'category')
+      }
+      for (const item of plan.products) {
+        if (findId('product', item.name)) continue
+        const categoryId = findId('category', item.category)
+        store.addNode(categoryId ?? null, item.name, 'product')
+      }
+      for (const item of plan.directions) {
+        const productId = findId('product', item.product)
+        if (!productId) continue
+        if (findId('direction', item.name, productId)) continue
+        store.addNode(productId, item.name, 'direction')
+      }
+      await reload()
+      setBusy(`已补建方向树节点，并按分类路径归属了 ${plan.assetCount} 张素材`)
+    } catch (err) {
+      setError(`补建节点失败：${String(err)}`)
     }
   }
 
@@ -491,13 +635,33 @@ export default function TrackerWorkspace() {
             </div>
 
             {tab === 'assets' && (
-              <button
-                type="button"
-                onClick={rebuildLedger}
-                className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs text-white hover:bg-blue-600"
-              >
-                扫描任务卡建台账
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => void runAutoAssign()}
+                  className="rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/15 dark:text-gray-300 dark:hover:bg-white/5"
+                  title="按 NAS 分类路径（产品/方向目录名）把外部素材归到方向；人工设定过的不会动"
+                >
+                  按路径归属{autoAssignPending > 0 ? `（${autoAssignPending}）` : ''}
+                </button>
+                {(missingPlan.categories.length + missingPlan.products.length + missingPlan.directions.length) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void createMissingNodes()}
+                    className="rounded-lg border border-amber-300 px-2.5 py-1 text-xs text-amber-600 hover:bg-amber-50 dark:border-amber-500/40 dark:text-amber-300 dark:hover:bg-amber-500/10"
+                    title="分类目录里有、方向树里还没有的产品/方向，一键补建后自动归属"
+                  >
+                    补建节点（{missingPlan.products.length + missingPlan.directions.length}）
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={rebuildLedger}
+                  className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs text-white hover:bg-blue-600"
+                >
+                  扫描任务卡建台账
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -574,6 +738,7 @@ export default function TrackerWorkspace() {
             byCard={byCard}
             lineageMap={lineageMap}
             allCards={byCard}
+            directions={directions}
             onDerive={setDerivingTask}
             onRefresh={reload}
             onView={setViewingImageId}
@@ -770,6 +935,7 @@ function AssetDetail({
   byCard,
   lineageMap,
   allCards,
+  directions,
   onDerive,
   onRefresh,
   onView,
@@ -778,6 +944,8 @@ function AssetDetail({
   asset: AssetRecord
   tasks: TaskRecord[]
   spend: SpendRecord[]
+  /** 方向树：给「归属方向」下拉用（外部素材没有任务卡，只能手选） */
+  directions: SopDirectionNode[]
   byAsset: ReturnType<typeof aggregateByAsset>
   byCard: ReturnType<typeof aggregateByCard>
   lineageMap: ReturnType<typeof buildLineageMap>
@@ -832,6 +1000,39 @@ function AssetDetail({
 
   // 演示素材的 id 是 demo- 开头，真实图片哈希在 imageId 里，必须走 assetImageId
   const previewImageId = assetImageId(asset)
+
+  /**
+   * 「归属方向」下拉：按产品分组。
+   *
+   * 外部素材（NAS 接进来的）没有任务卡，方向只能手选或按分类路径自动算；
+   * 树里没有的产品（卡券、淘宝联盟…）自然也就没有选项，用户要先去建节点。
+   */
+  const directionGroups = useMemo(() => {
+    const alive = directions.filter((node) => !node.deletedAt)
+    return alive
+      .filter((node) => node.kind === 'product')
+      .map((product) => ({
+        product,
+        items: alive.filter((node) => node.kind === 'direction' && node.parentId === product.id),
+      }))
+      .filter((group) => group.items.length > 0)
+  }, [directions])
+
+  /** 当前归属展示：任务卡上的方向优先（那才是这张图生成时定的） */
+  const taskDirectionId = task?.sopDirectionId
+  const currentDirectionId = taskDirectionId ?? asset.directionId ?? ''
+  const autoHit = !taskDirectionId && !asset.directionId ? matchDirectionByPath(asset.dirPath, directions) : null
+
+  const assignDirection = async (directionId: string) => {
+    const next: AssetRecord = {
+      ...asset,
+      directionId: directionId || undefined,
+      // 手动选过就锁住，之后自动匹配不再覆盖；清空则回到「可自动」
+      directionSource: directionId ? 'manual' : undefined,
+    }
+    await trackPut('assets', asset.id, next)
+    await onRefresh()
+  }
 
   /** 换一张素材要收回去：否则上一张点开的「展开」会带到下一张 */
   useEffect(() => {
@@ -930,6 +1131,43 @@ function AssetDetail({
               </p>
             )}
           </div>
+        </div>
+
+        <div className="mb-4">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <p className="text-[11px] text-gray-500 dark:text-gray-400">归属方向</p>
+            <span className="text-[10px] text-gray-400">
+              {taskDirectionId
+                ? '随任务卡'
+                : asset.directionSource === 'manual'
+                  ? '人工设定'
+                  : asset.directionSource === 'auto'
+                    ? '按分类路径自动'
+                    : ''}
+            </span>
+          </div>
+          <select
+            value={currentDirectionId}
+            disabled={Boolean(taskDirectionId)}
+            onChange={(event) => void assignDirection(event.target.value)}
+            className="w-full rounded border border-gray-200 bg-transparent px-1.5 py-1 text-[11px] disabled:opacity-60 dark:border-white/15"
+            title={taskDirectionId ? '这张图的方向由生成它的任务卡决定，改任务卡上的方向' : '外部素材没有任务卡，可以在这里指定'}
+          >
+            <option value="">（未归属）</option>
+            {directionGroups.map((group) => (
+              <optgroup key={group.product.id} label={group.product.name}>
+                {group.items.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          {asset.dirPath?.length ? (
+            <p className="mt-1 text-[10px] text-gray-400">
+              分类路径：{asset.dirPath.join(' / ')}
+              {autoHit ? `（自动匹配到「${autoHit.productName} / ${autoHit.directionName}」）` : ''}
+            </p>
+          ) : null}
         </div>
 
         <div className="mb-4">
