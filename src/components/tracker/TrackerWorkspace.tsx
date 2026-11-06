@@ -799,6 +799,16 @@ function AssetDetail({
    */
   const [idsOpen, setIdsOpen] = useState(false)
   const [idsCopied, setIdsCopied] = useState(false)
+  /**
+   * 来源任务卡的提示词默认只露 4 行（长提示词能把抽屉撑爆），
+   * 但「看不全又没法展开」等于没写全 —— 给展开/收起 + 一键复制。
+   * `promptOverflow` 是实测出来的：只有真被截断时才显示「展开全文」，
+   * 短提示词底下不会多一行没用的按钮。
+   */
+  const [promptOpen, setPromptOpen] = useState(false)
+  const [promptOverflow, setPromptOverflow] = useState(false)
+  const [promptCopied, setPromptCopied] = useState(false)
+  const promptRef = useRef<HTMLParagraphElement>(null)
   const stat = byAsset.get(asset.id)
   const series = useMemo(() => assetDailySeries(spend, asset.id), [spend, asset.id])
   const task = tasks.find((item) => item.id === asset.taskId)
@@ -822,6 +832,32 @@ function AssetDetail({
 
   // 演示素材的 id 是 demo- 开头，真实图片哈希在 imageId 里，必须走 assetImageId
   const previewImageId = assetImageId(asset)
+
+  /** 换一张素材要收回去：否则上一张点开的「展开」会带到下一张 */
+  useEffect(() => {
+    setPromptOpen(false)
+    setPromptCopied(false)
+  }, [asset.id])
+
+  /** 折叠状态下量一次：内容比 4 行高才需要「展开全文」 */
+  useEffect(() => {
+    if (promptOpen) return
+    const el = promptRef.current
+    if (!el) return
+    setPromptOverflow(el.scrollHeight > el.clientHeight + 2)
+  }, [task?.id, task?.prompt, promptOpen, asset.id])
+
+  const copyPrompt = () => {
+    const text = task?.prompt
+    if (!text) return
+    // 网页版在非安全上下文里没有 clipboard，失败就静默（用户会再点一次或手动选）
+    void navigator.clipboard?.writeText(text)
+      .then(() => {
+        setPromptCopied(true)
+        window.setTimeout(() => setPromptCopied(false), 1500)
+      })
+      .catch(() => setPromptCopied(false))
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -963,7 +999,34 @@ function AssetDetail({
           <p className="mb-1.5 text-[11px] text-gray-500 dark:text-gray-400">来源任务卡</p>
           <p className="break-all font-mono text-[10px] text-gray-500">{cardId || '-'}</p>
           {task && (
-            <p className="mt-1 line-clamp-4 text-[11px] leading-relaxed text-gray-600 dark:text-gray-300">{task.prompt}</p>
+            <>
+              <p
+                ref={promptRef}
+                className={`mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-gray-600 dark:text-gray-300 ${
+                  promptOpen ? '' : 'line-clamp-4'
+                }`}
+              >
+                {task.prompt}
+              </p>
+              <div className="mt-1.5 flex items-center gap-3 text-[10px]">
+                {(promptOverflow || promptOpen) && (
+                  <button
+                    type="button"
+                    onClick={() => setPromptOpen((prev) => !prev)}
+                    className="text-blue-500 hover:underline"
+                  >
+                    {promptOpen ? '收起' : '展开全文'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={copyPrompt}
+                  className="text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-200"
+                >
+                  {promptCopied ? '已复制' : '复制提示词'}
+                </button>
+              </div>
+            </>
           )}
           {task?.sopText ? (
             <button
