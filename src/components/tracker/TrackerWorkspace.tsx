@@ -11,6 +11,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
 import { ensureImageCached, ensureImageThumbnailCached } from '../../lib/imageCache'
 import { recordLineage, trackSpendLatest, trackSpendRange } from '../../lib/trackDb'
+// 消耗展示：整元 + 千分位，不足 1 元才带两位（见 lib/formatMoney.ts）
+import { formatSpend as fmtMoney } from '../../lib/formatMoney'
 import { buildDemoBundle, isDemoId, type DemoImageRef } from '../../lib/demoData'
 import { useSopStore } from '../../lib/sopStore'
 import {
@@ -84,9 +86,6 @@ const FIELD_LABEL: Array<[keyof ColumnMapping, string, boolean]> = [
   ['previewUrl', '预览地址', false],
 ]
 
-function fmtMoney(value: number) {
-  return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
 
 export default function TrackerWorkspace() {
   const tasks = useStore((state) => state.tasks)
@@ -1028,6 +1027,9 @@ function AssetDetail({
   const [promptOverflow, setPromptOverflow] = useState(false)
   const [promptCopied, setPromptCopied] = useState(false)
   const promptRef = useRef<HTMLParagraphElement>(null)
+  /** 「作为参考图去画廊」的结果：读不到原图时得说一句，不能点了没反应 */
+  const [sendState, setSendState] = useState<'idle' | 'sending' | 'failed'>('idle')
+  const linkAssetToGallery = useStore((state) => state.linkAssetToGallery)
   const stat = byAsset.get(asset.id)
   const series = useMemo(() => assetDailySeries(spend, asset.id), [spend, asset.id])
   const task = tasks.find((item) => item.id === asset.taskId)
@@ -1051,6 +1053,24 @@ function AssetDetail({
 
   // 演示素材的 id 是 demo- 开头，真实图片哈希在 imageId 里，必须走 assetImageId
   const previewImageId = assetImageId(asset)
+
+  /**
+   * 把这张图放进画廊输入框当参考图。
+   *
+   * 带上出处（`rootCardId ?? taskId`）一起送过去，画廊生成的卡就会记成它的衍生：
+   * 从台账挑图 → 画廊改图 → 新卡回到台账，血缘是一条连续的链，而不是断在这里。
+   * 外部素材（NAS 接进来的）没有任务卡，只当参考图，不挂血缘。
+   */
+  const sendToGallery = async () => {
+    if (!previewImageId || sendState === 'sending') return
+    setSendState('sending')
+    const dataUrl = await ensureImageCached(previewImageId)
+    if (!dataUrl) {
+      setSendState('failed')
+      return
+    }
+    linkAssetToGallery({ id: previewImageId, dataUrl }, cardId)
+  }
 
   /**
    * 「归属方向」下拉：按产品分组。
@@ -1328,6 +1348,21 @@ function AssetDetail({
           ) : (
             <p className="mt-2 text-[10px] text-gray-400">这张卡没有可复用的 SOP，无法直接衍生</p>
           )}
+
+          <button
+            type="button"
+            onClick={() => void sendToGallery()}
+            disabled={!previewImageId || sendState === 'sending'}
+            title={previewImageId
+              ? '把这张图放进画廊的参考图区，生成的新任务卡会自动记为它的衍生'
+              : '这个素材没有可用的图片文件（只有报表里的平台 ID）'}
+            className="mt-1.5 w-full rounded-lg bg-indigo-50 px-3 py-1.5 text-[11px] text-indigo-600 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-indigo-500/10 dark:text-indigo-300 dark:hover:bg-indigo-500/20"
+          >
+            {sendState === 'sending' ? '正在取图…' : sendState === 'failed' ? '读不到原图，重试' : '作为参考图去画廊'}
+          </button>
+          <p className="mt-1 text-[10px] text-gray-400">
+            {cardId ? '新任务卡会记为这张卡的衍生，血缘接着往下走' : '外部素材没有任务卡，只作为参考图'}
+          </p>
         </div>
 
         <div>

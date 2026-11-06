@@ -7272,3 +7272,37 @@ describe('掉队任务收尾', () => {
     expect(useStore.getState().tasks[0].status).toBe('running')
   })
 })
+
+/**
+ * 「素材台账 → 作为参考图去画廊」。
+ *
+ * 用户从台账挑一张图去画廊改，这张图要真的落到输入框里，
+ * 并且把它的出处（任务卡）记住 —— 新卡的血缘就靠这份映射接上去。
+ */
+describe('linkAssetToGallery', () => {
+  beforeEach(() => {
+    useStore.setState({ appMode: 'tracker', inputImages: [], assetRefParents: {} })
+  })
+
+  it('图进参考图区、切到画廊、记住出处', () => {
+    useStore.getState().linkAssetToGallery({ id: 'img-1', dataUrl: 'data:image/png;base64,xx' }, 'card-1')
+    const state = useStore.getState()
+    expect(state.appMode).toBe('gallery')
+    expect(state.inputImages.map((item) => item.id)).toEqual(['img-1'])
+    expect(state.assetRefParents).toEqual({ 'img-1': 'card-1' })
+  })
+
+  it('已经在参考图区时不重复添加，但出处照样记', () => {
+    useStore.setState({ inputImages: [{ id: 'img-1', dataUrl: 'data:image/png;base64,xx' }] })
+    useStore.getState().linkAssetToGallery({ id: 'img-1', dataUrl: 'data:image/png;base64,xx' }, 'card-1')
+    expect(useStore.getState().inputImages).toHaveLength(1)
+    expect(useStore.getState().assetRefParents['img-1']).toBe('card-1')
+  })
+
+  it('外部素材没有父卡时只当参考图', () => {
+    useStore.getState().linkAssetToGallery({ id: 'img-2', dataUrl: 'data:image/png;base64,yy' }, '')
+    const state = useStore.getState()
+    expect(state.inputImages.map((item) => item.id)).toEqual(['img-2'])
+    expect(state.assetRefParents).toEqual({})
+  })
+})

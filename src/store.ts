@@ -28,6 +28,8 @@ import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgen
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { collectSopLibrary, directionPath, mergeSopLibrary, useSopStore } from './lib/sopStore'
+import { recordLineage } from './lib/trackDb'
+import { lineageParentsOf } from './lib/assetLineage'
 import { pointNameForDirection } from './lib/sopPresets'
 import { proofreadPrompts } from './lib/promptProofread'
 import { ALL_SCOPE, filterTasksByScope, scopeNodeIds, type DirectionScope } from './lib/directionScope'
@@ -369,6 +371,19 @@ interface AppState {
   promptSelection: { start: number; end: number; prompt: string } | null
   setPromptSelection: (selection: { start: number; end: number }) => void
   inputImages: InputImage[]
+  /**
+   * 从「素材台账 → 作为参考图去画廊」带过来的血缘父卡：imageId → 任务卡 id。
+   *
+   * 台账里的图本身有出处（生成它的那张卡），拿去画廊当参考图再生成时，
+   * 新卡应该挂在这张卡下面 —— 否则血缘链在「拿去参考」这一步就断了。
+   * 不进持久化白名单：只保证这一次发起的生成能挂上，重启后不残留。
+   */
+  assetRefParents: Record<string, string>
+  /**
+   * 把台账里的一张图放进画廊输入框，并记住它的出处。
+   * `parentCardId` 为空（外部素材没有任务卡）时只当参考图，不挂血缘。
+   */
+  linkAssetToGallery: (img: InputImage, parentCardId: string) => void
   addInputImage: (img: InputImage) => void
   /** 一次性追加多张：拖拽/粘贴大批图片时只触发一次更新，避免逐张 set 造成的连续重渲染 */
   addInputImages: (imgs: InputImage[], limit?: number) => number
@@ -852,6 +867,7 @@ export const useStore = create<AppState>()(
       promptSelection: null,
       setPromptSelection: (selection) => set((s) => ({ promptSelection: { ...selection, prompt: s.prompt } })),
       inputImages: [],
+      assetRefParents: {},
       plainImageMode: 'batch',
       setPlainImageMode: (plainImageMode) => set({ plainImageMode }),
       fixedImages: [],
@@ -913,6 +929,14 @@ export const useStore = create<AppState>()(
           if (s.inputImages.find((i) => i.id === img.id)) return s
           return syncActiveInputDraft(s, { inputImages: [...s.inputImages, img] })
         }),
+      linkAssetToGallery: (img, parentCardId) => {
+        // 先切模式再塞图：setAppMode('gallery') 在从 Agent 回来时会恢复画廊草稿，
+        // 顺序反了刚加进去的图会被草稿覆盖掉。
+        if (get().appMode !== 'gallery') get().setAppMode('gallery')
+        get().addInputImage(img)
+        if (!parentCardId) return
+        set((s) => ({ assetRefParents: { ...s.assetRefParents, [img.id]: parentCardId } }))
+      },
       addInputImages: (imgs, limit) => {
         let added = 0
         set((s) => {
@@ -2319,6 +2343,17 @@ async function runSubmitTask(options: SubmitOptions, input: SubmitInput) {
 
     useStore.getState().setTasks([task, ...useStore.getState().tasks])
     await putTask(task)
+    /*
+     * 这张任务卡是从台账里的哪张图衍生的：参考图如果是「从台账发送到画廊」来的，
+     * 就把它原来所属的任务卡记成父级，血缘链在画廊里也能接着往下看。
+     *
+     * 只在普通模式挂：SOP / 变量模式的父子关系由 sopPipeline 用自己的
+     * parentCardId 记，这里再记一遍会多出一条指向错误的边。
+     */
+    if (!meta?.sopJobId) {
+      const parents = lineageParentsOf(images, useStore.getState().assetRefParents)
+      for (const parentCardId of parents) void recordLineage(task.id, parentCardId, 'derive')
+    }
     if (requestBatchId) batchTaskIds.add(task.id)
     // 异步调用 API
     executeTask(task.id)
