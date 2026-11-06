@@ -1,7 +1,7 @@
 {
   "name": "gpt-image-playground",
   "private": true,
-  "version": "2.0.0-track.25",
+  "version": "2.0.0-track.26",
   "type": "module",
   "scripts": {
     "dev": "vite",

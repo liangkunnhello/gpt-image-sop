@@ -63,14 +63,22 @@ import {
   type SpendRecord,
 } from '../../lib/trackDb'
 
-type Tab = 'assets' | 'unmatched' | 'import' | 'stats'
+type Tab = 'assets' | 'unmatched' | 'import'
+
+/**
+ * 台账的两种看法：网格看图、列表看数。
+ *
+ * 素材台账和素材报表本来就是同一份数据（同一批素材 + 同一批流水），
+ * 只是网格适合挑图、列表适合对账。拆成两个页签会导致「切过去筛选条件全丢」，
+ * 所以并成一页，视图切换放在投放状态旁边。
+ */
+type LedgerView = 'grid' | 'list'
 
 /** 页签挪到右侧后，左边空着不好看：给每个页签补一句这页在干什么 */
 const TAB_HINT: Record<Tab, string> = {
   assets: '',
   unmatched: '报表里有、但认不到本地图的平台素材',
   import: '把平台的素材报表明细导进来（可多选 / 整个文件夹）',
-  stats: '按素材、任务卡、产品看区间消耗',
 }
 
 const FIELD_LABEL: Array<[keyof ColumnMapping, string, boolean]> = [
@@ -122,6 +130,22 @@ export default function TrackerWorkspace() {
   // 顶层筛选：产品树节点 + 日期范围。两者都是纯展示层筛选，不改库里的数据
   const directions = useSopStore((state) => state.directions)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [ledgerView, setLedgerView] = useState<LedgerView>('grid')
+  /**
+   * 折叠起来的树节点。
+   *
+   * 默认全展开（和画廊一致），但一个产品底下几十个方向时太占地方，
+   * 所以每个有子级的节点前面都有箭头，顶部还有「全部收起」。
+   */
+  const [foldedNodes, setFoldedNodes] = useState<Set<string>>(() => new Set())
+  const toggleNode = (id: string) => {
+    setFoldedNodes((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
   /*
    * 默认「近 7 天」而不是「全部时间」：每天一份报表，几个月就是几十万条流水，
    * 一进页面就全量读会把 webview 拖住。想看更长区间上面有「近30天 / 全部」。
@@ -184,6 +208,20 @@ export default function TrackerWorkspace() {
     () => buildProductTree(directions, tasks as TaskRecord[], orphanAssetCount, externalCountByDirection),
     [directions, tasks, orphanAssetCount, externalCountByDirection],
   )
+
+  /** 所有「有子级」的节点 id：给「全部收起 / 全部展开」用 */
+  const foldableIds = useMemo(() => {
+    const ids: string[] = []
+    const walk = (list: TreeNode[]) => {
+      for (const node of list) {
+        if (!node.children.length) continue
+        ids.push(node.id)
+        walk(node.children)
+      }
+    }
+    walk(tree)
+    return ids
+  }, [tree])
   const scopedAssets = useMemo(
     () => scopeAssetsForNode(assets, tasks as TaskRecord[], directions, tree, selectedNodeId),
     [assets, tasks, directions, tree, selectedNodeId],
@@ -648,27 +686,45 @@ export default function TrackerWorkspace() {
             <p className="text-[11px] text-gray-400">{TAB_HINT[tab]}</p>
           )}
           {tab === 'assets' && (
-            <div className="flex gap-1">
-              {(['all', 'running', 'declining', 'stale', 'created'] as const).map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setStageFilter(key)}
-                  className={`rounded-lg px-2 py-1 text-xs ${
-                    stageFilter === key
-                      ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
-                      : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10'
-                  }`}
+            <>
+              {/* 投放状态：五个按钮平铺太占地方，改成下拉；网格和列表共用同一个筛选值 */}
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
+                投放状态
+                <select
+                  value={stageFilter}
+                  onChange={(event) => setStageFilter(event.target.value as typeof stageFilter)}
+                  className="rounded-lg border border-gray-200 bg-transparent px-1.5 py-1 text-[11px] text-gray-700 outline-none dark:border-white/15 dark:text-gray-200"
                 >
-                  {key === 'all' ? '全部' : STAGE_LABEL[key]}
-                </button>
-              ))}
-            </div>
+                  <option value="all">全部</option>
+                  {(['running', 'declining', 'stale', 'created'] as const).map((key) => (
+                    <option key={key} value={key}>{STAGE_LABEL[key]}</option>
+                  ))}
+                </select>
+              </label>
+
+              {/* 视图切换：网格挑图 / 列表对账 */}
+              <div className="flex rounded-lg bg-black/[0.04] p-0.5 dark:bg-white/[0.06]">
+                {([['grid', '网格'], ['list', '列表']] as Array<[LedgerView, string]>).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setLedgerView(key)}
+                    className={`rounded-md px-2 py-0.5 text-[11px] transition ${
+                      ledgerView === key
+                        ? 'bg-white text-gray-800 shadow-sm dark:bg-white/15 dark:text-white'
+                        : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
           )}
 
           <div className="ml-auto flex items-center gap-2">
             <div className="flex gap-1">
-              {([['assets', '素材台账'], ['unmatched', '待认领'], ['import', '导入报表'], ['stats', '素材报表']] as Array<[Tab, string]>).map(([key, label]) => (
+              {([['assets', '素材台账'], ['unmatched', '待认领'], ['import', '导入报表']] as Array<[Tab, string]>).map(([key, label]) => (
                 <button
                   key={key}
                   type="button"
@@ -720,24 +776,43 @@ export default function TrackerWorkspace() {
       <div className="relative flex min-h-0 flex-1">
         {/* 左侧产品树：业务线 → 产品 → 方向 */}
         <aside className="w-56 shrink-0 overflow-y-auto border-r border-gray-100 px-2 py-3 dark:border-white/10">
-          <div className="mb-1.5 flex items-center justify-between px-1">
+          <div className="mb-1.5 flex items-center justify-between gap-1 px-1">
             <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400">业务线 / 产品 / 方向</span>
-            {selectedNodeId && (
-              <button
-                type="button"
-                onClick={() => setSelectedNodeId(null)}
-                className="text-[10px] text-blue-500 hover:underline"
-              >
-                清除
-              </button>
-            )}
+            <div className="flex shrink-0 items-center gap-1.5">
+              {foldableIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setFoldedNodes(foldedNodes.size ? new Set() : new Set(foldableIds))}
+                  className="text-[10px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                  title={foldedNodes.size ? '展开所有节点' : '只留业务线和产品，收起所有方向'}
+                >
+                  {foldedNodes.size ? '全部展开' : '全部收起'}
+                </button>
+              )}
+              {selectedNodeId && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedNodeId(null)}
+                  className="text-[10px] text-blue-500 hover:underline"
+                >
+                  清除
+                </button>
+              )}
+            </div>
           </div>
           {!tree.length ? (
             <p className="px-1 py-3 text-[11px] leading-relaxed text-gray-400">
               还没有方向。到画廊左侧建好「业务线 → 产品 → 方向」之后，这里就能按层级筛选素材。
             </p>
           ) : (
-            <TreeBranch nodes={tree} depth={0} selectedId={selectedNodeId} onSelect={setSelectedNodeId} />
+            <TreeBranch
+              nodes={tree}
+              depth={0}
+              selectedId={selectedNodeId}
+              onSelect={setSelectedNodeId}
+              folded={foldedNodes}
+              onToggle={toggleNode}
+            />
           )}
         </aside>
 
@@ -745,16 +820,27 @@ export default function TrackerWorkspace() {
           {loading ? (
             <p className="py-16 text-center text-xs text-gray-400">正在读取本地数据…</p>
           ) : tab === 'assets' ? (
-            <AssetsTab
-              assets={scopedAssets}
-              byAsset={byAsset}
-              stageFilter={stageFilter}
-              onSelect={setSelectedAssetId}
-              onView={setViewingImageId}
-            />
+            ledgerView === 'grid' ? (
+              <AssetsTab
+                assets={scopedAssets}
+                byAsset={byAsset}
+                stageFilter={stageFilter}
+                onSelect={setSelectedAssetId}
+                onView={setViewingImageId}
+              />
+            ) : (
+              <AssetReportTab
+                spend={reportSpend}
+                imports={imports}
+                assets={scopedAssets}
+                byAsset={byAsset}
+                stageFilter={stageFilter}
+                onOpenAsset={setSelectedAssetId}
+              />
+            )
           ) : tab === 'unmatched' ? (
             <UnmatchedTab spend={spend} assets={assets} onDone={reload} setBusy={setBusy} setError={setError} />
-          ) : tab === 'import' ? (
+          ) : (
             <ImportTab
               tasks={tasks as TaskRecord[]}
               assets={assets}
@@ -768,13 +854,6 @@ export default function TrackerWorkspace() {
               }}
               setBusy={setBusy}
               setError={setError}
-            />
-          ) : (
-            <AssetReportTab
-              spend={reportSpend}
-              imports={imports}
-              assets={scopedAssets}
-              onOpenAsset={setSelectedAssetId}
             />
           )}
         </div>
@@ -813,39 +892,86 @@ export default function TrackerWorkspace() {
 }
 
 /** 产品树的一个分支：递归渲染「业务线 → 产品 → 方向」 */
+/** 树的展开箭头。和画廊侧栏同一个形状，收起时朝右 */
+function TreeChevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      className={`h-3 w-3 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+    </svg>
+  )
+}
+
 function TreeBranch({
   nodes,
   depth,
   selectedId,
   onSelect,
+  folded,
+  onToggle,
 }: {
   nodes: TreeNode[]
   depth: number
   selectedId: string | null
   onSelect: (id: string | null) => void
+  /** 收起的节点 id：收起的节点不渲染子树，但计数本来就含子孙，数字不会变 */
+  folded: Set<string>
+  onToggle: (id: string) => void
 }) {
   return (
     <>
       {nodes.map((node) => {
         const active = selectedId === node.id
+        const hasChildren = node.children.length > 0
+        const isFolded = folded.has(node.id)
         return (
           <div key={node.id}>
-            <button
-              type="button"
-              onClick={() => onSelect(active ? null : node.id)}
-              className={`flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-[11px] transition ${
-                active
-                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
-                  : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/5'
-              }`}
-              style={{ paddingLeft: 6 + depth * 12 }}
-              title={`${node.name}（${node.taskCount} 张卡）`}
-            >
-              <span className="min-w-0 flex-1 truncate">{node.name}</span>
-              <span className="shrink-0 text-[10px] text-gray-400">{node.taskCount}</span>
-            </button>
-            {node.children.length > 0 && (
-              <TreeBranch nodes={node.children} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />
+            <div className="flex items-center" style={{ paddingLeft: depth * 12 }}>
+              {hasChildren ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    // 箭头只负责折叠，不改变当前筛选
+                    event.stopPropagation()
+                    onToggle(node.id)
+                  }}
+                  className="flex h-6 w-4 shrink-0 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                  title={isFolded ? '展开' : '收起'}
+                  aria-label={`${isFolded ? '展开' : '收起'} ${node.name}`}
+                >
+                  <TreeChevron open={!isFolded} />
+                </button>
+              ) : (
+                <span className="h-6 w-4 shrink-0" />
+              )}
+              <button
+                type="button"
+                onClick={() => onSelect(active ? null : node.id)}
+                className={`flex min-w-0 flex-1 items-center gap-1 rounded px-1.5 py-1 text-left text-[11px] transition ${
+                  active
+                    ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300'
+                    : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/5'
+                }`}
+                title={`${node.name}（${node.taskCount} 张卡）`}
+              >
+                <span className="min-w-0 flex-1 truncate">{node.name}</span>
+                <span className="shrink-0 text-[10px] text-gray-400">{node.taskCount}</span>
+              </button>
+            </div>
+            {hasChildren && !isFolded && (
+              <TreeBranch
+                nodes={node.children}
+                depth={depth + 1}
+                selectedId={selectedId}
+                onSelect={onSelect}
+                folded={folded}
+                onToggle={onToggle}
+              />
             )}
           </div>
         )
@@ -2167,11 +2293,16 @@ function AssetReportTab({
   spend,
   imports,
   assets,
+  byAsset,
+  stageFilter,
   onOpenAsset,
 }: {
   spend: SpendRecord[]
   imports: ImportRecord[]
   assets: AssetRecord[]
+  byAsset: ReturnType<typeof aggregateByAsset>
+  /** 投放状态筛选：和网格视图共用同一个值，切视图不会丢条件 */
+  stageFilter: 'all' | 'running' | 'declining' | 'created' | 'stale'
   /** 单击行打开素材详情（和素材台账里点卡片是同一个抽屉） */
   onOpenAsset: (assetId: string) => void
 }) {
@@ -2260,8 +2391,23 @@ function AssetReportTab({
       buckets.set(key, bucket)
     }
 
+    /**
+     * 这一行的投放状态：取组里第一个有统计的素材。
+     *
+     * 未匹配行（只有平台 ID）没有素材记录，按「未投放」算 ——
+     * 和网格视图一致：那边只显示有素材记录的卡片。
+     */
+    const stageOf = (assetIds: Set<string>) => {
+      for (const id of assetIds) {
+        const stage = byAsset.get(id)?.stage
+        if (stage) return stage
+      }
+      return 'created' as const
+    }
+
     const out: ReportRow[] = []
     for (const [key, bucket] of buckets) {
+      if (stageFilter !== 'all' && stageOf(bucket.assetIds) !== stageFilter) continue
       // 代表素材：优先挑有真实图片的，否则缩略图那格会一直是空的
       let sample: AssetRecord | undefined
       for (const assetId of bucket.assetIds) {
@@ -2300,7 +2446,7 @@ function AssetReportTab({
     }
 
     return out.sort((a, b) => b.spend - a.spend)
-  }, [filtered, dimension, assetById, trendDates])
+  }, [filtered, dimension, assetById, trendDates, byAsset, stageFilter])
 
   const visibleRows = useMemo(() => {
     const text = keyword.trim().toLowerCase()
