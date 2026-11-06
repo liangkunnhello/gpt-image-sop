@@ -83,7 +83,7 @@ import { canonicalizeBatchFunctionCallArguments, countResponseToolCalls, createR
 import { cleanStaleAgentInputDrafts, clearInputDraftState, isEmptyAgentInputDraft, normalizeAgentInputDrafts, remapAgentInputDraftMentionsForPathChange, restoreAgentInputDraftState, restoreGalleryInputDraftState, saveActiveAgentInputDrafts, saveGalleryInputDraft, syncActiveInputDraft, updateInputDraftImages } from './lib/inputDraftState'
 import { ALL_FAVORITES_COLLECTION_ID, DEFAULT_FAVORITE_COLLECTION_ID, createDefaultFavoriteCollection, deleteFavoriteCollectionState, ensureDefaultFavoriteCollection, getTaskFavoriteCollectionIds, mergeFavoriteCollections, normalizeFavoriteCollectionIds, normalizeFavoriteCollectionName, normalizeFavoriteCollections, normalizeFavoritePatch, normalizeLoadedFavoriteState, resolveDefaultFavoriteCollectionId, sameFavoriteCollectionIds } from './lib/favoriteState'
 import { createPersistedState, mergePersistedAgentConversations, migratePersistedState, normalizePersistedState } from './lib/persistedState'
-import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
+import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks, trimOutputImages } from './lib/taskState'
 import { stripInjectedCodexCliSizePrompt, withAspectRatioHint, normalizeCodexCliImageSize } from './lib/size'
 import { sizeOverridesForMixedRatios } from './lib/referenceSize'
 import { planGenerationSize } from './lib/sizeCapability'
@@ -3049,7 +3049,13 @@ export async function resolveTaskDeliveryTarget(task: TaskRecord) {
   }
 }
 
-async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
+async function storeTaskOutputImages(task: TaskRecord, incomingImages: string[]) {
+  /**
+   * 先按请求张数截断：渠道偶尔不照 `n` 来（gpt-image-2 见过 n=1 回 3 张）。
+   * 批量「数量 500」= 500 个请求 × n=1，多给的会让总数变成 518，而且都是同一条
+   * 提示词的多次采样，看起来就是重复图。用户设多少就交付多少。
+   */
+  const images = trimOutputImages(incomingImages, task.params.n)
   const outputIds: string[] = []
   const outputDataUrls: string[] = []
   const outputImageSizes: Array<{ width?: number; height?: number }> = []

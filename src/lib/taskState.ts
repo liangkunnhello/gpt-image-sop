@@ -100,6 +100,23 @@ export function mapRevisedPromptsByImage(outputIds: string[], revisedPrompts: Ar
 }
 
 /**
+ * 按请求的张数截断接口返回的图。
+ *
+ * 渠道偶尔不照 `n` 来：gpt-image-2 上实测过 n=1 却回 3 张。
+ * 批量「数量 500」是 500 个请求、每个 n=1，多出来的图会让总数变成 518，
+ * 而且它们就是同一条提示词的多次采样，彼此高度相似，看起来像「重复图」。
+ * 所以按请求张数截断，用户设多少就是多少。
+ *
+ * 注意只截「多给的」，回得比请求少时原样返回（那是失败，交给上层报错/续跑）。
+ */
+export function trimOutputImages(images: string[], requested: number | undefined): string[] {
+  const expected = Math.max(1, Math.floor(requested ?? 1))
+  if (images.length <= expected) return images
+  console.warn(`[出图] 渠道返回 ${images.length} 张，超过请求的 ${expected} 张，多余的已丢弃`)
+  return images.slice(0, expected)
+}
+
+/**
  * 把进「图片回收站」的图从 outputImages 的渲染副本里排掉。
  *
  * 刻意不真的从 outputImages 里删元素：transparentOriginalImages、actualParamsByImage
