@@ -123,7 +123,11 @@ function useSlotImages(slot: Slot) {
  */
 function SlotThumbs({ images, onRemove }: { images: InputImage[]; onRemove: (idx: number) => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    /*
+     * 变量图可以放几百张（几百条提示词轮流取），不限高的话这个池子会把三个分区
+     * 一起顶出屏幕，上面的图点不到。给个上限内部滚动，和参考图区的处理保持一致。
+     */
+    <div className="flex max-h-32 flex-wrap items-center gap-1.5 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
       {images.map((img, idx) => (
         <div
           key={img.id}

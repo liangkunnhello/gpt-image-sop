@@ -2028,11 +2028,30 @@ export default function InputBar() {
   )
 
   const renderImageThumbs = () => {
+    /**
+     * 参考图一次最多能选 500 张（批量场景），格子会一路往上长到超出窗口 ——
+     * 顶部的图既看不见也点不到，只能删掉下面的重来。
+     *
+     * 这里限高 + 纵向滚动：超过一屏就在框内滚，输入框和发送按钮始终留在视野里。
+     * 高度取 `min(46vh, 300px)`：窗口矮时按比例缩，窗口高时最多 5 行左右，不喧宾夺主。
+     *
+     * 滚动条在 Chromium/WebView2 上是悬浮式的（滚动时才出现），只靠它用户不知道
+     * 上面还有图，所以超过两行就显示「N 张参考图 · 滚轮可查看全部」。
+     */
+    const tall = inputImages.length > 26
     return (
       <div ref={imagesRef} className="sm:[contain:inline-size]">
-        <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3">
-          {inputImages.map((img, idx) => renderImageThumb(img, idx))}
-          {renderClearAllButton()}
+        {tall && (
+          <div className="mb-1 flex items-center gap-2 text-[10px] text-gray-400 dark:text-gray-500">
+            <span className="tabular-nums">{inputImages.length} 张参考图</span>
+            <span className="text-gray-300 dark:text-gray-600">滚轮可查看全部</span>
+          </div>
+        )}
+        <div className="mb-3 max-h-[min(46vh,300px)] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
+          <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3">
+            {inputImages.map((img, idx) => renderImageThumb(img, idx))}
+            {renderClearAllButton()}
+          </div>
         </div>
         {touchDragPreview?.src && createPortal(
           <div
