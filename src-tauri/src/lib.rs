@@ -42,6 +42,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             storage::commands::tasks_get_all,
+            storage::commands::track_get_all,
+            storage::commands::track_put,
+            storage::commands::track_put_many,
+            storage::commands::track_spend_query,
+            storage::commands::track_delete,
+            storage::commands::track_clear,
             storage::commands::task_put,
             storage::commands::task_delete,
             storage::commands::tasks_clear,

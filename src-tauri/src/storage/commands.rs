@@ -10,8 +10,20 @@ use tauri::State;
 use super::images::encode_file;
 use super::{
     Doc, FileMeta, ImageStat, Kind, Result, Storage, StorageError, StorageInfo, StorageState,
-    CONVERSATIONS, TASKS,
+    CONVERSATIONS, TASKS, TRACK_ASSETS, TRACK_IMPORTS, TRACK_LINEAGE, TRACK_SPEND,
 };
+
+/// 素材跟踪用到的四张表。前端只传短名，表名在这里做白名单 ——
+/// docs_get_all / doc_put 内部是按表名格式化拼 SQL 的，不能放任意字符串进去
+fn track_table(kind: &str) -> Result<&'static str> {
+    match kind {
+        "assets" => Ok(TRACK_ASSETS),
+        "spend" => Ok(TRACK_SPEND),
+        "lineage" => Ok(TRACK_LINEAGE),
+        "imports" => Ok(TRACK_IMPORTS),
+        other => Err(StorageError::new("invalid", format!("未知的素材跟踪类型：{other}"))),
+    }
+}
 
 const SOURCES: [&str; 3] = ["upload", "generated", "mask"];
 
@@ -108,6 +120,66 @@ pub async fn tasks_commit_deletion(
         s.commit_task_deletion(&deleted_ids, &tasks, &conversations)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn track_get_all(state: State<'_, StorageState>, kind: String) -> Result<Response> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.docs_get_all(table))
+        .await
+        .map(Response::new)
+}
+
+#[tauri::command]
+pub async fn track_put(
+    state: State<'_, StorageState>,
+    kind: String,
+    id: String,
+    data: String,
+) -> Result<()> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.doc_put(table, &Doc { id, data })).await
+}
+
+/// 批量写入。导入报表一次几千条，逐条 invoke 每条一个事务，
+/// 客户端上光 fsync 就要十几秒；这里整批走一个事务。
+#[tauri::command]
+pub async fn track_put_many(
+    state: State<'_, StorageState>,
+    kind: String,
+    items: Vec<Doc>,
+) -> Result<()> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.docs_put_many(table, &items)).await
+}
+
+/// 按日期区间取消耗流水（走后加的 spend_date 索引）。
+///
+/// 不带区间时等价于全量，但调用方应该总是带上：全量在百万条以上会把
+/// 整个结果拼成一个巨型 JSON 字符串，webview 扛不住。
+#[tauri::command]
+pub async fn track_spend_query(
+    state: State<'_, StorageState>,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<Response> {
+    run(state, move |s| {
+        s.docs_query_range(TRACK_SPEND, from.as_deref(), to.as_deref())
+    })
+    .await
+    .map(Response::new)
+}
+
+#[tauri::command]
+pub async fn track_delete(state: State<'_, StorageState>, kind: String, id: String) -> Result<()> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.doc_delete(table, &id)).await
+}
+
+#[tauri::command]
+pub async fn track_clear(state: State<'_, StorageState>, kind: String) -> Result<()> {
+    let table = track_table(&kind)?;
+    run(state, move |s| s.docs_clear(table)).await
 }
 
 #[tauri::command]

@@ -159,6 +159,8 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
     }
     enqueueSopJobs([{
       label: '第 1/1 张卡',
+      // 记下是从这张卡衍生的：素材跟踪那边靠它把消耗沿血缘往上卷
+      parentCardId: task.sopJobId || task.id,
       params: useStore.getState().params,
       imageDataUrls: images.map((item) => item.dataUrl),
       imageIds: images.map((item) => item.id),
@@ -216,182 +218,190 @@ export default function SopSupplementModal({ task, existingCount, onClose }: Pro
   }
 
   return (
+    /*
+     * 两层兜底，都是为了「弹窗比窗口还高」时不至于把底部按钮顶到看不见的地方：
+     * 1. 外层可滚动（原来只有 flex 居中，弹窗一旦超高，超出部分既滚不到也点不到）；
+     * 2. 高度用 dvh 而不是 vh —— 在带标题栏的窗口里 100vh 会大于实际可视高度，
+     *    弹窗按 vh 算出来的上限就偏大，底部直接被窗口边缘切掉。
+     */
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[60] overflow-y-auto bg-black/40 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
-      <div
-        className="flex max-h-[calc(100vh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-900"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-5 py-3.5 dark:border-white/[0.08]">
-          <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">用 SOP 再次生成图片</h2>
-          <div className="flex-1" />
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/[0.06]"
-          >
-            取消
-          </button>
-        </div>
-
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden px-5 py-4">
-          <div>
-            <div className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">生成方式</div>
-            <div className="grid grid-cols-2 gap-2">
-              {([
-                { value: 'append', label: '补充到这张卡', hint: `新图接在这张卡后面（当前 ${existingCount} 条）` },
-                { value: 'new', label: '新建一张卡', hint: '另起一张新卡，这张卡不受影响' },
-              ] as Array<{ value: RunMode; label: string; hint: string }>).map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  onClick={() => setMode(item.value)}
-                  className={`rounded-xl border px-3 py-2 text-left transition-colors ${mode === item.value
-                    ? 'border-teal-400 bg-teal-50 text-teal-700 dark:border-teal-500/50 dark:bg-teal-500/10 dark:text-teal-300'
-                    : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/[0.06]'}`}
-                >
-                  <div className="text-xs font-medium">{item.label}</div>
-                  <div className="mt-0.5 text-[10px] leading-relaxed text-gray-500 dark:text-gray-400">{item.hint}</div>
-                </button>
-              ))}
-            </div>
-            {carriedBaseCount > 0 && (
-              <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
-                底图一起带上：固定图 {carriedFixedCount} 张 · 变量图 {carriedVariableCount} 张
-                {task.imageFidelity ? `（${imageFidelityLabel(task.imageFidelity)}）` : ''}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <div className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">用哪份 SOP</div>
-            <select
-              value={sourceId}
-              onChange={(event) => setSourceId(event.target.value)}
-              className="w-full rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+      <div className="flex min-h-full items-center justify-center">
+        <div
+          className="flex max-h-[calc(100dvh-2rem)] min-h-0 w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-900"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-5 py-3.5 dark:border-white/[0.08]">
+            <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">用 SOP 再次生成图片</h2>
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/[0.06]"
             >
-              <option value="card">这张卡原来的 SOP{task.sopName ? `（${task.sopName}）` : ''}</option>
-              {groups.map((group) => (
-                <optgroup key={group.productId} label={`SOP 库 · ${group.label}`}>
-                  {group.items.map((item) => (
-                    <option key={item.id} value={item.id}>{item.name}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            {!useCardSop && (
-              <p className="mt-1.5 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
-                {mode === 'append'
-                  ? '换库里的 SOP 只影响这次新补的图，这张卡原来那批不会改。'
-                  : '新卡会用这份 SOP 写提示词，这张卡的图不会被改动。'}
-              </p>
-            )}
-            {!sopText.trim() && (
-              <p className="mt-1.5 text-[11px] text-red-500">
-                {useCardSop ? '这张卡没有可用的 SOP 正文。' : '这份 SOP 是空的。'}
-                {mode === 'new' ? '换一份库里的 SOP 才能新建卡。' : '无法补充生图。'}
-              </p>
-            )}
+              取消
+            </button>
           </div>
 
-          {/* 只有新建卡才给「AI 改一版」：补充是在同一张卡里加图，SOP 一改就跟卡上那份对不上了 */}
-          {mode === 'new' && (
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain px-5 py-4">
             <div>
-              <div className="mb-1.5 flex items-center gap-2">
-                <span className="text-xs font-medium text-gray-500 dark:text-gray-400">用 AI 改一版（可选）</span>
-                {revisedSop && (
-                  <>
-                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                      已改过
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setRevisedSop(null)}
-                      className="text-[11px] text-gray-500 hover:underline dark:text-gray-400"
-                    >
-                      撤销
-                    </button>
-                  </>
-                )}
+              <div className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">生成方式</div>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  { value: 'append', label: '补充到这张卡', hint: `新图接在这张卡后面（当前 ${existingCount} 条）` },
+                  { value: 'new', label: '新建一张卡', hint: '另起一张新卡，这张卡不受影响' },
+                ] as Array<{ value: RunMode; label: string; hint: string }>).map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => setMode(item.value)}
+                    className={`rounded-xl border px-3 py-2 text-left transition-colors ${mode === item.value
+                      ? 'border-teal-400 bg-teal-50 text-teal-700 dark:border-teal-500/50 dark:bg-teal-500/10 dark:text-teal-300'
+                      : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/[0.06]'}`}
+                  >
+                    <div className="text-xs font-medium">{item.label}</div>
+                    <div className="mt-0.5 text-[10px] leading-relaxed text-gray-500 dark:text-gray-400">{item.hint}</div>
+                  </button>
+                ))}
               </div>
-              <div className="flex items-center gap-1.5">
-                <input
-                  value={reviseInput}
-                  onChange={(event) => setReviseInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') void runRevise()
-                  }}
-                  disabled={revising}
-                  placeholder="例如：主标题改成两行，去掉价格角标"
-                  className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 placeholder:text-gray-300 focus:border-teal-400 focus:outline-none disabled:opacity-60 dark:border-white/10 dark:bg-gray-800 dark:text-gray-100"
-                />
-                <button
-                  type="button"
-                  onClick={() => void runRevise()}
-                  disabled={revising || !reviseInput.trim() || !effectiveSop.trim()}
-                  className="shrink-0 rounded-lg bg-teal-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
-                >
-                  {revising ? '修改中…' : '改一版'}
-                </button>
-              </div>
-              <p className="mt-1 text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
-                改完的 SOP 只用于这次新建，不写回原卡，也不改库里那份。
-              </p>
-              {revisedSop && (
-                <details className="mt-1.5 min-w-0 max-w-full rounded-lg bg-gray-50 px-2 py-1 dark:bg-white/[0.04]">
-                  <summary className="cursor-pointer text-[11px] text-gray-500 dark:text-gray-400">
-                    查看改后的 SOP（{revisedSop.length} 字）
-                  </summary>
-                  {/* 用 div + break-all 而不是 pre：SOP 里常有长串色值/链接，
-                      pre 的自动换行断不开它们，会把整块内容顶出弹窗 */}
-                  <div className="mt-1 max-h-40 max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all text-[10px] leading-relaxed text-gray-500 dark:text-gray-400">
-                    {revisedSop}
-                  </div>
-                </details>
+              {carriedBaseCount > 0 && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                  底图一起带上：固定图 {carriedFixedCount} 张 · 变量图 {carriedVariableCount} 张
+                  {task.imageFidelity ? `（${imageFidelityLabel(task.imageFidelity)}）` : ''}
+                </p>
               )}
             </div>
-          )}
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
-              {mode === 'append' ? '这次补几张' : '新卡出几张'}
-            </span>
-            <input
-              type="number"
-              min={1}
-              max={MAX_PROMPTS_PER_RUN}
-              value={count}
-              onChange={(event) => setCount(event.target.value)}
-              className="w-20 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
-            />
-            <span className="text-[11px] text-gray-400">每条提示词出一张图</span>
+            <div>
+              <div className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">用哪份 SOP</div>
+              <select
+                value={sourceId}
+                onChange={(event) => setSourceId(event.target.value)}
+                className="w-full rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+              >
+                <option value="card">这张卡原来的 SOP{task.sopName ? `（${task.sopName}）` : ''}</option>
+                {groups.map((group) => (
+                  <optgroup key={group.productId} label={`SOP 库 · ${group.label}`}>
+                    {group.items.map((item) => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              {!useCardSop && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                  {mode === 'append'
+                    ? '换库里的 SOP 只影响这次新补的图，这张卡原来那批不会改。'
+                    : '新卡会用这份 SOP 写提示词，这张卡的图不会被改动。'}
+                </p>
+              )}
+              {!sopText.trim() && (
+                <p className="mt-1.5 text-[11px] text-red-500">
+                  {useCardSop ? '这张卡没有可用的 SOP 正文。' : '这份 SOP 是空的。'}
+                  {mode === 'new' ? '换一份库里的 SOP 才能新建卡。' : '无法补充生图。'}
+                </p>
+              )}
+            </div>
+
+            {/* 只有新建卡才给「AI 改一版」：补充是在同一张卡里加图，SOP 一改就跟卡上那份对不上了 */}
+            {mode === 'new' && (
+              <div>
+                <div className="mb-1.5 flex items-center gap-2">
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">用 AI 改一版（可选）</span>
+                  {revisedSop && (
+                    <>
+                      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                        已改过
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setRevisedSop(null)}
+                        className="text-[11px] text-gray-500 hover:underline dark:text-gray-400"
+                      >
+                        撤销
+                      </button>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={reviseInput}
+                    onChange={(event) => setReviseInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void runRevise()
+                    }}
+                    disabled={revising}
+                    placeholder="例如：主标题改成两行，去掉价格角标"
+                    className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 placeholder:text-gray-300 focus:border-teal-400 focus:outline-none disabled:opacity-60 dark:border-white/10 dark:bg-gray-800 dark:text-gray-100"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void runRevise()}
+                    disabled={revising || !reviseInput.trim() || !effectiveSop.trim()}
+                    className="shrink-0 rounded-lg bg-teal-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
+                  >
+                    {revising ? '修改中…' : '改一版'}
+                  </button>
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                  改完的 SOP 只用于这次新建，不写回原卡，也不改库里那份。
+                </p>
+                {revisedSop && (
+                  <details className="mt-1.5 min-w-0 max-w-full rounded-lg bg-gray-50 px-2 py-1 dark:bg-white/[0.04]">
+                    <summary className="cursor-pointer text-[11px] text-gray-500 dark:text-gray-400">
+                      查看改后的 SOP（{revisedSop.length} 字）
+                    </summary>
+                    {/* 用 div + break-all 而不是 pre：SOP 里常有长串色值/链接，
+                        pre 的自动换行断不开它们，会把整块内容顶出弹窗 */}
+                    <div className="mt-1 max-h-40 max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all text-[10px] leading-relaxed text-gray-500 dark:text-gray-400">
+                      {revisedSop}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+                {mode === 'append' ? '这次补几张' : '新卡出几张'}
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={MAX_PROMPTS_PER_RUN}
+                value={count}
+                onChange={(event) => setCount(event.target.value)}
+                className="w-20 rounded-lg border border-gray-200 px-2 py-1 text-center text-sm dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+              />
+              <span className="text-[11px] text-gray-400">每条提示词出一张图</span>
+            </div>
+            {clampPromptCount(Number(count) || 1) > PROMPTS_PER_BATCH && (
+              <p className="text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                超过 {PROMPTS_PER_BATCH} 条会分批写提示词（模型一次写不完），
+                张数越多耗时越长；写的过程中界面上会显示进度。
+              </p>
+            )}
           </div>
-          {clampPromptCount(Number(count) || 1) > PROMPTS_PER_BATCH && (
-            <p className="text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
-              超过 {PROMPTS_PER_BATCH} 条会分批写提示词（模型一次写不完），
-              张数越多耗时越长；写的过程中界面上会显示进度。
-            </p>
-          )}
-        </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-gray-100 px-5 py-3 dark:border-white/[0.08]">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.06]"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            disabled={!canRun}
-            onClick={submit}
-            className="rounded-lg bg-teal-500 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
-          >
-            {mode === 'append' ? '开始补充' : '新建并生成'}
-          </button>
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-gray-100 px-5 py-3 dark:border-white/[0.08]">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={!canRun}
+              onClick={submit}
+              className="rounded-lg bg-teal-500 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-white/[0.06]"
+            >
+              {mode === 'append' ? '开始补充' : '新建并生成'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

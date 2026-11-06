@@ -24,6 +24,16 @@ jobs:
         env:
           SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
+          # track 分支（素材投放管理）用 -track 后缀的预发布版本号，由 tauri-release-track.yml 单独打包。
+          # 这里必须挡住：手动触发时本流水线会按 package.json 拼 tag，
+          # 如果不拦，track 版会被发成正式版并顶掉主版本的 releases/latest，
+          # 已装主版本的用户会被升级到一个不同的产品上
+          version=$(jq -r .version package.json)
+          if [[ "$version" == *-track.* ]]; then
+            echo "版本 $version 属于 track 分支，跳过主版本发布流水线"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [[ -z "$SIGNING_KEY" ]]; then
             echo "TAURI_SIGNING_PRIVATE_KEY is not set. Skipping desktop client build."
             echo "enabled=false" >> "$GITHUB_OUTPUT"

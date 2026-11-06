@@ -1,0 +1,121 @@
+name: Build Tracker Client
+
+# 素材投放管理分支（feature/asset-tracking）的独立打包流水线。
+#
+# 与主流水线 tauri-release.yml 分开，理由有三个，缺一个就会互相顶掉：
+# 1) tag 前缀：主流水线只认 v*，这里只认 track-v*，两条线不会互相触发；
+# 2) Release 标 prerelease：GitHub 的 releases/latest 会跳过预发布，
+#    主版本的自动更新通道不会被 track 版顶掉；
+# 3) 不生成 latest.json：track 版在 tauri.conf.json 里已清空 updater endpoints，
+#    它不自动更新，也不该给别人提供更新源。
+on:
+  push:
+    tags: ['track-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tauri-release-track-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          # 版本号必须带 -track. 后缀，否则说明这条流水线被误用了
+          version=$(jq -r .version package.json)
+          if [[ "$version" != *-track.* ]]; then
+            echo "::error::package.json 的版本 $version 不带 -track 后缀，不应由 track 流水线打包"
+            exit 1
+          fi
+          if [[ -z "$SIGNING_KEY" ]]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is not set. Skipping tracker build."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: check
+    if: ${{ needs.check.outputs.enabled == 'true' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version and extract release notes
+        id: meta
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(jq -r .version package.json)
+          # 手动触发时按 package.json 拼一个，格式与推送 tag 时一致
+          tag="$TAG"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then tag="track-v$version"; fi
+          if [[ "$tag" != "track-v$version" ]]; then
+            echo "::error::tag $tag 与 package.json 的版本 $version 不一致（应为 track-v$version）"
+            exit 1
+          fi
+          cargo_version=$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d '"' -f2)
+          if [[ "$cargo_version" != "$version" ]]; then
+            echo "::error::src-tauri/Cargo.toml 的版本 $cargo_version 与 package.json 的版本 $version 不一致"
+            exit 1
+          fi
+          # 正文取 RELEASE.md 里对应段落；track 版写在自己的小节标题下
+          awk -v head="## $version（" 'index($0, head) == 1 { found = 1; print; next } found && /^## / { exit } found { print }' RELEASE.md > release-notes.md
+          if [[ ! -s release-notes.md ]]; then
+            echo "::error::RELEASE.md 中没有 $version 的发布记录"
+            exit 1
+          fi
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            cat release-notes.md
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.meta.outputs.tag }}
+          releaseName: ${{ steps.meta.outputs.tag }}
+          releaseBody: ${{ steps.meta.outputs.body }}
+          releaseDraft: false
+          # 关键：预发布。GitHub 的 releases/latest 会跳过预发布，
+          # 主版本用户的自动更新因此不会看到 track 版
+          prerelease: true
+          # 不产出 latest.json：track 版不提供更新源
+          includeUpdaterJson: false
+          tauriScript: npx tauri
+
+      - name: Sync release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: gh release edit "$TAG" --title "$TAG" --notes-file release-notes.md --draft=false --prerelease=true

@@ -31,10 +31,48 @@ CREATE TABLE thumbnails (
 -- 孤儿清理按文件路径核对记录（文件名不一定等于 id）
 CREATE INDEX images_file ON images (file);
 CREATE INDEX thumbnails_file ON thumbnails (file);
+", "
+-- 素材投放跟踪（track 分支）：素材台账、消耗流水、任务卡血缘、导入批次
+--
+-- 结构刻意与 tasks 一致（id + data JSON + updated_at），原因有两个：
+-- 1) 客户端 SQLite 和网页 IndexedDB 能用同一套读写代码，不必为聚合查询写两套 SQL；
+-- 2) 新增字段不用改 schema —— JSON 里加键就行，前端 normalize 补默认值。
+-- 代价是聚合要在前端内存里算，素材量级在几万以内完全够用。
+CREATE TABLE IF NOT EXISTS track_assets (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS track_spend (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS track_lineage (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS track_imports (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS track_spend_updated ON track_spend (updated_at);
+", "
+-- 消耗流水：把常查字段从 JSON 里提成「虚拟生成列」，可以直接 WHERE / GROUP BY。
+--
+-- 为什么用 VIRTUAL 而不是 STORED：虚拟列在查询时即时计算，老数据不用回填、不占额外空间。
+-- 为什么不用真列 + 迁移：迁移要逐行解析重写，一旦中途失败数据库就打不开了；
+-- 生成列只依赖 data 本身，加不上也不影响原有读写。
+--
+-- 外面套 json_valid 是兜底：万一有脏数据，返回 NULL 而不是让整条查询报 malformed JSON。
+ALTER TABLE track_spend ADD COLUMN spend_date TEXT
+  GENERATED ALWAYS AS (CASE WHEN json_valid(data) THEN json_extract(data, '$.date') END) VIRTUAL;
+ALTER TABLE track_spend ADD COLUMN spend_asset TEXT
+  GENERATED ALWAYS AS (CASE WHEN json_valid(data) THEN json_extract(data, '$.assetId') END) VIRTUAL;
+ALTER TABLE track_spend ADD COLUMN spend_platform TEXT
+  GENERATED ALWAYS AS (CASE WHEN json_valid(data) THEN json_extract(data, '$.platformId') END) VIRTUAL;
+ALTER TABLE track_spend ADD COLUMN spend_amount REAL
+  GENERATED ALWAYS AS (CASE WHEN json_valid(data) THEN json_extract(data, '$.spend') END) VIRTUAL;
+-- 报表按日期区间取数，这是最热的查询路径
+CREATE INDEX IF NOT EXISTS track_spend_date ON track_spend (spend_date);
+-- 按素材反查它的全部流水
+CREATE INDEX IF NOT EXISTS track_spend_asset ON track_spend (spend_asset);
+-- 旧索引从没被查询用过（代码里没有任何按 updated_at 的查询），留着只增加写入开销
+DROP INDEX IF EXISTS track_spend_updated;
 "];
 
 pub const TASKS: &str = "tasks";
 pub const CONVERSATIONS: &str = "agent_conversations";
+pub const TRACK_ASSETS: &str = "track_assets";
+pub const TRACK_SPEND: &str = "track_spend";
+pub const TRACK_LINEAGE: &str = "track_lineage";
+pub const TRACK_IMPORTS: &str = "track_imports";
 
 /// 返回给前端的错误，code 供前端识别（例如 unavailable 表示数据目录不可用，前端据此弹窗提示）
 #[derive(Debug, Clone, Serialize)]
@@ -242,6 +280,67 @@ impl Storage {
         }
         out.push(']');
         Ok(out)
+    }
+
+    /// 按日期区间取消耗流水。
+    ///
+    /// 全表 `docs_get_all` 在几百万条时会拼出一个几 GB 的字符串，webview 直接 OOM；
+    /// 报表本来就是按天看的，按区间取就够了，且能走 `track_spend_date` 索引。
+    /// `from` / `to` 传 None 表示该端不限。
+    pub fn docs_query_range(
+        &self,
+        table: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<String> {
+        let conn = self.lock();
+        // spend_date 是虚拟生成列，取不到值（脏数据）的行会被区间条件排除
+        let mut stmt = conn.prepare(&format!(
+            "SELECT data FROM {table}
+             WHERE (?1 IS NULL OR spend_date >= ?1)
+               AND (?2 IS NULL OR spend_date <= ?2)
+             ORDER BY spend_date, id"
+        ))?;
+        let rows = stmt.query_map(params![from, to], |row| row.get::<_, String>(0))?;
+        let mut out = String::from("[");
+        for (idx, data) in rows.enumerate() {
+            if idx > 0 {
+                out.push(',');
+            }
+            out.push_str(&data?);
+        }
+        out.push(']');
+        Ok(out)
+    }
+
+    /// 批量写入：整批放在一个事务里，失败整批回滚。
+    ///
+    /// 逐条 `doc_put` 是「一条一个事务」，导入 8000 条报表就是 8000 次 fsync，
+    /// 客户端上要十几秒；一个事务批量插入能降到亚秒级。
+    pub fn docs_put_many(&self, table: &str, docs: &[Doc]) -> Result<()> {
+        if docs.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let now = now_ms();
+        {
+            let mut stmt = tx.prepare(&format!(
+                "INSERT OR REPLACE INTO {table} (id, data, updated_at) VALUES (?1, ?2, ?3)"
+            ))?;
+            for doc in docs {
+                if doc.id.is_empty() {
+                    return Err(StorageError::new("invalid_argument", "id 不能为空"));
+                }
+                // 与 put_doc 同一套校验：一条坏 JSON 会让整表读取失败，必须在写入口拦下
+                serde_json::from_str::<serde::de::IgnoredAny>(&doc.data).map_err(|err| {
+                    StorageError::new("invalid_argument", format!("数据不是合法 JSON：{err}"))
+                })?;
+                stmt.execute(params![doc.id, doc.data, now])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn doc_put(&self, table: &str, doc: &Doc) -> Result<()> {
