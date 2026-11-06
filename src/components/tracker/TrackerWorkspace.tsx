@@ -597,16 +597,23 @@ function TreeBranch({
  * 日消耗折线。
  *
  * 用折线而不是一排横条：要看的是「哪天起量、哪天掉」，折线更容易看出拐点。
- * 每个点带 title，悬停能看到具体日期和金额。
+ *
+ * **交互为什么这么做**：原来只在每个点上挂了 SVG `<title>`，命中区只有 2.2px 半径的
+ * 圆点，鼠标几乎点不中，实际用起来就是「移上去什么都不显示」。现在改成整块图都能悬停，
+ * 按横坐标吸附到最近的一天，画一条竖虚线 + 放大该点 + 浮层显示日期与金额，
+ * 顶部那行也同步显示当前悬停的点（浮层贴边时也不怕被裁）。
  */
 function SpendTrend({ series }: { series: Array<{ date: string; spend: number }> }) {
   const width = 300
   const height = 96
   const pad = 6
+  const [hover, setHover] = useState<number | null>(null)
+
   const max = Math.max(1, ...series.map((item) => item.spend))
   const step = series.length > 1 ? (width - pad * 2) / (series.length - 1) : 0
   const points = series.map((item, index) => ({
-    x: pad + index * step,
+    // 只有一天时 step 为 0，点会全叠在左边，居中画更好看
+    x: series.length > 1 ? pad + index * step : width / 2,
     y: height - pad - (item.spend / max) * (height - pad * 2),
     date: item.date,
     spend: item.spend,
@@ -614,18 +621,92 @@ function SpendTrend({ series }: { series: Array<{ date: string; spend: number }>
   const line = points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ')
   const baseline = (height - pad).toFixed(1)
   const area = `${pad.toFixed(1)},${baseline} ${line} ${(pad + (series.length - 1) * step).toFixed(1)},${baseline}`
+  const active = hover === null ? null : points[hover]
+  const total = series.reduce((sum, item) => sum + item.spend, 0)
+  const peak = points.reduce((best, point) => (point.spend > best.spend ? point : best), points[0])
+
+  /** 按横坐标找最近的一天：整条竖线范围都算命中，不用瞄准圆点 */
+  const trackPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (!rect.width || !points.length) return
+    const x = ((event.clientX - rect.left) / rect.width) * width
+    let nearest = 0
+    for (let i = 1; i < points.length; i += 1) {
+      if (Math.abs(points[i].x - x) < Math.abs(points[nearest].x - x)) nearest = i
+    }
+    setHover(nearest)
+  }
 
   return (
     <div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="日消耗趋势">
-        <polygon points={area} fill="rgba(96,165,250,0.16)" />
-        <polyline points={line} fill="none" stroke="#60a5fa" strokeWidth={1.6} strokeLinejoin="round" />
-        {points.map((point) => (
-          <circle key={point.date} cx={point.x} cy={point.y} r={2.2} fill="#3b82f6">
-            <title>{`${point.date} ¥${fmtMoney(point.spend)}`}</title>
-          </circle>
-        ))}
-      </svg>
+      <div className="mb-1 flex items-baseline justify-between gap-2 text-[10px]">
+        <span className="truncate text-gray-400">
+          合计 ¥{fmtMoney(total)} · 峰值 ¥{fmtMoney(peak.spend)}（{peak.date.slice(5)}）
+        </span>
+        {active && (
+          <span className="shrink-0 font-mono font-medium text-blue-500">
+            {active.date.slice(5)} ¥{fmtMoney(active.spend)}
+          </span>
+        )}
+      </div>
+      <div
+        className="relative touch-none"
+        onPointerMove={trackPointer}
+        onPointerDown={trackPointer}
+        onPointerLeave={() => setHover(null)}
+      >
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="日消耗趋势">
+          {/* 三条淡横线当刻度，读高低有个参照，不画坐标轴省空间 */}
+          {[0.25, 0.5, 0.75].map((ratio) => (
+            <line
+              key={ratio}
+              x1={pad}
+              x2={width - pad}
+              y1={pad + ratio * (height - pad * 2)}
+              y2={pad + ratio * (height - pad * 2)}
+              stroke="currentColor"
+              className="text-gray-200 dark:text-white/10"
+              strokeWidth={0.6}
+            />
+          ))}
+          <polygon points={area} fill="rgba(96,165,250,0.16)" />
+          <polyline points={line} fill="none" stroke="#60a5fa" strokeWidth={1.6} strokeLinejoin="round" />
+          {active && (
+            <line
+              x1={active.x}
+              x2={active.x}
+              y1={pad}
+              y2={height - pad}
+              stroke="#60a5fa"
+              strokeWidth={0.8}
+              strokeDasharray="2 2"
+            />
+          )}
+          {points.map((point, index) => (
+            <circle
+              key={point.date}
+              cx={point.x}
+              cy={point.y}
+              r={hover === index ? 3.4 : 2.2}
+              fill={hover === index ? '#1d4ed8' : '#3b82f6'}
+              stroke={hover === index ? '#ffffff' : 'none'}
+              strokeWidth={1}
+            />
+          ))}
+        </svg>
+        {active && (
+          <div
+            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-[130%] whitespace-nowrap rounded bg-gray-900/95 px-1.5 py-0.5 text-[10px] text-white shadow-lg dark:bg-white dark:text-gray-900"
+            // clamp 让浮层贴左右边缘时也不出界
+            style={{
+              left: `clamp(2.6rem, ${(active.x / width) * 100}%, calc(100% - 2.6rem))`,
+              top: `${(active.y / height) * 100}%`,
+            }}
+          >
+            <span className="font-mono">{active.date}</span> ¥{fmtMoney(active.spend)}
+          </div>
+        )}
+      </div>
       <div className="mt-1 flex justify-between text-[10px] text-gray-400">
         <span className="font-mono">{series[0].date}</span>
         <span className="font-mono">{series[series.length - 1].date}</span>
@@ -663,6 +744,15 @@ function AssetDetail({
   const [src, setSrc] = useState('')
   const [parentPick, setParentPick] = useState('')
   const [linking, setLinking] = useState(false)
+  /**
+   * 平台素材 ID 是否展开。
+   *
+   * 一个素材被平台重复上传、或被「模拟关联」一次性挂上一大批 ID 时，
+   * 这串 ID 能有几百个，`break-all` 铺下来直接把抽屉撑到两屏，
+   * 下面的消耗、血缘全被挤走。默认只露前 3 个。
+   */
+  const [idsOpen, setIdsOpen] = useState(false)
+  const [idsCopied, setIdsCopied] = useState(false)
   const stat = byAsset.get(asset.id)
   const series = useMemo(() => assetDailySeries(spend, asset.id), [spend, asset.id])
   const task = tasks.find((item) => item.id === asset.taskId)
@@ -726,7 +816,8 @@ function AssetDetail({
         </button>
         {src && <p className="mb-3 text-[10px] text-gray-400">点击图片查看大图</p>}
 
-        <p className="mb-3 break-all font-mono text-[10px] text-gray-400">{asset.id}</p>
+        {/* 真实素材的 id 是 64 位哈希，break-all 会铺三行，截断 + title 看全 */}
+        <p className="mb-3 truncate font-mono text-[10px] text-gray-400" title={asset.id}>{asset.id}</p>
 
         <div className="mb-4 grid grid-cols-3 gap-2">
           {/* 口径是「当前日期范围」，不是历史累计 —— 数据按区间加载，改回累计会拿不到全量 */}
@@ -751,13 +842,75 @@ function AssetDetail({
             {latestSpend?.productName && <p>产品：{latestSpend.productName}</p>}
             {latestSpend?.designer && <p>设计：{latestSpend.designer}</p>}
             {latestSpend?.optimizer && <p>优化师：{latestSpend.optimizer}</p>}
-            <p className="break-all">平台素材 ID：{asset.platformIds.length ? asset.platformIds.join('、') : '未匹配'}</p>
             {simulatedHere > 0 && (
               <p className="text-amber-600 dark:text-amber-400">
                 其中 {simulatedHere} 条为模拟关联（调试用，未真实匹配）
               </p>
             )}
           </div>
+        </div>
+
+        <div className="mb-4">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <p className="text-[11px] text-gray-500 dark:text-gray-400">
+              平台素材 ID{asset.platformIds.length > 0 && `（${asset.platformIds.length}）`}
+            </p>
+            {asset.platformIds.length > 0 && (
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    // 复制整串（每行一个），方便拿去平台后台或 Excel 里比对
+                    void navigator.clipboard?.writeText(asset.platformIds.join('\n'))
+                      .then(() => setIdsCopied(true))
+                      .catch(() => setIdsCopied(false))
+                  }}
+                  className="text-[10px] text-blue-500 hover:underline"
+                >
+                  {idsCopied ? '已复制' : '复制全部'}
+                </button>
+                {idsOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setIdsOpen(false)}
+                    className="text-[10px] text-gray-500 hover:underline"
+                  >
+                    收起
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          {!asset.platformIds.length ? (
+            <p className="text-[11px] text-gray-400">未匹配</p>
+          ) : (
+            <div
+              className={
+                idsOpen
+                  ? 'flex max-h-28 flex-wrap gap-1 overflow-y-auto overscroll-contain rounded-lg border border-gray-100 p-1.5 dark:border-white/10'
+                  : 'flex flex-wrap gap-1'
+              }
+            >
+              {(idsOpen ? asset.platformIds : asset.platformIds.slice(0, 3)).map((platformId) => (
+                <span
+                  key={platformId}
+                  className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-600 dark:bg-white/10 dark:text-gray-300"
+                >
+                  {platformId}
+                </span>
+              ))}
+              {!idsOpen && asset.platformIds.length > 3 && (
+                <button
+                  type="button"
+                  onClick={() => setIdsOpen(true)}
+                  className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-600 hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300"
+                  title={`点开展示全部 ${asset.platformIds.length} 个平台素材 ID`}
+                >
+                  还有 {asset.platformIds.length - 3} 个
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="mb-4">
@@ -1560,8 +1713,13 @@ interface ReportRow {
   assetCount: number
 }
 
-/** 迷你趋势图：一条折线，不画坐标轴 —— 看的是「往上还是往下」，不是精确读值 */
-function Sparkline({ values }: { values: number[] }) {
+/**
+ * 迷你趋势图：一条折线，不画坐标轴 —— 看的是「往上还是下降」，不是精确读值。
+ *
+ * 每个点盖一个透明的圆当命中区并挂 `title`：看图能看出走势，想知道具体哪天多少钱
+ * 就把鼠标放到那一列上（点在 64px 宽里只有 1px，直接挂 title 是点不中的）。
+ */
+function Sparkline({ values, dates }: { values: number[]; dates?: string[] }) {
   if (!values.length || values.every((value) => value === 0)) {
     return <span className="text-[10px] text-gray-300 dark:text-gray-600">—</span>
   }
@@ -1575,6 +1733,17 @@ function Sparkline({ values }: { values: number[] }) {
   return (
     <svg width={width} height={height} className="overflow-visible" aria-hidden="true">
       <polyline points={points} fill="none" stroke="#60a5fa" strokeWidth={1.3} strokeLinejoin="round" />
+      {values.map((value, index) => (
+        <circle
+          key={index}
+          cx={index * step}
+          cy={height - 2 - (value / max) * (height - 4)}
+          r={2.6}
+          fill="transparent"
+        >
+          <title>{`${dates?.[index] ?? `第 ${index + 1} 天`} ¥${fmtMoney(value)}`}</title>
+        </circle>
+      ))}
     </svg>
   )
 }
@@ -1879,7 +2048,7 @@ function AssetReportTab({
                     </td>
                     <td className="py-1.5 pr-3 text-right text-gray-500">{row.days}</td>
                     <td className="py-1.5 pr-3">
-                      <Sparkline values={row.series} />
+                      <Sparkline values={row.series} dates={trendDates} />
                     </td>
                     <td className="py-1.5 text-right text-gray-700 dark:text-gray-200">¥{fmtMoney(row.spend)}</td>
                   </tr>
