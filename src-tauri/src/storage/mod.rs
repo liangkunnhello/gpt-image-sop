@@ -200,12 +200,47 @@ fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
     }
     for (idx, sql) in migrations.iter().enumerate().skip(version) {
         let tx = conn.transaction()?;
-        tx.execute_batch(sql)?;
-        tx.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
-            [(idx + 1).to_string()],
-        )?;
-        tx.commit()?;
+        match tx.execute_batch(sql) {
+            Ok(()) => {
+                tx.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
+                    [(idx + 1).to_string()],
+                )?;
+                tx.commit()?;
+            }
+            /*
+             * 「列已存在」不算失败。
+             *
+             * 投放跟踪的表可能是从别的库整表搬过来的（2.0.0 把老的 track 库并进主线时
+             * 就是这么做的），那种表一建好就带着 spend_date 等生成列，这里的
+             * ALTER TABLE ADD COLUMN 必然撞 `duplicate column name`。
+             *
+             * 以前这里直接返回 Err，后果是整个 Storage 打不开 —— 用户能看到的
+             * 只有设置页里一行 `duplicate column name: spend_date`，任务和台账全都读不出来。
+             * 其实这条迁移的目标状态已经达成，把它剩下能跑的语句（建索引、删旧索引
+             * 都是幂等的）补跑一遍，再推进版本号继续往下走就行。
+             */
+            Err(err) if err.to_string().contains("duplicate column name") => {
+                drop(tx);
+                // 迁移里全是 DDL，没有带分号的字符串字面量，按 ; 拆开重试是安全的
+                for statement in sql.split(';') {
+                    let statement = statement.trim();
+                    if statement.is_empty() {
+                        continue;
+                    }
+                    if let Err(error) = conn.execute_batch(statement) {
+                        if !error.to_string().contains("duplicate column name") {
+                            return Err(error.into());
+                        }
+                    }
+                }
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
+                    [(idx + 1).to_string()],
+                )?;
+            }
+            Err(err) => return Err(err.into()),
+        }
     }
     Ok(())
 }
