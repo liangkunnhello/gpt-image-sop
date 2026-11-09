@@ -1054,6 +1054,32 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                   </div>
                 </div>
 
+                {/*
+                  成品尺寸的口径。
+                  默认「按模板尺寸」：上面填的 1280×720 是投放平台收片的规格，
+                  成品必须正好是这个数（后台按尺寸审素材，交 2K 反而是尺寸不符，
+                  还会因为体积上限被二次压缩）。要保留 AI 原图分辨率就切到第二项。
+                */}
+                <div className="mb-2">
+                  <div className="mb-1 text-[10px] text-gray-400">出图尺寸</div>
+                  <select
+                    value={active.outputSizeMode ?? 'template'}
+                    onChange={(e) => patchActive(
+                      { outputSizeMode: e.target.value === 'source' ? 'source' : 'template' },
+                      { coalesceKey: 'template:outputSizeMode' },
+                    )}
+                    className="w-full rounded border border-gray-200 bg-white px-1.5 py-1 text-[11px] dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
+                  >
+                    <option value="template">按模板尺寸 {active.width}×{active.height}（投放规格）</option>
+                    <option value="source">跟随 AI 原图分辨率（不缩放）</option>
+                  </select>
+                  <p className="mt-1 text-[10px] leading-relaxed text-gray-400">
+                    {active.outputSizeMode === 'source'
+                      ? '成品保持 AI 直出的大小，字号按比例放大；交付前要自己按渠道再裁一次。'
+                      : '成品正好是这个尺寸，文件也更小；原图比它大时按短边铺满、居中裁切。'}
+                  </p>
+                </div>
+
                 <div className="mb-2">
                   <div className="mb-1 text-[10px] text-gray-400">投放渠道（通用模板任何渠道都能套）</div>
                   <select

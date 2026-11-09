@@ -130,13 +130,50 @@ export function postTemplateScale(templateHeight: number, canvasHeight: number):
 }
 
 /**
+ * 套完模板后画布该多大。
+ *
+ * 默认 **就是模板画布尺寸**：模板上填的 `1280×720` 是投放平台收片的规格，
+ * 交付出去的图必须是这个尺寸。原图可能是 2560×1440（渠道只认它那几个档位），
+ * 但成品不能再往下传 2K —— 后台按 1280×720 收，交 2K 会被判「尺寸不符」，
+ * 文件也会因为体积上限被二次压缩。
+ *
+ * 模板上勾了「跟随原图分辨率」（`outputSizeMode === 'source'`）才保留 AI 原图尺寸，
+ * 这时字号按 `画布高 / 模板高` 放大，排版比例不变。
+ */
+export function postCanvasSize(
+  template: Pick<PostTemplate, 'width' | 'height' | 'outputSizeMode'>,
+  sourceWidth: number,
+  sourceHeight: number,
+  /**
+   * 显式指定成品尺寸（导出的老流程会传）。
+   * 传了就以它为准，三处调用口径统一在 `applyPostTemplate` 里。
+   */
+  override?: { width: number; height: number },
+): { width: number; height: number; scale: number; mode: 'template' | 'source' | 'override' } {
+  const templateWidth = Math.max(1, Math.round(template.width || 0))
+  const templateHeight = Math.max(1, Math.round(template.height || 0))
+
+  if (override && override.width > 0 && override.height > 0) {
+    const width = Math.max(1, Math.round(override.width))
+    const height = Math.max(1, Math.round(override.height))
+    return { width, height, scale: postTemplateScale(templateHeight, height), mode: 'override' }
+  }
+
+  if (template.outputSizeMode === 'source' && sourceWidth > 0 && sourceHeight > 0) {
+    const width = Math.max(1, Math.round(sourceWidth))
+    const height = Math.max(1, Math.round(sourceHeight))
+    return { width, height, scale: postTemplateScale(templateHeight, height), mode: 'source' }
+  }
+
+  // 模板尺寸本身就是交付规格：字号不用放大（scale = 1），和设计稿 1:1
+  return { width: templateWidth, height: templateHeight, scale: 1, mode: 'template' }
+}
+
+/**
  * 把原图铺满画布，再叠加模板里的文字与 logo。失败时抛错，调用方负责回退原图。
  *
- * **画布尺寸默认取原图自己的分辨率，而不是模板画布**：
- * 灵境的模板画布普遍是 1280×720，早期的做法是「新建 1280×720 画布再把原图缩进去」，
- * 结果 2560×1440 的生成图全被压成了 1280×720 —— 花了 2K 的钱，交付出去是 720p。
- * 现在按原图尺寸出画布，元素用比例坐标、像素值按高度倍数放大，成品保真。
- * 需要固定尺寸时（比如模板本身就是出图规格）传 `outputSize` 覆盖。
+ * 画布尺寸见 `postCanvasSize`：默认按模板画布（交付规格），
+ * 模板勾了「跟随原图」才用 AI 原图分辨率。原图超出画布时按「短边铺满、居中裁切」。
  */
 export async function applyPostTemplate(
   dataUrl: string,
@@ -144,9 +181,8 @@ export async function applyPostTemplate(
   outputSize?: { width: number; height: number },
 ): Promise<string> {
   const source = await loadImage(dataUrl)
-  const canvasWidth = Math.max(1, Math.round(outputSize?.width ?? source.naturalWidth ?? template.width))
-  const canvasHeight = Math.max(1, Math.round(outputSize?.height ?? source.naturalHeight ?? template.height))
-  const scale = postTemplateScale(template.height, canvasHeight)
+  const canvasSize = postCanvasSize(template, source.naturalWidth, source.naturalHeight, outputSize)
+  const { width: canvasWidth, height: canvasHeight, scale } = canvasSize
   const canvas = document.createElement('canvas')
   canvas.width = canvasWidth
   canvas.height = canvasHeight

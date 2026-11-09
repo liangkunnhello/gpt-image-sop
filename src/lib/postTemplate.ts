@@ -42,13 +42,30 @@ export interface PostElement {
   hidden?: boolean
 }
 
+/**
+ * 套完模板后成品是多大。
+ *
+ * - `template`：就是模板画布尺寸（`1280×720` 这种）。投放平台是按尺寸收片的，
+ *   模板上填的数字本来就是对外的交付规格，所以默认走这个；
+ * - `source`：跟随 AI 直出原图的分辨率（`2560×1440` 还是 2560×1440），
+ *   字号按倍数放大。适合「先出大图，后期再按渠道裁」的流程。
+ */
+export type PostOutputSizeMode = 'template' | 'source'
+
 export interface PostTemplate {
   id: string
   /** 模板名，例如「9:16 竖版 A」 */
   label: string
-  /** 目标画布尺寸；出图比例要能对上才会套用 */
+  /** 目标画布尺寸；出图比例要能对上才会套用；默认也是成品的尺寸 */
   width: number
   height: number
+  /**
+   * 成品尺寸口径，缺省按 `template`。
+   *
+   * 缺省必须是 template：模板里填的 1280×720 是投放平台的要求，
+   * 拿去交付的图必须是这个尺寸，不能因为原图是 2K 就交 2K。
+   */
+  outputSizeMode?: PostOutputSizeMode
   /**
    * 投放渠道（取值见 lib/channel 的 CHANNELS）。
    * 空表示通用：任何渠道都能套用，同渠道的模板优先。
