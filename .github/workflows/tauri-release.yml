@@ -20,6 +20,9 @@ jobs:
     outputs:
       enabled: ${{ steps.check.outputs.enabled }}
     steps:
+      # 下面要用 jq 读 package.json 判版本号，必须先把仓库取下来
+      # （这段「拦 -track 版本」的逻辑是从 track 分支并过来的，那边有 checkout，主流水线原来没有）
+      - uses: actions/checkout@v4
       - id: check
         env:
           SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
