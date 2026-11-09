@@ -151,9 +151,11 @@ def merge_directions(main: sqlite3.Connection, tracker: sqlite3.Connection, writ
 
     if write and extra:
         main_holder['directions'] = main_dirs + extra
+        # kv.updated_at 是 NOT NULL，插入时必须给值（客户端按它判断哪些设置更新过）
         main.execute(
-            'INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-            (STORE_KEY, json.dumps(main_state, ensure_ascii=False)),
+            'INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) '
+            'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+            (STORE_KEY, json.dumps(main_state, ensure_ascii=False), int(time.time() * 1000)),
         )
         main.commit()
     return (len(main_dirs), len(extra))
