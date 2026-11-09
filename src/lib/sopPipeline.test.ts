@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiProfile } from '../types'
-import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, generatePrompts, needsLayoutOptimize, resolveSopTextModel, rewriteSopText, sceneSimilarity, SOP_TEXT_MODEL, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
+import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, generatePrompts, needsLayoutOptimize, resolveSopTextModel, rewriteSopText, sceneSimilarity, SOP_TEXT_MODEL, sopHasPeople, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from './promptLimits'
 
 const profile = {
@@ -510,5 +510,63 @@ describe('排版专项优化只对 deepseek-v4.1 生效', () => {
   it('profile 没填 sopTextModel 时回落到默认模型', () => {
     expect(resolveSopTextModel(profile)).toBe(SOP_TEXT_MODEL)
     expect(resolveSopTextModel({ ...profile, sopTextModel: ' gemini-3.8-flash ' } as ApiProfile)).toBe('gemini-3.8-flash')
+  })
+})
+
+/**
+ * 真实事故：纯文字大字报 SOP（画面元素只有 3D 数字、卡板、字模、剪影）反推出图，
+ * 35 条提示词里有 20 条被塞进「独居中年男士」「青年女性」这类写实人物，
+ * 出图全是真人。根因是规划阶段和写词阶段都把「人物」写成了必填项。
+ */
+describe('SOP 有没有人物', () => {
+  const HEADLINE_SOP = [
+    '## 画面元素',
+    '* **核心主体**：超大三维立体渲染数字、厚重浮雕字模，或承载文字的微投影圆角悬浮白板。',
+    '* **背景与层次**：双色斜切分块、放射性光芒光束、微缩城市天际线剪影。',
+    '## 必守与禁忌',
+    '* 严禁出现任何按钮、可点击区域。',
+  ].join('\n')
+
+  const FIGURE_SOP = [
+    '## 画面元素',
+    '* **角色造型**：高精度 3D 黏土/微缩盲盒公仔风格人物，3.5~4 头身，大眼微笑唇。',
+  ].join('\n')
+
+  it('纯文字大字报 SOP 判为没有人物', () => {
+    expect(sopHasPeople(HEADLINE_SOP)).toBe(false)
+  })
+
+  it('有 3D 公仔角色的 SOP 判为有人物', () => {
+    expect(sopHasPeople(FIGURE_SOP)).toBe(true)
+  })
+
+  it('写「严禁出现任何人物」的判为没有人物', () => {
+    expect(sopHasPeople('## 禁忌\n严禁出现任何人物与真人。')).toBe(false)
+  })
+
+  it('写「严禁写实人物」不算禁止人物（画面本身有人）', () => {
+    expect(sopHasPeople('## 必守\n角色形象恒定，严禁写实人物与毛孔。')).toBe(true)
+  })
+
+  it('空 SOP 判为没有人物', () => {
+    expect(sopHasPeople('')).toBe(false)
+  })
+})
+
+describe('写词规则随 SOP 切换', () => {
+  const HEADLINE_SOP = '## 画面元素\n* 超大三维立体渲染数字、厚重浮雕字模、微缩城市天际线剪影。'
+  const FIGURE_SOP = '## 画面元素\n* 高精度 3D 黏土盲盒公仔人物，3.5~4 头身。'
+
+  it('没有人物时：要素清单换成主体形态，并明确禁止加人', () => {
+    const { system } = buildPromptMessages({ sopText: HEADLINE_SOP, count: 1 })
+    expect(system).toContain('这份 SOP 里没有人物')
+    expect(system).toContain('主体形态')
+    expect(system).not.toContain('版式、场景、人物、色调')
+  })
+
+  it('有人物时：仍然要求描述人物，不加禁止项', () => {
+    const { system } = buildPromptMessages({ sopText: FIGURE_SOP, count: 1 })
+    expect(system).toContain('版式、场景、人物、色调')
+    expect(system).not.toContain('这份 SOP 里没有人物')
   })
 })
