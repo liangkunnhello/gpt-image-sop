@@ -42,6 +42,7 @@ export default function TaskGrid() {
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
   const activeFilterId = useSopStore((s) => s.activeFilterId)
+  const setActiveFilter = useSopStore((s) => s.setActiveFilter)
   const channelFilter = useStore((s) => s.channelFilter)
   const sopDirections = useSopStore((s) => s.directions)
   const directionFilter = useMemo(
@@ -312,7 +313,25 @@ export default function TaskGrid() {
     return (
       <div className="text-center py-20 text-gray-400 dark:text-gray-500">
         {searchQuery || filterFavorite ? (
-          <p className="text-sm">没有找到匹配的任务</p>
+          <>
+            <p className="text-sm">没有找到匹配的任务</p>
+            {/*
+              搜索和方向筛选是叠加的（先圈范围再搜）。但搜文件名/ID 时，
+              用户心里的范围是「整个库」，搜不到八成是因为左边选着某个方向，
+              这里直接把原因和出口写出来，省得以为是搜索坏了。
+            */}
+            {searchQuery.trim() && activeFilterId && (
+              <button
+                type="button"
+                onClick={() => setActiveFilter(null)}
+                className="mt-2 text-xs text-blue-500 hover:underline"
+              >
+                当前只在「{activeFilterId === UNASSIGNED_FILTER
+                  ? '未归属'
+                  : sopDirections.find((node) => node.id === activeFilterId)?.name ?? '所选方向'}」里搜索 · 搜索全部方向
+              </button>
+            )}
+          </>
         ) : (
           <>
             <svg

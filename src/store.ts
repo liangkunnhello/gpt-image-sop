@@ -1479,7 +1479,25 @@ export function taskMatchesSearchQuery(task: TaskRecord, query: string) {
   const prompt = getTaskPromptText(task.prompt || '', task.inputImageIds.length).toLowerCase()
   const paramStr = JSON.stringify(task.params).toLowerCase()
   const errorStr = [task.error, ...(task.outputErrors ?? []).map((item) => item.error)].filter(Boolean).join('\n').toLowerCase()
-  return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q)
+  if (prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q)) return true
+  /*
+   * 交付文件名也参与搜索。
+   *
+   * 最常见的场景：手上只有一个从交付目录 / 投放后台拿到的文件
+   * （`20261029-京东保-扁平插画-闪屏-合家欢-600万-梁坤-46.jpeg`），
+   * 想知道它是哪张任务卡生成的。以前只能翻台账或去文件夹里找，
+   * 现在直接把文件名贴进搜索框就行 —— 文件名是交付时记在卡上的，
+   * 所以命中的卡就是生成它的那张（同一张卡的多张图各有一条记录）。
+   *
+   * 只贴其中一段（日期、产品名、序号）也能命中；带不带扩展名都行。
+   */
+  if (task.deliveredFileNames) {
+    for (const fileName of Object.values(task.deliveredFileNames)) {
+      if (fileName.toLowerCase().includes(q)) return true
+    }
+  }
+  // 交付目录名也一起：按「20261106-京东保-图标-诱导」找整批比逐个文件名快
+  return Boolean(task.deliverFolder && task.deliverFolder.toLowerCase().includes(q))
 }
 
 export function showCodexCliPrompt(force = false, reason = '接口返回的提示词已被改写') {

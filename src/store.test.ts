@@ -4064,6 +4064,30 @@ describe('agent context for removed outputs', () => {
     expect(taskMatchesSearchQuery(target, 'zzzzzz')).toBe(false)
   })
 
+  it('交付文件名能搜到对应的任务卡：贴全名、只贴一段、带不带扩展名都行', () => {
+    /*
+     * 真实场景：手上只有一个从交付目录拿到的文件
+     * `20261029-京东保-扁平插画-闪屏-合家欢-600万-梁坤-46.jpeg`，
+     * 想知道它是哪张任务卡生成的。文件名是交付时记在卡上的。
+     */
+    const target = task({
+      id: 'card-46',
+      deliveredFileNames: {
+        'img-a': '20261029-京东保-扁平插画-闪屏-合家欢-600万-梁坤-46.jpeg',
+        'img-b': '20261029-京东保-扁平插画-闪屏-合家欢-600万-梁坤-47.jpeg',
+      },
+      deliverFolder: '20261029-京东保-扁平插画-闪屏-合家欢-600万-梁坤',
+    })
+    const other = task({ id: 'card-99', prompt: '另一条完全不相干的提示词' })
+
+    expect(taskMatchesSearchQuery(target, '20261029-京东保-扁平插画-闪屏-合家欢-600万-梁坤-46.jpeg')).toBe(true)
+    expect(taskMatchesSearchQuery(target, '梁坤-46')).toBe(true)
+    expect(taskMatchesSearchQuery(target, '梁坤-46.jpeg')).toBe(true)
+    // 这一段同时出现在目录名里，仍然算命中（同一张卡的多张图共享前缀）
+    expect(taskMatchesSearchQuery(target, '20261029-京东保-扁平插画')).toBe(true)
+    expect(taskMatchesSearchQuery(other, '梁坤-46')).toBe(false)
+  })
+
   it('clears partial failure markers without deleting successful outputs', async () => {
     const partial = task({
       id: 'partial-task',
