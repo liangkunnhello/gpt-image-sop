@@ -27,8 +27,8 @@
     python cli/tools/sync_daily_batch.py --date 20261106 --write
     python cli/tools/sync_daily_batch.py --days 3 --write   # 补最近 3 天
 
-定时：`--install-task` 会注册一个每 15 分钟跑一次的计划任务（Windows），
-因为没有变化时它会立刻退出，所以跑得勤也不费事。
+定时：`--install-task` 会注册一个每天 **13:00** 跑一次的计划任务（Windows），
+只处理「内部系统」这个带报表的渠道；`--days 2` 顺带补昨天的漏。
 """
 from __future__ import annotations
 
@@ -52,9 +52,25 @@ PLATFORMS = ["内部系统", "妙思", "有米云", "热云"]
 
 TASK_NAME = "GPT-SOP-每日报表与素材同步"
 
+# 计划任务里 stdout 可能是无效句柄，排查用的「走到哪一步」必须直接写文件
+TRACE_PATH = None  # type: Path | None
+
+
+def note(message: str) -> None:
+    if TRACE_PATH is None:
+        return
+    try:
+        with TRACE_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(f"[{datetime.now():%H:%M:%S}] {message}\n")
+    except OSError:
+        pass
+
 
 def data_dir() -> Path:
-    return Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "GPT SOP Tracker" / "data"
+    # 合并进主线后数据目录是 GPT Image SOP（老路径只在没升级的机器上回退）
+    sys.path.insert(0, str(TOOLS_DIR))
+    from local_db import data_dir as local_data_dir
+    return local_data_dir()
 
 
 def state_path() -> Path:
@@ -77,14 +93,15 @@ def save_state(state: dict) -> None:
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def find_batch_dirs(root: Path, day: str) -> list[tuple[str, Path]]:
+def find_batch_dirs(root: Path, day: str, platforms: list[str] | None = None) -> list[tuple[str, Path]]:
     """找出这一天各平台的批次目录。
 
     内部系统多一层 `图片/`（`20261106/图片/报表`），其他平台直接挂在日期下
     （`20261106/报表`），所以两种都要认。
+    `platforms` 只处理指定渠道（默认全部）。
     """
     out: list[tuple[str, Path]] = []
-    for platform in PLATFORMS:
+    for platform in (platforms or PLATFORMS):
         base = root / platform / day
         # 日期目录可能是 20261013 这种「数据日期 +1」，也可能带后缀
         if not base.is_dir():
@@ -121,7 +138,16 @@ def signature(batch: Path) -> str:
 def run_tool(script: Path, args: list[str], log) -> bool:
     command = [sys.executable, str(script), *args]
     log(f"  $ {' '.join(command[1:])}")
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        # 计划任务里没有控制台，子进程默认按 locale（cp936）输出，这里统一成 UTF-8，
+        # 否则日志里的中文会变成乱码
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
     for line in (result.stdout or "").splitlines():
         if line.strip():
             log(f"    {line}")
@@ -155,26 +181,34 @@ def sync_batch(platform: str, batch: Path, day: str, write: bool, log) -> bool:
 
 
 def install_task() -> int:
-    """注册 Windows 计划任务：每 15 分钟跑一次（没新数据时秒退）。"""
+    """注册 Windows 计划任务：每天 13:00 把当天（含昨天）的批次导进来。
+
+    用 ScheduledTasks 模块而不是 schtasks.exe：后者在这台机器的安全策略里被拦，
+    前者是 CIM 接口，普通用户就能给自己建任务。
+    `StartWhenAvailable` 让「13:00 时机器没开」的任务开机后补跑一次。
+    """
     script = Path(__file__).resolve()
     python = sys.executable
-    command = f'"{python}" "{script}" --write --quiet'
-    # 用 schtasks 而不是 XML：参数短、在任何 Windows 上都能用
-    args = [
-        "schtasks", "/create", "/f",
-        "/tn", TASK_NAME,
-        "/tr", command,
-        "/sc", "minute",
-        "/mo", "15",
-        "/rl", "LIMITED",
-    ]
-    result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    print(result.stdout.strip() or result.stderr.strip())
+    argument = f'"{script}" --write --quiet --platform 内部系统 --days 2'
+    shell_command = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$action = New-ScheduledTaskAction -Execute '{python}' -Argument '{argument}'; "
+        "$trigger = New-ScheduledTaskTrigger -Daily -At 13:00; "
+        "$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries "
+        "-DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3); "
+        f"Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $action -Trigger $trigger "
+        "-Settings $settings -Description '每天 13:00 把 NAS 内部系统当天批次的报表与素材导入投放跟踪' -Force | Out-Null"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", shell_command],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
     if result.returncode != 0:
+        print(result.stdout.strip() or result.stderr.strip())
         return result.returncode
-    print(f"已注册计划任务「{TASK_NAME}」：每 15 分钟检查一次；没有新数据会立刻退出。")
-    print("查看：schtasks /query /tn \"%s\" /v /fo LIST" % TASK_NAME)
-    print("删除：schtasks /delete /tn \"%s\" /f" % TASK_NAME)
+    print(f"已注册计划任务「{TASK_NAME}」：每天 13:00 同步「内部系统」当天批次（含昨天补漏）。")
+    print(f"查看：Get-ScheduledTask -TaskName '{TASK_NAME}' | Get-ScheduledTaskInfo")
+    print(f"删除：Unregister-ScheduledTask -TaskName '{TASK_NAME}' -Confirm:$false")
     return 0
 
 
@@ -186,16 +220,20 @@ def main() -> int:
     parser.add_argument("--write", action="store_true", help="真写入；不加只空跑")
     parser.add_argument("--force", action="store_true", help="忽略「已同步过」的标记")
     parser.add_argument("--quiet", action="store_true", help="没有新数据时不打印日志（给计划任务用）")
-    parser.add_argument("--install-task", action="store_true", help="注册/更新 Windows 计划任务后退出")
+    parser.add_argument("--platform", action="append", choices=PLATFORMS,
+                        help="只处理指定渠道（可写多次），默认全部；定时任务只跑「内部系统」")
+    parser.add_argument("--install-task", action="store_true", help="注册/更新每天 13:00 的 Windows 计划任务后退出")
     args = parser.parse_args()
 
     if args.install_task:
         return install_task()
 
     root = Path(args.root)
+    note(f"检查根目录 {root}")
     if not root.is_dir():
         print(f"根目录不可用：{root}（NAS 没连上？）")
         return 2
+    note("根目录可访问")
 
     days: list[str] = []
     # 从钩子里传进来的 {batchDate} 可能是空串（老记录没有这个字段），
@@ -210,7 +248,11 @@ def main() -> int:
     lines: list[str] = []
 
     def log(message: str) -> None:
-        print(message)
+        try:
+            print(message)
+        except (OSError, ValueError):
+            # 计划任务里没有控制台，stdout 可能是无效句柄；日志文件照写不误
+            pass
         lines.append(message)
 
     state = load_state()
@@ -218,7 +260,9 @@ def main() -> int:
     failed = 0
 
     for day in days:
-        batches = find_batch_dirs(root, day)
+        note(f"找 {day} 的批次")
+        batches = find_batch_dirs(root, day, args.platform)
+        note(f"{day} 命中 {len(batches)} 个批次")
         if not batches:
             continue
         for platform, batch in batches:
@@ -254,4 +298,28 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    """
+    Windows 计划任务里没有控制台，`sys.stdout` 是个**无效句柄**（不是 None）：
+    往里写会阻塞，表现出来就是「任务一直在运行中」，什么日志都没有。
+    所以先用 GetConsoleWindow 判断有没有控制台，没有就把标准输出接到日志文件。
+    """
+    trace = data_dir() / "sync-logs" / "task-trace.log"
+    trace.parent.mkdir(parents=True, exist_ok=True)
+    TRACE_PATH = trace
+    try:
+        import ctypes
+
+        headless = ctypes.windll.kernel32.GetConsoleWindow() == 0
+    except Exception:
+        headless = False
+    if headless:
+        stream = trace.open("a", encoding="utf-8", buffering=1)
+        sys.stdout = stream
+        sys.stderr = stream
+
+    with trace.open("a", encoding="utf-8") as fh:
+        fh.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] 启动 {' '.join(sys.argv[1:])}\n")
+    code = main()
+    with trace.open("a", encoding="utf-8") as fh:
+        fh.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] 结束 code={code}\n")
+    sys.exit(code)

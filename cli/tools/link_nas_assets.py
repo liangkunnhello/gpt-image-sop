@@ -174,9 +174,11 @@ def main() -> int:
         print(f"目录不存在：{root}")
         return 2
 
-    db_path = Path(args.db) if args.db else Path(
-        os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))
-    ) / "GPT SOP Tracker" / "data" / "data.db"
+    if args.db:
+        db_path = Path(args.db)
+    else:
+        from local_db import default_db
+        db_path = default_db()
     if not db_path.exists():
         print(f"找不到数据库：{db_path}")
         return 2

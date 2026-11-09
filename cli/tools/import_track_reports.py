@@ -349,9 +349,12 @@ def main() -> int:
     parser.add_argument("--write", action="store_true", help="真写入（不加只空跑看合计）")
     args = parser.parse_args()
 
-    db_path = Path(args.db) if args.db else Path(
-        os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))
-    ) / "GPT SOP Tracker" / "data" / "data.db"
+    if args.db:
+        db_path = Path(args.db)
+    else:
+        # 合并进主线后默认库在 GPT Image SOP，老路径只作回退（见 local_db.py）
+        from local_db import default_db
+        db_path = default_db()
     if not db_path.exists():
         print(f"找不到数据库：{db_path}")
         return 2

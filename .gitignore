@@ -28,3 +28,6 @@ data-backups/
 # 本地产研工具目录（记忆、临时截图），不属于项目内容
 .workbuddy/
 .tmp-preview*/
+
+# Python 编译缓存（tools 里的脚本会生成）
+__pycache__/
