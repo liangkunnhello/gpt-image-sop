@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
 import { TASK_STOPPED_MESSAGE, useStore, resumeCard, retryTask, stopCard } from '../store'
 import { useClipStore } from '../lib/clipSimilarity'
@@ -298,6 +298,19 @@ export default function TaskCard({
     return () => clearInterval(id)
   }, [task.customRecoverable, task.falRecoverable, task.status])
 
+  /**
+   * 缩略图的依赖要「按图片 id」而不是按数组。
+   *
+   * 卡片是聚合出来的（同一 sopJobId 的多条任务拼一张卡），groupSopTasks 每次都
+   * flatMap 出一个新的 outputImages 数组。直接把数组放进依赖，任何一条任务完成
+   * （批量时一秒几十次 store 更新）都会让所有卡片的 effect 重跑：
+   * 先把 thumbSrc 清空、再异步取缩略图 —— 看起来就是「缩略图全都不见了」。
+   * 取第一张图的 id 当依赖，内容没变就不会重载。
+   */
+  const visibleIds = useMemo(() => visibleOutputImages(task), [task.outputImages, task.trashedOutputImages])
+  const thumbnailImageId = visibleIds[0] ?? ''
+  const gridThumbsKey = visibleIds.length > 1 ? visibleIds.slice(0, 4).join('|') : ''
+
   // 加载缩略图
   useEffect(() => {
     if (!nearViewport) return
@@ -306,7 +319,7 @@ export default function TaskCard({
     setThumbSrc('')
 
     let cancelled = false
-    const imageId = visibleOutputImages(task)[0]
+    const imageId = thumbnailImageId
     let unsubscribe: (() => void) | undefined
 
     const applyThumbnail = (thumbnail: { src: string; width?: number; height?: number }) => {
@@ -332,12 +345,11 @@ export default function TaskCard({
       cancelled = true
       unsubscribe?.()
     }
-  }, [nearViewport, task.outputImages])
+  }, [nearViewport, thumbnailImageId])
 
   // 一卡多图（SOP 聚合卡）：加载前四张缩略图拼成网格
   useEffect(() => {
-    const visibleIds = visibleOutputImages(task)
-    const ids = visibleIds.length > 1 ? visibleIds.slice(0, 4) : []
+    const ids = gridThumbsKey ? gridThumbsKey.split('|') : []
     if (!nearViewport || !ids.length) {
       setGridThumbs([])
       return
@@ -351,7 +363,7 @@ export default function TaskCard({
     return () => {
       cancelled = true
     }
-  }, [nearViewport, task.outputImages, task.trashedOutputImages])
+  }, [nearViewport, gridThumbsKey])
 
   const duration = (() => {
     let seconds: number
