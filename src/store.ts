@@ -3323,10 +3323,12 @@ const REAPPLY_COMMIT_BATCH = 20
  */
 export function reapplyTargetIndexes(task: TaskRecord): number[] {
   const trashed = new Set(task.trashedOutputImages ?? [])
+  // 没存过 AI 原图的任务 = 生成时没套后处理，成品本身就是原图，全部可重做
+  const sources = task.sourceImages?.length ? task.sourceImages : task.outputImages
   const indexes: number[] = []
   task.outputImages.forEach((imageId, index) => {
     if (!imageId || trashed.has(imageId)) return
-    if (index >= (task.sourceImages?.length ?? 0)) return
+    if (index >= sources.length) return
     indexes.push(index)
   })
   return indexes
@@ -3343,14 +3345,15 @@ export async function reapplyPostTemplate(
     throw new Error('透明背景的任务暂不支持再次后处理，请重新生图')
   }
   const group = tasksOfCard(useStore.getState().tasks, task)
-  // 有些老任务没留原图（或那一张当时没套模板、原图与成品同一份），单独跳过，不拖累整卡
+  // 有些老任务没留原图（或那一张当时没套模板、原图与成品同一份）：
+  // 前者用成品当原图兜底（生成时没套后处理，成品即原图），后者单独跳过，不拖累整卡
   const ready = group.filter((item) => (
     item.outputImages.length > 0
-    && item.sourceImages?.length === item.outputImages.length
-    && item.sourceImages.every(Boolean)
+    && (!item.sourceImages?.length
+      || (item.sourceImages.length === item.outputImages.length && item.sourceImages.every(Boolean)))
   ))
   if (!ready.length) {
-    throw new Error('这个任务没有保留 AI 原图，无法再次后处理（只有新版客户端出的图支持）')
+    throw new Error('这个任务没有可后处理的输出图，无法再次后处理')
   }
   if (ready.some((item) => item.transparentOutput)) {
     throw new Error('透明背景的任务暂不支持再次后处理，请重新生图')
@@ -3392,16 +3395,22 @@ export async function reapplyPostTemplate(
 
   // 攒着一起提交：几百张的卡逐张 setState，等于把「整个任务列表序列化 + 重新渲染」
   // 做几百次，主线程会被占满（实测几百张时直接「页面未响应」）
-  const pendingUpdates: Array<{ id: string; nextIds: string[] }> = []
+  const pendingUpdates: Array<{ id: string; nextIds: string[]; sourceIds: string[] }> = []
   const flushUpdates = () => {
     if (!pendingUpdates.length) return
-    const patches = new Map(pendingUpdates.map((entry) => [entry.id, entry.nextIds]))
+    const patches = new Map(pendingUpdates.map((entry) => [entry.id, entry]))
     useStore.setState((state) => ({
-      tasks: state.tasks.map((entry) => (
-        patches.has(entry.id)
-          ? { ...entry, outputImages: patches.get(entry.id)!, trashedOutputImages: undefined }
-          : entry
-      )),
+      tasks: state.tasks.map((entry) => {
+        const patch = patches.get(entry.id)
+        if (!patch) return entry
+        return {
+          ...entry,
+          outputImages: patch.nextIds,
+          // 兜底后处理的任务把这次当源图用的成品记成 AI 原图，之后还能继续「再次后处理」
+          sourceImages: patch.sourceIds,
+          trashedOutputImages: undefined,
+        }
+      }),
     }))
     for (const entry of pendingUpdates) {
       const next = useStore.getState().tasks.find((item) => item.id === entry.id)
@@ -3413,10 +3422,13 @@ export async function reapplyPostTemplate(
   for (const { item, templates, indexes } of plan) {
     const folder = finishedFolderFor(item)
     const nextIds: string[] = []
+    const usedSourceIds: string[] = []
     for (const index of indexes) {
-      // 逐张取原图：一次只把一张读进内存，几百张的卡不会一次性堆满
-      const sourceId = item.sourceImages?.[index]
+      // 逐张取原图：一次只把一张读进内存，几百张的卡不会一次性堆满。
+      // 没存过 AI 原图的下标兜底用成品本身（生成时没套后处理，成品即原图）
+      const sourceId = item.sourceImages?.[index] || item.outputImages[index]
       if (!sourceId) continue
+      usedSourceIds.push(sourceId)
       const source = await getImage(sourceId)
       if (!source?.dataUrl) throw new Error('AI 原图已被清理，无法再次后处理')
       let dataUrl = source.dataUrl
@@ -3462,8 +3474,9 @@ export async function reapplyPostTemplate(
 
     if (!nextIds.length) continue
     oldIds.push(...item.outputImages, ...(item.transparentOriginalImages ?? []))
-    // 回收的旧图这次被跳过、随 oldIds 一起清掉，标记也没有意义了
-    pendingUpdates.push({ id: item.id, nextIds })
+    // 回收的旧图这次被跳过、随 oldIds 一起清掉，标记也没有意义了；
+    // 兜底场景里旧成品被记成了新的 AI 原图，仍被任务引用着，不会被当孤儿图删掉
+    pendingUpdates.push({ id: item.id, nextIds, sourceIds: usedSourceIds })
     written += nextIds.length
     if (pendingUpdates.length >= REAPPLY_COMMIT_BATCH) {
       flushUpdates()

@@ -6711,8 +6711,8 @@ describe('再次后处理的重做范围（进度条总数）', () => {
     expect(reapplyTargetIndexes(t)).toEqual([0, 1])
   })
 
-  it('老任务完全没有 sourceImages 时什么都不重做', () => {
-    expect(reapplyTargetIndexes(task({ outputImages: ['out-1'] }))).toEqual([])
+  it('老任务完全没有 sourceImages 时，成品即原图，全部可重做', () => {
+    expect(reapplyTargetIndexes(task({ outputImages: ['out-1'] }))).toEqual([0])
   })
 
   it('空的图片位不算一张', () => {

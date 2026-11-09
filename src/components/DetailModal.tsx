@@ -617,13 +617,13 @@ export default function DetailModal() {
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
 
   const outputLen = visibleOutputSlots.length
-  // 只有保留过 AI 原图、且不是透明背景的任务才能重跑后处理。
+  // 没保留 AI 原图的任务（生成时没套后处理，成品即原图）也能重跑，重跑时会把成品记成新原图；
   // 对齐判断用 outputImages 全量：重做是按原图整批重来的，与展示上隐藏了几张无关
   const canReapplyPost = Boolean(
     isTauri
     && task.outputImages.length > 0
-    && task?.sourceImages?.length === task.outputImages.length
-    && task.sourceImages.every(Boolean)
+    && (!task.sourceImages?.length
+      || (task.sourceImages.length === task.outputImages.length && task.sourceImages.every(Boolean)))
     && !task.transparentOutput,
   )
   const handleReapplyPost = async () => {
@@ -2539,7 +2539,7 @@ export default function DetailModal() {
               disabled={!canReapplyPost || reapplying}
               title={canReapplyPost
                 ? '用 AI 原图按当前模板重新后处理，覆盖这次的结果（不重新生图）'
-                : '这个任务没有保留 AI 原图，或开了透明背景，无法再次后处理'}
+                : '没有可后处理的图片，或开了透明背景 / 当前在网页版，无法再次后处理'}
               className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 rounded-xl min-w-[8.5rem] bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
             >
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
