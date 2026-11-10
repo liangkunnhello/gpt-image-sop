@@ -667,8 +667,6 @@ export const useStore = create<AppState>()(
             appMode,
             agentInputDrafts: saveActiveAgentInputDrafts(state),
             agentMobileHeaderVisible: false,
-            selectedTaskIds: [],
-            selectedFavoriteCollectionIds: [],
           })
           return
         }
@@ -681,8 +679,6 @@ export const useStore = create<AppState>()(
             agentInputDrafts,
             galleryInputDraft,
             agentMobileHeaderVisible: true,
-            selectedTaskIds: [],
-            selectedFavoriteCollectionIds: [],
             agentEditingRoundId: null,
             ...(state.appMode === 'agent' ? restoreGalleryInputDraftState(galleryInputDraft) : {}),
           }))

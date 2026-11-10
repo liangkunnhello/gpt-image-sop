@@ -54,6 +54,14 @@ export default function App() {
   const saveLocationMode = useStore((s) => s.settings.saveLocationMode)
   const autoCheckUpdate = useStore((s) => s.settings.autoCheckUpdate)
   const [startupImportDone, setStartupImportDone] = useState(false)
+  /**
+   * 投放跟踪是否已经挂载过。
+   *
+   * 没进过投放跟踪就不挂载（省掉启动时对 30 万条投放数据的查询）；
+   * 一旦进过就常驻，切回画廊只 display:none —— 页签、日期区间、选中节点、
+   * 滚动位置都是组件内 state，卸载重挂就全重置了。
+   */
+  const [trackerMounted, setTrackerMounted] = useState(appMode === 'tracker')
   useDockerApiUrlMigrationNotice()
   useAppFonts()
   useGlobalClickSuppression()
@@ -191,6 +199,10 @@ export default function App() {
       })
   }, [])
 
+  useEffect(() => {
+    if (appMode === 'tracker') setTrackerMounted(true)
+  }, [appMode])
+
   // 画廊与投放跟踪整页锁死，只有内部内容区滚动；Agent 模式仍然整页滚
   useEffect(() => {
     const root = document.documentElement
@@ -212,28 +224,29 @@ export default function App() {
   return (
     <>
       <Header />
-      {appMode === 'agent' ? (
-        <AgentWorkspace />
-      ) : appMode === 'tracker' ? (
-        <TrackerWorkspace />
-      ) : (
-        <main data-home-main data-drag-select-surface className="flex min-h-0 flex-col">
-          <div className="safe-area-x mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col">
-            <div className="flex min-h-0 flex-1 lg:gap-4">
-              <SopDirectionTree />
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <div className="shrink-0">
-                  <SearchBar />
-                </div>
-                {/* 整页只有这块滚动：任务卡 / 收藏夹列表 */}
-                <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-52 pr-1">
-                  {filterFavorite && !activeFavoriteCollectionId ? <FavoriteCollectionsView /> : <TaskGrid />}
-                </div>
+      {appMode === 'agent' && <AgentWorkspace />}
+      {trackerMounted && <TrackerWorkspace hidden={appMode !== 'tracker'} />}
+      {/* 画廊常驻（切到投放跟踪只隐藏）：滚到哪、选了哪张、搜索词都留在原地 */}
+      <main
+        data-home-main
+        data-drag-select-surface
+        className={appMode === 'gallery' ? 'flex min-h-0 flex-col' : 'hidden'}
+      >
+        <div className="safe-area-x mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 lg:gap-4">
+            <SopDirectionTree />
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="shrink-0">
+                <SearchBar />
+              </div>
+              {/* 整页只有这块滚动：任务卡 / 收藏夹列表 */}
+              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-52 pr-1">
+                {filterFavorite && !activeFavoriteCollectionId ? <FavoriteCollectionsView /> : <TaskGrid />}
               </div>
             </div>
           </div>
-        </main>
-      )}
+        </div>
+      </main>
       {/* 投放跟踪是数据页，不需要出图输入框 */}
       {appMode !== 'tracker' && <InputBar />}
       <SopLibraryModal />

@@ -7330,3 +7330,24 @@ describe('linkAssetToGallery', () => {
     expect(state.assetRefParents).toEqual({})
   })
 })
+
+/**
+ * 用户在画廊选了一批卡，切去投放跟踪再回来，选中状态被清空过一次 ——
+ * setAppMode 里固定写死 selectedTaskIds: []。两个视图都属于「工作区」，
+ * 来回切不该丢选中（Agent 是另一套流程，仍然清空）。
+ */
+describe('画廊 / 投放跟踪来回切换不重置选中', () => {
+  it('切到投放跟踪再切回来，选中的卡片和收藏夹都还在', () => {
+    useStore.setState({
+      selectedTaskIds: ['task-1', 'task-2'],
+      selectedFavoriteCollectionIds: ['fav-1'],
+    })
+    useStore.getState().setAppMode('tracker')
+    expect(useStore.getState().selectedTaskIds).toEqual(['task-1', 'task-2'])
+    expect(useStore.getState().selectedFavoriteCollectionIds).toEqual(['fav-1'])
+
+    useStore.getState().setAppMode('gallery')
+    expect(useStore.getState().selectedTaskIds).toEqual(['task-1', 'task-2'])
+    expect(useStore.getState().selectedFavoriteCollectionIds).toEqual(['fav-1'])
+  })
+})

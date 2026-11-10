@@ -95,7 +95,14 @@ const FIELD_LABEL: Array<[keyof ColumnMapping, string, boolean]> = [
 ]
 
 
-export default function TrackerWorkspace() {
+/**
+ * 投放跟踪整页。
+ *
+ * `hidden` 为 true 时不卸载、只 display:none —— 页签、日期区间、选中的树节点、
+ * 素材详情、滚动位置全是组件内 state，切去画廊再回来卸载重挂就全重置了。
+ * 首次进入前由 App 决定要不要挂载（避免启动时白查一遍库）。
+ */
+export default function TrackerWorkspace({ hidden = false }: { hidden?: boolean }) {
   const tasks = useStore((state) => state.tasks)
   const [tab, setTab] = useState<Tab>('assets')
   const [assets, setAssets] = useState<AssetRecord[]>([])
@@ -262,8 +269,15 @@ export default function TrackerWorkspace() {
    * 以前是 `trackGetAll('spend')` 全表拉：几百万行会被拼成一个几 GB 的字符串传进 webview，
    * 直接 OOM。改成按区间查之后走 `track_spend_date` 索引，日常只加载看的那几十天。
    */
-  const load = useCallback(async (from: string, to: string) => {
-    setLoading(true)
+  /**
+   * 读库。
+   *
+   * `silent` 用于「切回投放跟踪」时的补刷：不把整页换成「正在读取…」，
+   * 否则页签内容会被替换掉、素材详情跟着卸载，等于又把状态重置了一次。
+   */
+  const load = useCallback(async (from: string, to: string, options?: { silent?: boolean }) => {
+    const silent = options?.silent === true
+    if (!silent) setLoading(true)
     try {
       const [a, s, i, l, latest] = await Promise.all([
         trackGetAll<AssetRecord>('assets'),
@@ -301,7 +315,7 @@ export default function TrackerWorkspace() {
     } catch (err) {
       setError(`读取本地数据失败：${String(err)}`)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [])
 
@@ -309,6 +323,19 @@ export default function TrackerWorkspace() {
   const reload = useCallback(() => load(range.from, range.to), [load, range.from, range.to])
 
   useEffect(() => { void reload() }, [reload])
+
+  /**
+   * 从画廊切回来时静默补一次数据。
+   *
+   * 组件常驻之后不会再重挂，不补刷的话看到的是上次加载时的库：
+   * 期间新生成、新关联的素材不会出现。静默刷只更新数据，页签、筛选、
+   * 选中的素材和滚动位置都不动。
+   */
+  const wasHidden = useRef(hidden)
+  useEffect(() => {
+    if (wasHidden.current && !hidden) void load(range.from, range.to, { silent: true })
+    wasHidden.current = hidden
+  }, [hidden, load, range.from, range.to])
 
   /** 重新扫任务卡建台账。已有记录的投放数据会保留（mergeAssets 负责） */
   const rebuildLedger = async () => {
@@ -560,7 +587,7 @@ export default function TrackerWorkspace() {
   const demoCount = assets.filter((item) => isDemoId(item.id)).length
 
   return (
-    <main data-home-main className="flex min-h-0 flex-1 flex-col">
+    <main data-home-main className={hidden ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}>
       {/*
        * 固定区（截图里的「蓝框」）：日期 + 台账指标 + 筛选/页签，全部不随内容滚动。
        *
