@@ -802,11 +802,16 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
   const navBtnClass =
     'absolute top-1/2 -translate-y-1/2 p-2 rounded-full bg-white/80 text-gray-800 hover:bg-white dark:bg-black/40 dark:text-white dark:hover:bg-black/60 transition-all z-10 backdrop-blur-sm shadow-md border border-gray-200/50 dark:border-transparent'
 
+  /**
+   * 层级要压过所有普通弹窗（详情 60 / 对照表 80 / 需求 80），
+   * 否则从「图片与提示词对照」里点图放大，大图会被那张弹窗盖在下面。
+   * 仍低于帮助 100、确认框 110 —— 那些是必须盖住大图的操作提示。
+   */
   return (
     <div
       ref={containerRef}
       data-lightbox-root
-      className="fixed inset-0 z-[60] flex items-center justify-center select-none"
+      className="fixed inset-0 z-[95] flex items-center justify-center select-none"
       style={{ cursor: isZoomed ? (isDragging ? 'grabbing' : 'grab') : 'pointer' }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}

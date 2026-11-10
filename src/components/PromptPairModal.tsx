@@ -154,7 +154,7 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
           {rows.map((row) => (
             <div
               key={row.key}
-              className="grid grid-cols-1 gap-3 border-b border-gray-100 px-4 py-3 last:border-b-0 dark:border-white/[0.06] sm:grid-cols-[minmax(0,1fr)_240px]"
+              className="grid grid-cols-1 gap-3 border-b border-gray-100 px-4 py-3 last:border-b-0 dark:border-white/[0.06] sm:grid-cols-[minmax(0,1fr)_248px]"
             >
               {/* 左：提示词全文，按原文换行，不做截断 */}
               <div className="min-w-0">
@@ -226,9 +226,9 @@ export default function PromptPairModal({ tasks, title, onClose }: Props) {
               </div>
 
               {/* 右：这一条提示词产出的图 */}
-              <div className="flex gap-2 sm:justify-end">
+              <div className="flex flex-wrap gap-2 sm:justify-end">
                 {row.images.length === 0 && (
-                  <div className="flex h-20 w-20 items-center justify-center rounded-lg border border-dashed border-gray-200 text-[10px] text-gray-300 dark:border-white/10 dark:text-gray-600">
+                  <div className="flex h-28 w-20 items-center justify-center rounded-lg border border-dashed border-gray-200 text-[10px] text-gray-300 dark:border-white/10 dark:text-gray-600">
                     无图
                   </div>
                 )}
@@ -277,10 +277,10 @@ function PromptPairThumb({ imageId, index }: { imageId: string; index: number })
       type="button"
       onClick={() => useStore.getState().setLightboxImageId(imageId)}
       title={`第 ${index} 条提示词产出的图，点击放大`}
-      className="block h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-50 transition-shadow hover:shadow-md dark:border-white/10 dark:bg-white/[0.04]"
+      className="block h-28 w-20 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-white transition-shadow hover:shadow-md dark:border-white/10 dark:bg-white/[0.04]"
     >
       {src
-        ? <img src={src} alt={`第 ${index} 条`} loading="lazy" className="h-full w-full object-cover" />
+        ? <img src={src} alt={`第 ${index} 条`} loading="lazy" className="h-full w-full object-contain" />
         : <span className="flex h-full w-full items-center justify-center text-[10px] text-gray-300">加载中</span>}
     </button>
   )
