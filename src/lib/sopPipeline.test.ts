@@ -548,6 +548,31 @@ describe('SOP 有没有人物', () => {
     expect(sopHasPeople('## 必守\n角色形象恒定，严禁写实人物与毛孔。')).toBe(true)
   })
 
+  /**
+   * 真实事故（2.0.11）：扁平插画 SOP 写「严禁生成写实真人人像」，
+   * 只否定了写实画风，SOP 的画面元素却是「单人扁平插画人物」。
+   * 旧判定把它当成「这份 SOP 没有人物」，写词阶段直接禁止出现人 —— 和 SOP 打架。
+   */
+  it('「严禁生成写实真人人像」只否画风，不判成没有人物', () => {
+    const sop = [
+      '## 画面元素',
+      '* **主体角色**：单人扁平插画人物，强调日常通勤。',
+      '## 绝对禁忌',
+      '* 严禁生成写实真人人像、真实皮肤毛孔纹理、3D C4D 塑料质感渲染。',
+    ].join('\n')
+    expect(sopHasPeople(sop)).toBe(true)
+  })
+
+  it('「禁止生成真实真人」同理，画风层面的否定不算', () => {
+    const sop = '## 风格\n3D 立体微缩卡通人物为画面主体。\n## 禁忌\n严禁写实污染：禁止生成真实真人。'
+    expect(sopHasPeople(sop)).toBe(true)
+  })
+
+  it('真正禁止人物的写法仍然判为没有人物', () => {
+    expect(sopHasPeople('## 版式\n画面只有立体数字与色块。\n## 禁忌\n严禁出现任何人物。')).toBe(false)
+    expect(sopHasPeople('## 版式\n纯文字大字报。\n本版式无需真人模特。')).toBe(false)
+  })
+
   it('空 SOP 判为没有人物', () => {
     expect(sopHasPeople('')).toBe(false)
   })

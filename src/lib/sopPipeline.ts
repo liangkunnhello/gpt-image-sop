@@ -799,9 +799,44 @@ const PEOPLE_WORDS = [
  * 画面本身是有人物的，不能因为命中一个「严禁」就把角色判没了。
  */
 const NO_PEOPLE_PATTERNS = [
-  /(严禁|禁止|不得|不要|不能)[^。\n]{0,12}(出现|有|画|绘制|生成|添加|加入|放)[^。\n]{0,6}(人物|人像|真人)/,
-  /(无|不含|没有|不出现)[^。\n]{0,6}(人物|人像|真人)/,
+  /(严禁|禁止|不得|不要|不能)[^。\n]{0,12}(出现|有|画|绘制|生成|添加|加入|放)[^。\n]{0,6}(人物|人像|真人)/g,
+  /(无|不含|没有|不出现)[^。\n]{0,6}(人物|人像|真人)/g,
 ]
+
+/**
+ * 否定词后面紧跟的修饰语是不是「画风」而不是「人」。
+ *
+ * 实测事故：扁平插画 SOP 写「严禁生成**写实真人**人像、真实皮肤毛孔纹理」，
+ * 这句只在禁写实画风，SOP 的画面元素却是「单人扁平插画人物」。
+ * 旧逻辑只看「严禁 + 生成 + 真人」就判成「这份 SOP 没有人物」，
+ * 于是规划阶段去掉人物维度、写词阶段禁止出现人 —— 和图里必须有人直接打架。
+ *
+ * 所以命中之后还要看关键词前面几个字：是「写实 / 真实 / 照片」这类修饰，就跳过这条命中。
+ */
+const REALISM_QUALIFIER = /(写实|真实|照片|摄影|实拍|相片)/
+
+/** SOP 里有没有「一个人都不许有」这类全盘否定；只否定画风的不算 */
+function hasNoPeopleStatement(text: string): boolean {
+  for (const pattern of NO_PEOPLE_PATTERNS) {
+    for (const match of text.matchAll(pattern)) {
+      // 两个正则都以「人物 / 人像 / 真人」结尾，直接从命中文本尾部取这个词
+      // （不能用 match[match.length - 1]：matchAll 结果末尾是 index / input / groups）
+      const keyword = match[0].match(/(人物|人像|真人)$/)?.[0] ?? ''
+      if (!keyword) continue
+      const beforeKeyword = match[0].slice(0, match[0].length - keyword.length)
+      /**
+       * 看关键词前面一段里有没有画风限定词。
+       *
+       * 不能只比对「紧挨着的最后两个字」：`严禁生成写实真人|人像` 这种，
+       * 命中会先吃掉「真人」再以「人像」结尾，画风词离关键词还隔着一个「真人」。
+       * 8 个字足够覆盖「写实 / 真实 / 照片级 / 摄影感」这些说法，又不至于跨句误伤。
+       */
+      if (REALISM_QUALIFIER.test(beforeKeyword.slice(-8))) continue
+      return true
+    }
+  }
+  return false
+}
 
 /**
  * 判断一份 SOP 到底有没有规定人物。
@@ -815,7 +850,7 @@ const NO_PEOPLE_PATTERNS = [
 export function sopHasPeople(sopText: string): boolean {
   const text = sopText || ''
   if (!text.trim()) return false
-  if (NO_PEOPLE_PATTERNS.some((re) => re.test(text))) return false
+  if (hasNoPeopleStatement(text)) return false
   return PEOPLE_WORDS.some((word) => text.includes(word))
 }
 
