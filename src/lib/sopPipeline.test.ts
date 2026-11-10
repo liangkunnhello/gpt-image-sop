@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiProfile } from '../types'
-import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, ensureStyleHint, generatePrompts, needsLayoutOptimize, resolveSopTextModel, rewriteSopText, sceneSimilarity, SOP_TEXT_MODEL, sopHasPeople, sopStyleHint, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
+import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, ensureCanvasFilled, ensureStyleHint, generatePrompts, needsLayoutOptimize, resolveSopTextModel, rewriteSopText, sceneSimilarity, SOP_TEXT_MODEL, sopHasPeople, sopStyleHint, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from './promptLimits'
 
 const profile = {
@@ -608,5 +608,30 @@ describe('画风兜底（漏写画风会被渲成照片真人）', () => {
   it('SOP 要 2D 插画、提示词却只写了写实照片的，按 SOP 兜底', () => {
     const fixed = ensureStyleHint('写实照片风格，中年男性站姿，摄影棚打光。', '2D 扁平插画')
     expect(fixed.startsWith('2D 扁平插画，')).toBe(true)
+  })
+})
+
+/**
+ * 真实事故 mwaa15b2wgdpq：SOP 只要求底部留 8%~10% 叠合规小字，
+ * 出图底部空了 17%，下半张图整片纯色 —— 提示词里「自然留白」被模型放大了。
+ */
+describe('留白兜底（预留区不能扩成整片空白）', () => {
+  it('提到留白的提示词补一条「只留窄带」的约束', () => {
+    const prompt = '竖版海报，版面下端自然留白，底部通栏纵向95%~99%区域完全干净纯色留白无图案文字。'
+    const fixed = ensureCanvasFilled(prompt)
+    expect(fixed).toContain('【预留区只是窄带】')
+    // 原文一字不动，只追加
+    expect(fixed.startsWith(prompt)).toBe(true)
+  })
+
+  it('没提留白/预留的提示词不动', () => {
+    const prompt = '9:16竖版，左侧文字右侧插画，暖色调。'
+    expect(ensureCanvasFilled(prompt)).toBe(prompt)
+  })
+
+  it('已经补过的不重复追加', () => {
+    const prompt = '底部留白一成。'
+    const once = ensureCanvasFilled(prompt)
+    expect(ensureCanvasFilled(once)).toBe(once)
   })
 })

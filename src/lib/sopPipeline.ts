@@ -517,6 +517,26 @@ export function ensureStyleHint(prompt: string, hint: string): string {
   return `${hint}，${text.replace(/^[，,、\s]+/, '')}`
 }
 
+/** 兜底句的标记：已经补过就不再重复，避免同一批里长的短的混在一起 */
+const CANVAS_FILL_MARK = '【预留区只是窄带】'
+
+/**
+ * 兜底补「画面要排满」。
+ *
+ * 实测事故 mwaa15b2wgdpq / mwaaj9ef1wbe25：SOP 只要求底部留 8%~10% 叠合规小字，
+ * 出图底部空了 17%，下半张图整片纯色。提示词里「版面下端自然留白」「以留白收尾」
+ * 这类写法会被生图模型放大成「下半部分空出来」。
+ *
+ * 只对提到留白/预留的提示词追加，没提的说明本来没打算留空，不去打扰排版；
+ * 追加在末尾而不是改写原句，卖点「」里的文字一个字都不动。
+ */
+export function ensureCanvasFilled(prompt: string): string {
+  const text = (prompt ?? '').trim()
+  if (!text || text.includes(CANVAS_FILL_MARK)) return prompt
+  if (!/(留白|预留)/.test(text)) return prompt
+  return `${text}\n${CANVAS_FILL_MARK}预留区只保留后期要叠内容的那一条窄带，高度不超过画面一成；主体、场景与文字块排到它的上沿再收尾。不要用「自然留白」把下半张图空出来，预留区之外也不许再留一条空白带。`
+}
+
 function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false, hasImage = false, hasRequirement = false, layoutOptimize = false, hasPeople = true) {
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
@@ -556,6 +576,14 @@ function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false
     '发散按 SOP 里的「变量池」和「互斥规则」执行：每条从变量池里取用取值，同一批之间按互斥规则避重；不要自己另立一套维度，也不要把互斥规则当成建议。',
     avoidHint
       ? '如果给出了【画面预留区】，每条提示词都要写清主体、主要文字和关键视觉安排在预留区之外，并明确说明这些区域留白或保持干净背景。'
+      : '',
+    /**
+     * 实测：3D 手办质感 SOP（底部要留 8%~10% 叠合规小字）出图底部空了 17%，
+     * 下半张图有一大块纯色空地 —— 提示词里「自然留白」「以留白收尾」被模型理解成
+     * 「下半部分整片空出来」。预留区必须写死成一条窄带，并明确其余画面要排满。
+     */
+    avoidHint
+      ? '【预留区只能是窄带，其余画面必须排满】SOP 里写的「底部留白 / 自然留白 / 以留白收尾」，只允许保留后期真的要叠内容的那一条窄带，高度不超过画面一成；主体、场景和文字块要一直排到这条窄带的上沿再收尾。不许把下半张图整片空出来，也不许在预留区之外另留一条空白带。'
       : '',
     hasCopy
       ? '【文案唯一来源】用户会单独给出「卖点文案」。每张图都要把这份卖点用全，图上出现的所有文字必须逐字照抄这份卖点，不得改写、缩写、扩写、合并或新增；SOP、参考图里的文案与它冲突时一律以卖点文案为准。'
@@ -1382,6 +1410,8 @@ async function runJob(job: SopJobRequest) {
     // 画风兜底：某条整段漏写画风时，生图模型会按「自然光照 + 背景虚化」渲成照片真人
     const styleHint = sopStyleHint(sop)
     if (styleHint) prompts = prompts.map((prompt) => ensureStyleHint(prompt, styleHint))
+    // 留白兜底：SOP 的预留带只有一成时要按一成画，不能整片空出来
+    prompts = prompts.map(ensureCanvasFilled)
     // 模型少写几条时按实际条数截断：多出来的计划条目没有提示词可用
     let assignments = imagePlan.assignments.slice(0, prompts.length)
 
@@ -1615,6 +1645,8 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
   // 补充生图走同一份兜底：漏写画风的条目同样会被渲成照片真人
   const styleHint = sopStyleHint(sopText)
   if (styleHint) prompts = prompts.map((prompt) => ensureStyleHint(prompt, styleHint))
+  // 留白兜底：与主流程同一套规则
+  prompts = prompts.map(ensureCanvasFilled)
   const assignments = imagePlan.assignments.slice(0, prompts.length)
 
   return await submitSopTasks({
