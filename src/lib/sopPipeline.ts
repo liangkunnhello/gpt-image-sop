@@ -519,13 +519,6 @@ function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false
     hasCopy
       ? '【版式随卖点条数走】每条提示词先数清楚这份卖点有几条，再决定版面：3 条卖点就排 3 个文字位（主标题 + 副标题 + 角标），不要设计第 4 个装饰性文字位；卖点只有 1 条时就用单一大标题撑版面，把版面让给主视觉。'
       : '',
-    /**
-     * 实测：一批 35 条里有 23 条整组漏掉一个文字位（奇数条丢主诉求、偶数条丢底部胶囊），
-     * 全是「写的时候少写一句」，不是排版放不下。要求它写完自己数一遍，比事后校正便宜得多。
-     */
-    hasCopy
-      ? '【写完自己数一遍】卖点有几条，画面上的「」文字位就要有几组（同一句自带的括号小字算同一组，不算多一条）。少一组就是漏了一句，必须补上再输出；宁可版式排得紧一点，也不许省掉任何一句卖点。'
-      : '',
     hasCopy
       ? '【SOP 禁忌与卖点冲突时以卖点为准】SOP 里如果写了「画面不出现任何文字 / 不出现文案 / 纯画面」这类禁忌，它针对的是 logo、水印、二维码这些元素，不包括卖点文案 —— 卖点文字仍必须逐字排进画面。'
       : '',
@@ -1082,17 +1075,8 @@ export async function fixPromptCopy(
 ): Promise<string[]> {
   const system = [
     '你是广告生图提示词的校对员。用户会给你一份「卖点文案」和若干条生图提示词，你要把提示词里印在画面上的文字改回卖点原文。',
-    '优先只改被「」包裹的文字：逐字替换成卖点里的原句，不得改写、缩写、扩写、合并。',
-    '「」以外的场景、机位、人物、配色、光线、版式描述尽量一个字都不要动。',
-    /**
-     * 这一条是「整组文字位漏写」的唯一补救口。
-     *
-     * 原规则写的是「只改「」里的字，外面一个字都不要动」，遇到某条卖点连「」都没有
-     * （模型整组漏掉一个文字位）时模型无位可放，只能放弃 —— 实测 35 条里有 23 条
-     * 就是这么带着缺字出的图（奇数条缺主诉求、偶数条缺底部胶囊）。
-     * 所以允许补「」：缺哪条卖点，就在它该出现的版式位置补一个文字位。
-     */
-    '如果有卖点整条没有出现（提示词里没有对应的「」文字位），必须为它补一个「」文字位：放在这句卖点该在的版式位置（主标题区 / 卖点区 / 底部胶囊），逐字写入原文；不许塞进别的「」里，也不许为了腾位置删掉已有的文字。',
+    '只改被「」包裹的文字：逐字替换成卖点里的原句，不得改写、缩写、扩写、合并或新增。',
+    '「」以外的所有内容（场景、机位、人物、配色、光线、版式、装饰描述）一个字都不要动。',
     '每条提示词都要把全部卖点用上，可以换顺序；同一张图里同一句卖点只能出现一次。',
     '卖点里括号中的说明（如「(责任内)」）是那句话自带的限定语，属于原文：那句卖点出现时，括号说明必须紧跟在那句后面一起出现。提示词里只写了正文、把括号说明丢掉的（例如留下「及下方小字，」这种空壳），要把括号说明补回到该正文之后并用「」包裹。',
     '判断「同一句卖点」只看括号外的正文：两句不同的卖点各自带同一个括号说明时，两处括号说明都要保留，不许去重、不许只留一处。',
@@ -1117,35 +1101,6 @@ export async function fixPromptCopy(
   )
   const fixed = parseNumberedList(raw)
   return fixed.length === prompts.length ? fixed : prompts
-}
-
-/**
- * 校正之后仍然缺卖点的条目：直接剔除，不送去出图。
- *
- * 为什么必须剔除而不是只 warn：缺卖点出的是「少一句文案」的废图，重出要花钱，
- * 而且用户拿到图才发现。实测一批 35 条里 23 条缺卖点（奇数条缺主诉求、
- * 偶数条缺底部胶囊），而这些条目在出图前是完全可判定的。
- *
- * 只按 missing 剔：altered（多出别的小字）多数是必要的补充说明，不算错。
- * 返回 keptIndexes 让调用方把底图分配一起对齐，否则后面的图会顶偏一位。
- */
-export function dropPromptsMissingCopy(
-  prompts: string[],
-  copyText: string,
-): { kept: string[]; keptIndexes: number[]; dropped: string[] } {
-  const all = prompts.map((_, index) => index)
-  if (!copyText.trim() || !prompts.length) {
-    return { kept: prompts, keptIndexes: all, dropped: [] }
-  }
-  const result = checkPromptCopy(prompts, copyText)
-  const bad = new Set(result.issues.filter((item) => item.kind === 'missing').map((item) => item.index))
-  if (!bad.size) return { kept: prompts, keptIndexes: all, dropped: [] }
-  const keptIndexes = all.filter((index) => !bad.has(index))
-  return {
-    kept: keptIndexes.map((index) => prompts[index]),
-    keptIndexes,
-    dropped: prompts.filter((_, index) => bad.has(index)),
-  }
 }
 
 /** 解析编号列表；解析不到编号时退回按空行切分 */
@@ -1379,24 +1334,9 @@ async function runJob(job: SopJobRequest) {
         prompts = await fixPromptCopy(profile, prompts, copyText)
         const after = checkPromptCopy(prompts, copyText)
         if (!after.ok) {
-          /**
-           * 校正之后还缺卖点的，直接剔除，不送去出图。
-           *
-           * 这里不能只 console.warn：发送前校对受设置控制，用户把它关掉时
-           * （promptProofread=false）这些条目会原样出图 —— 实测一批 35 条里
-           * 有 23 条缺卖点就是这么出出去的（奇数条缺主诉求、偶数条缺底部胶囊）。
-           * 缺字图重出要花钱，宁可少出一条并明确告诉用户。
-           */
-          const sweep = dropPromptsMissingCopy(prompts, copyText)
-          if (sweep.dropped.length) {
-            prompts = sweep.kept
-            assignments = sweep.keptIndexes.map((index) => assignments[index])
-            useStore.getState().showToast(
-              `${job.label}：${sweep.dropped.length} 条提示词缺卖点，已跳过（不出缺字的图）`,
-              'error',
-            )
-          }
-          if (!prompts.length) throw new Error(`${job.label} 的提示词全部缺卖点，已停止出图`)
+          // 不再「按校正结果继续」：改不回来的那几条会出成没字 / 改过字的废图，
+          // 交给下面的发送前校对拦下来
+          console.warn('卖点校正后仍有不一致：', after.issues)
         }
       }
     }

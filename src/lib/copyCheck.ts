@@ -8,11 +8,69 @@
 
 import { normalizeCopy } from './copyDedupe'
 
-/** 卖点原文拆成条目：一行一条，忽略空行与列表符号 */
+/**
+ * 卖点里常见的「说明前缀」：这些是给人看的写法说明，不是画面文案。
+ *
+ * 实测卖点库里 27 条有 20 多条首行是「文案只采用如下：」这类句子。
+ * 如果把它当成一条画面文案，任何提示词都不可能逐字包含它 ——
+ * 于是每条都被判「缺卖点」，2.0.5 的剔除逻辑就把整批图全杀光
+ * （用户看到的就是「提示词全部缺卖点，已停止出图」）。
+ */
+const COPY_NOTE_PATTERNS = [/^文案只采用/, /^只采用如下/, /^注[：:]/, /^说明[：:]/]
+
+/**
+ * 行首标签：`主文案：` `副文案：` `文案：` 这类只是层级标注，正文在冒号后面。
+ *
+ * 用「连标签一起吃掉」的方式切，不要用零宽前瞻 split：
+ * `"主文案：A"` 用前瞻切会在位置 0 先切一刀，接着又在位置 1 匹配到更短的
+ * 备选「文案」，于是切出「主」「副」这种碎片（实测两条用例直接红了）。
+ */
+const COPY_LABEL_RE = /(?:主文案|副文案|文案|主标题|副标题|slogan)\s*[：:]/gi
+
+/** 切成条之后仍只剩说明部分的碎片，丢掉 */
+const COPY_NOTE_FRAGMENT = /^(括号内|卖点排列顺序|卖点下方)/
+
+/** 按「标签：」把一行切成多段，标签与冒号本身丢弃 */
+function splitLabeledChunks(line: string): string[] {
+  const chunks: string[] = []
+  let last = 0
+  for (const match of line.matchAll(COPY_LABEL_RE)) {
+    const at = match.index ?? last
+    const before = line.slice(last, at).trim()
+    if (before) chunks.push(before)
+    last = at + match[0].length
+  }
+  const tail = line.slice(last).trim()
+  if (tail) chunks.push(tail)
+  // 整行没有标签时原样返回，别把正文当成分段丢掉
+  return chunks.length ? chunks : [line]
+}
+
+/** 把卖点原文的一行整理成真正的文案条目；返回空数组表示这行不是画面文案 */
+function copyLineToEntries(raw: string): string[] {
+  let line = raw.trim().replace(/^[-*·•]\s*/, '').trim()
+  if (!line) return []
+  // 「文案只采用如下，括号内文字…：」→ 只保留第一个冒号之后的正文
+  if (COPY_NOTE_PATTERNS.some((re) => re.test(line))) {
+    const at = line.search(/[：:]/)
+    if (at < 0) return []
+    line = line.slice(at + 1).trim()
+    if (!line) return []
+  }
+  return splitLabeledChunks(line)
+    .filter(Boolean)
+    .filter((part) => !COPY_NOTE_FRAGMENT.test(part))
+}
+
+/**
+ * 卖点原文拆成条目：一行一条，忽略空行、列表符号、说明句与「主文案：」这类标签。
+ *
+ * 拆出来的每一条都是**应该逐字出现在画面上的文字**，比对才有意义。
+ */
 export function splitCopyLines(copyText: string): string[] {
   return copyText
     .split(/\r?\n/)
-    .map((line) => line.trim().replace(/^[-*·•]\s*/, '').trim())
+    .flatMap(copyLineToEntries)
     .filter(Boolean)
 }
 

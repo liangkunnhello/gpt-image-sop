@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiProfile } from '../types'
-import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, dropPromptsMissingCopy, fixPromptCopy, generatePrompts, needsLayoutOptimize, resolveSopTextModel, rewriteSopText, sceneSimilarity, SOP_TEXT_MODEL, sopHasPeople, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
+import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, generatePrompts, needsLayoutOptimize, resolveSopTextModel, rewriteSopText, sceneSimilarity, SOP_TEXT_MODEL, sopHasPeople, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from './promptLimits'
 
 const profile = {
@@ -568,59 +568,5 @@ describe('写词规则随 SOP 切换', () => {
     const { system } = buildPromptMessages({ sopText: FIGURE_SOP, count: 1 })
     expect(system).toContain('版式、场景、人物、色调')
     expect(system).not.toContain('这份 SOP 里没有人物')
-  })
-})
-
-/**
- * 真实事故：一批 35 条里有 23 条缺卖点（奇数条缺「三高、结节、慢病人群可投保」，
- * 偶数条缺「先体验30天不满意可取消(体验后免等待期)」）。写词阶段整组漏掉一个文字位，
- * 校正规则又不许新增「」，最后靠发送前校对拦截 —— 而那个开关被用户关掉了，缺字图直接出。
- */
-describe('缺卖点的条目在出图前被剔除', () => {
-  const COPY = '三高、结节、慢病人群可投保\n赔付总限额600万'
-
-  it('缺一句的那条被剔除，齐全的保留，下标同步', () => {
-    const good = '上层「三高、结节、慢病人群可投保」，中层「赔付总限额600万」。'
-    const bad = '上层「三高、结节、慢病人群可投保」，中层是金色立体数字。'
-    const result = dropPromptsMissingCopy([good, bad], COPY)
-    expect(result.kept).toEqual([good])
-    expect(result.keptIndexes).toEqual([0])
-    expect(result.dropped).toEqual([bad])
-  })
-
-  it('两条都齐全时原样返回', () => {
-    const a = '「三高、结节、慢病人群可投保」，「赔付总限额600万」'
-    const b = '「赔付总限额600万」，「三高、结节、慢病人群可投保」'
-    const result = dropPromptsMissingCopy([a, b], COPY)
-    expect(result.kept).toEqual([a, b])
-    expect(result.keptIndexes).toEqual([0, 1])
-    expect(result.dropped).toEqual([])
-  })
-
-  it('没有卖点时不剔任何条目', () => {
-    const prompts = ['随便一条没有文字位的提示词']
-    expect(dropPromptsMissingCopy(prompts, '  ').kept).toEqual(prompts)
-  })
-
-  it('第二、四条缺失时，保留的下标要对得上底图分配', () => {
-    const ok = '「三高、结节、慢病人群可投保」，「赔付总限额600万」'
-    const result = dropPromptsMissingCopy([ok, '没有任何卖点', ok, '也缺'], COPY)
-    expect(result.keptIndexes).toEqual([0, 2])
-    expect(result.dropped).toHaveLength(2)
-  })
-})
-
-describe('校正规则允许补文字位', () => {
-  it('fixPromptCopy 的系统提示词要求为漏掉的卖点补一个「」文字位', async () => {
-    const fetchMock = vi.fn(async () => new Response(
-      JSON.stringify({ choices: [{ message: { content: '1. 补齐后的提示词' } }] }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } },
-    ))
-    vi.stubGlobal('fetch', fetchMock)
-    await fixPromptCopy(profile, ['旧提示词'], '三高、结节、慢病人群可投保')
-    const init = (fetchMock.mock.calls[0] as unknown[])[1] as { body: string }
-    const body = JSON.parse(init.body)
-    const system = body.messages.find((item: { role: string }) => item.role === 'system').content as string
-    expect(system).toContain('补一个「」文字位')
   })
 })
