@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskRecord } from '../types'
 import { DEFAULT_PARAMS } from '../types'
-import { deliverableOutputImages, deliveredFileRefsOf, resolveCardFolderName, type DeliverContext } from './deliver'
+import { deliverableOutputImages, deliveredFileRefsOf, resolveCardFolderName, staleDeliveryFolder, type DeliverContext } from './deliver'
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -243,5 +243,49 @@ describe('多选交付：只交选中的那几张', () => {
     const t = task({ outputImages: ['a', 'b', 'c'], trashedOutputImages: ['a'] })
     // a 虽然被选中（不在排除集里），但它在回收站，不该被交出去
     expect(deliverableOutputImages(t, exclude)).toEqual(['b'])
+  })
+})
+
+/**
+ * 渠道后补 / 命名模板改过之后重新交付：旧夹子要改成新名字，
+ * 但只在「同一个交付目录」里改 —— 换了地址就没有旧夹可改。
+ */
+describe('重新交付时旧文件夹改名', () => {
+  const DIR = 'C:////Documents////默认项目'
+
+  it('渠道补上后名字变了，返回旧夹名', () => {
+    expect(staleDeliveryFolder(
+      { deliverFolder: '京东保-3D插画-合家欢-闪屏', deliverDirPath: DIR },
+      '京东保-3D插画-头条-合家欢-闪屏',
+      DIR,
+    )).toBe('京东保-3D插画-合家欢-闪屏')
+  })
+
+  it('名字没变就不动', () => {
+    expect(staleDeliveryFolder(
+      { deliverFolder: '京东保-3D插画-头条', deliverDirPath: DIR },
+      '京东保-3D插画-头条',
+      DIR,
+    )).toBe('')
+  })
+
+  it('没交付过的卡不改名', () => {
+    expect(staleDeliveryFolder({ deliverDirPath: DIR }, '京东保-3D插画-头条', DIR)).toBe('')
+  })
+
+  it('换了交付地址就不原地改名（旧夹不在新地址里）', () => {
+    expect(staleDeliveryFolder(
+      { deliverFolder: '旧名字', deliverDirPath: 'D:////另一个目录' },
+      '新名字',
+      DIR,
+    )).toBe('')
+  })
+
+  it('末尾分隔符与大小写差异算同一个目录', () => {
+    expect(staleDeliveryFolder(
+      { deliverFolder: '旧名字', deliverDirPath: 'c:////documents////默认项目////' },
+      '新名字',
+      DIR,
+    )).toBe('旧名字')
   })
 })

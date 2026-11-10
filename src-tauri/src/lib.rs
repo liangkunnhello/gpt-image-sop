@@ -85,6 +85,7 @@ pub fn run() {
             files::read_dir_images,
             files::save_dir_begin,
             files::save_dir_folder,
+            files::save_dir_rename,
             files::save_remove,
             files::save_write,
             files::save_commit,

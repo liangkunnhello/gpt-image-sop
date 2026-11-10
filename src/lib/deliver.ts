@@ -16,7 +16,7 @@ import { base64ToBytes } from './dataUrl'
 import { getImageFile } from './dbTauri'
 import { getStoredImageRecord } from './imageBlob'
 import { resolveDeliveryDir } from './deliveryDir'
-import { createSaveFolder, saveFileToDir, useSaveDir, type SaveDir } from './saveFile'
+import { createSaveFolder, renameSaveFolder, saveFileToDir, useSaveDir, type SaveDir } from './saveFile'
 import { buildTaskFolderName } from './taskFolderName'
 import { channelNamePart } from './channel'
 import { imageSizeFromBytes } from './imageSizeBytes'
@@ -114,6 +114,26 @@ export function cardKeyOf(task: Pick<TaskRecord, 'id' | 'sopJobId'>): string {
 function sameDir(a: string | undefined, b: string | undefined): boolean {
   const norm = (value: string | undefined) => (value ?? '').trim().replace(/[\\/]+$/, '').toLowerCase()
   return norm(a) === norm(b)
+}
+
+/**
+ * 重新交付时，要不要把上次的交付夹改名成这次算出来的名字。
+ *
+ * 三种情况同时满足才改：卡片记过上次的夹名、那个名字和这次不同、且两次都在同一个交付目录下。
+ * 换了交付地址就没法原地改名（旧夹在新地址里根本不存在），直接按新名字在新地址新建。
+ *
+ * 返回旧夹名（空串表示不用改）。抽成纯函数是为了能单测这段判定，
+ * 真正的改名动作在 Rust 侧（save_dir_rename）。
+ */
+export function staleDeliveryFolder(
+  task: Pick<TaskRecord, 'deliverFolder' | 'deliverDirPath'>,
+  nextName: string,
+  targetDir: string,
+): string {
+  const prev = (task.deliverFolder ?? '').trim()
+  if (!prev || !nextName || prev === nextName) return ''
+  if (!sameDir(task.deliverDirPath, targetDir)) return ''
+  return prev
 }
 
 /**
@@ -407,6 +427,21 @@ export async function deliverTaskCard(
     dir = await useSaveDir(targetDir)
   } catch (err) {
     return { ok: false, written: 0, error: typeof err === 'string' ? err : `交付地址不可用：${String(err)}` }
+  }
+
+  /**
+   * 渠道后补（2.0.8 之前交付的卡）或命名模板改过之后，卡片上次占的夹名和这次算出来的不同。
+   * 先把旧夹连同夹内文件名一起改过来，再按新名字交付，否则一个卡会留下两个夹子、两套文件名。
+   * 整卡交付时只有第一条会走到这里（后面的带 folderOverride），所以只会改一次。
+   */
+  const stale = options?.folderOverride ? '' : staleDeliveryFolder(task, folder, targetDir)
+  if (stale) {
+    try {
+      await renameSaveFolder(dir, stale, folder)
+    } catch (err) {
+      // 改名失败不阻断交付：旧夹子原样留着，这次按新名字新建一个
+      console.warn('旧交付文件夹改名失败，按新名字新建：', err)
+    }
   }
 
   let folderInfo

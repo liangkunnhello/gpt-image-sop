@@ -104,6 +104,19 @@ export async function createSaveFolder(dir: SaveDir, name: string, reuse = false
   return await invoke<SaveFolder>('save_dir_folder', reuse ? { token: dir.token, name, reuse } : { token: dir.token, name })
 }
 
+/**
+ * 仅客户端：把交付目录里的旧文件夹改名成新名字。
+ *
+ * 用在「卡片补了渠道 / 命名模板改过」之后重新交付：卡片上次占的交付夹名
+ * 和这次按模板算出来的不一样，先把旧夹子连同夹内文件名一起改过来，
+ * 再按新名字交付，避免一个卡留下两个夹子、两套文件名。
+ *
+ * 新名字已存在、旧夹子不在时由 Rust 侧报错，调用方退回「按新名字新建」。
+ */
+export async function renameSaveFolder(dir: SaveDir, oldName: string, newName: string): Promise<SaveFolder> {
+  return await invoke<SaveFolder>('save_dir_rename', { token: dir.token, oldName, newName })
+}
+
 /** 仅客户端：写入 pickSaveDir 选定的目录（或其中的任务卡文件夹），已有同名文件时自动加序号，返回实际写入的完整路径 */
 export async function saveFileToDir(
   dir: SaveDir,

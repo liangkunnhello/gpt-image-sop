@@ -583,6 +583,74 @@ pub async fn save_dir_folder(
     })
 }
 
+/// 交付文件夹改名：卡片补了渠道、或命名模板改过之后重新交付时，
+/// 把上次那个夹子连同夹内文件名一起改成这次算出来的名字。
+///
+/// 为什么连文件名一起改：交付文件名是「文件夹名 + 序号」，只改夹子不改文件，
+/// 重新交付会写进一批新名字的文件，同一个夹子里就留着两套命名。
+///
+/// 目标文件夹已存在时报错，交给调用方退回「新建文件夹」——
+/// 绝不能把两张卡的成品合进一个夹子。
+///
+/// 写盘失败不影响返回：夹子已经改成新名字了，重新交付会按新名字补写文件。
+#[tauri::command]
+pub async fn save_dir_rename(
+    dirs: State<'_, SaveDirs>,
+    token: usize,
+    old_name: String,
+    new_name: String,
+) -> Result<SaveFolder, String> {
+    check_name(&old_name)?;
+    check_name(&new_name)?;
+    let dir = dirs
+        .0
+        .lock()
+        .ok()
+        .and_then(|list| list.get(token).cloned())
+        .ok_or_else(|| "保存目录无效".to_string())?;
+    tokio::task::block_in_place(|| {
+        let from = dir.join(&old_name);
+        let to = dir.join(&new_name);
+        if !from.is_dir() {
+            return Err(format!("旧交付文件夹不存在：{old_name}"));
+        }
+        if to.exists() {
+            return Err(format!("目标文件夹已存在：{new_name}"));
+        }
+        fs::rename(&from, &to).map_err(|err| format!("文件夹改名失败：{err}"))?;
+        // 夹内文件按前缀改名：`旧夹名-01.jpeg` → `新夹名-01.jpeg`
+        if let Ok(entries) = fs::read_dir(&to) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                let Some(rest) = name.strip_prefix(old_name.as_str()) else {
+                    continue;
+                };
+                // 只认「文件夹名 + -序号」这种我们写出来的文件，别动用户自己放进去的东西
+                if !rest.starts_with('-') {
+                    continue;
+                }
+                let next = format!("{new_name}{rest}");
+                if to.join(&next).exists() {
+                    continue;
+                }
+                if let Err(err) = fs::rename(&path, to.join(&next)) {
+                    eprintln!("交付文件夹改名：文件 {name} 改名失败：{err}");
+                }
+            }
+        }
+        Ok(SaveFolder {
+            name: new_name,
+            path: to.display().to_string(),
+        })
+    })
+}
+
 /// 删掉交付文件夹里的某个成品文件（图片进回收站时用）。
 ///
 /// 前端只能给「交付地址 + 文件夹名/文件名」这种相对路径，不能给绝对路径：
