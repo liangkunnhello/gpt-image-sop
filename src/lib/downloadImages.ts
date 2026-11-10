@@ -6,6 +6,7 @@ import { ensureImageCached } from './imageCache'
 import { apiFetch, isTauri } from './platform'
 import { createSaveFolder, pickSaveDir, saveFile, saveFileToDir, type SaveDir } from './saveFile'
 import { buildTaskFolderName, type TaskCopySource, type TaskFolderContext } from './taskFolderName'
+import { channelNamePart } from './channel'
 import { pickWebFolderRoot, supportsWebFolder, writeFilesToWebFolder } from './webFolder'
 
 const MIME_EXTENSIONS: Record<string, string> = {
@@ -62,7 +63,7 @@ export interface TaskFolderDownloadOptions {
  * 重名时客户端自动补 -02、-03；网页版没有文件夹，调用方应退回原来的下载方式。
  */
 export async function downloadTaskImagesToFolder(
-  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName'> & TaskCopySource,
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName' | 'channel'> & TaskCopySource,
   options: TaskFolderDownloadOptions,
 ): Promise<DownloadImagesResult> {
   const imageIds = task.outputImages || []
@@ -75,6 +76,7 @@ export async function downloadTaskImagesToFolder(
     date: new Date(task.createdAt),
     product: options.product,
     direction: options.direction,
+    channel: channelNamePart(task.channel),
     size: task.params?.size,
     sopName: task.sopName,
     copy: task.inputSnapshot?.customCopy,
@@ -123,6 +125,8 @@ export interface TaskCardFolderTask {
   /** 「本次文案」记在输入快照里，命名模板 {copy} 用（排在卖点前） */
   inputSnapshot?: { customCopy?: string }
   sopDirectionId?: string
+  /** 渠道：归了具体渠道时拼在方向后面（扁平插画-头条），未指定/全部不加 */
+  channel?: string
 }
 
 /**
@@ -155,6 +159,7 @@ export async function downloadTaskCardsToFolders(
           date: new Date(task.createdAt),
           product: names.product,
           direction: names.direction,
+          channel: channelNamePart(task.channel),
           size: task.params?.size,
           sopName: task.sopName,
           copy: task.inputSnapshot?.customCopy,
@@ -189,7 +194,7 @@ export async function downloadTaskCardsToFolders(
  * 不支持的浏览器返回 webUnsupported，调用方退回原来的下载方式。
  */
 export async function downloadTaskImagesToWebFolder(
-  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName'> & TaskCopySource,
+  task: Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages' | 'params' | 'sopName' | 'sopPointName' | 'channel'> & TaskCopySource,
   options: TaskFolderDownloadOptions,
 ): Promise<DownloadImagesResult & { webUnsupported?: boolean }> {
   const imageIds = task.outputImages || []
@@ -203,6 +208,7 @@ export async function downloadTaskImagesToWebFolder(
     date: new Date(task.createdAt),
     product: options.product,
     direction: options.direction,
+    channel: channelNamePart(task.channel),
     size: task.params?.size,
     sopName: task.sopName,
     copy: task.inputSnapshot?.customCopy,
@@ -262,6 +268,7 @@ export async function downloadTaskCardsToWebFolders(
         date: new Date(task.createdAt),
         product: names.product,
         direction: names.direction,
+        channel: channelNamePart(task.channel),
         size: task.params?.size,
         sopName: task.sopName,
         copy: task.inputSnapshot?.customCopy,

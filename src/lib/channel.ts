@@ -32,6 +32,18 @@ export function channelLabel(value: string | undefined | null): string {
   return CHANNELS.find((item) => item.value === value)?.label ?? value
 }
 
+/**
+ * 文件名 / 文件夹名里的渠道段。
+ *
+ * 只有具体渠道才加进名字（「扁平插画-头条」）；
+ * 「未指定」和「全部」不是投放平台，返回空串，名字保持「扁平插画」。
+ */
+export function channelNamePart(value: string | undefined | null): string {
+  if (!value) return ''
+  const label = channelLabel(value)
+  return label === '未指定' || label === '全部' ? '' : label
+}
+
 /** 判断任务是否命中渠道筛选；filter 为空或 'all' 表示不限 */
 export function taskMatchesChannel(task: { channel?: string }, filter: string | null): boolean {
   if (!filter || filter === 'all') return true

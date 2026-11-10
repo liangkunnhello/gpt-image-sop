@@ -18,6 +18,7 @@ import { getStoredImageRecord } from './imageBlob'
 import { resolveDeliveryDir } from './deliveryDir'
 import { createSaveFolder, saveFileToDir, useSaveDir, type SaveDir } from './saveFile'
 import { buildTaskFolderName } from './taskFolderName'
+import { channelNamePart } from './channel'
 import { imageSizeFromBytes } from './imageSizeBytes'
 import { isTauri } from './platform'
 import { pickWebFolderRoot, supportsWebFolder, writeFilesToWebFolder } from './webFolder'
@@ -128,6 +129,8 @@ export function cardFolderName(task: TaskRecord, context: DeliverContext, sizeOv
     date: new Date(task.createdAt),
     product: nameOf(productIdForDirection(directions, task.sopDirectionId)),
     direction: nameOf(task.sopDirectionId ?? ''),
+    // 渠道拼在方向后面：扁平插画-头条；未指定/全部不加
+    channel: channelNamePart(task.channel),
     size: sizeOverride?.trim() || task.params?.size,
     sopName: task.sopName,
     // 本次文案排在卖点前：它才是这一批临时换上去的那套字

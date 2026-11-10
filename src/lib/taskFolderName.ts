@@ -1,7 +1,8 @@
 /**
  * 任务卡导出时的文件夹命名。
  *
- * 默认规则：日期-产品-方向-尺寸-SOP名-本次文案-卖点-自定义-序号
+ * 默认规则：日期-产品-方向[-渠道]-尺寸-SOP名-本次文案-卖点-自定义-序号
+ * 渠道只在卡片归了具体渠道时拼在方向后面（「扁平插画-头条」）；未指定/全部不加。
  * 日期取创建时间，尺寸见 sizeLabel，自定义来自设置，序号由客户端在重名时补（`-02`、`-03`）。
  * SOP 名最多保留 6 个字（SOP 全名往往是一整句话，直接拼进去会撑爆名字），卖点名最多 12 个字。
  *
@@ -70,6 +71,13 @@ export interface TaskFolderContext {
   date?: Date
   product?: string
   direction?: string
+  /**
+   * 渠道展示名（头条 / 广点通 / 百度 / 厂商 / AI原图）。
+   *
+   * 拼在方向后面：`扁平插画-头条`。未指定与全部由调用方用
+   * `channelNamePart` 过滤成空串，这里只负责拼。
+   */
+  channel?: string
   /** 形如 1024x1024 */
   size?: string
   sopName?: string
@@ -79,6 +87,18 @@ export interface TaskFolderContext {
   pointName?: string
   /** 设置里的自定义文案 */
   custom?: string
+}
+
+/**
+ * 方向段后面接渠道：`扁平插画-头条`。
+ * 渠道为空就只用方向；方向为空（未归属）就只用渠道，不留前导分隔符。
+ */
+function joinDirectionChannel(direction?: string, channel?: string): string {
+  const dir = (direction ?? '').trim()
+  const ch = (channel ?? '').trim()
+  // 兜一层：即使调用方直接把展示名传进来，「未指定 / 全部」也不进名字
+  if (!ch || ch === '未指定' || ch === '全部') return dir
+  return dir ? `${dir}-${ch}` : ch
 }
 
 /**
@@ -124,7 +144,7 @@ export function buildTaskFolderName(template: string, context: TaskFolderContext
   const values: Record<TaskFolderToken, string> = {
     date: context.date ? formatFolderDate(context.date) : '',
     product: context.product ?? '',
-    direction: context.direction ?? '',
+    direction: joinDirectionChannel(context.direction, context.channel),
     size: sizeLabel(context.size),
     sop: truncateSopName(context.sopName),
     copy: copyLabel(context.copy),

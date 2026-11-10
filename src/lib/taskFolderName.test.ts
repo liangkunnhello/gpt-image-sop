@@ -142,3 +142,49 @@ describe('withCopyToken（老模板自动补 {copy}）', () => {
     expect(withCopyToken('   ')).toBe('   ')
   })
 })
+
+/**
+ * 渠道拼在方向后面：用户要求「有渠道归属就命名成 方向-渠道」，
+ * 「未指定 / 全部」不是投放平台，不加。
+ */
+describe('文件夹名里的渠道段', () => {
+  it('归了具体渠道时拼在方向后面', () => {
+    expect(buildTaskFolderName('{product}-{direction}-{size}', {
+      product: '京东保',
+      direction: '扁平插画',
+      channel: '头条',
+      size: '1080x1920',
+    })).toBe('京东保-扁平插画-头条-闪屏')
+  })
+
+  it('未指定时不加渠道', () => {
+    expect(buildTaskFolderName('{product}-{direction}', {
+      product: '京东保',
+      direction: '扁平插画',
+      channel: '',
+    })).toBe('京东保-扁平插画')
+  })
+
+  it('传进来「未指定 / 全部」这类展示名也不加', () => {
+    const base = { product: '京东保', direction: '扁平插画' }
+    expect(buildTaskFolderName('{product}-{direction}', { ...base, channel: '未指定' })).toBe('京东保-扁平插画')
+    expect(buildTaskFolderName('{product}-{direction}', { ...base, channel: '全部' })).toBe('京东保-扁平插画')
+  })
+
+  it('卡片没归属方向时只留渠道，不留前导分隔符', () => {
+    expect(buildTaskFolderName('{product}-{direction}-{point}', {
+      product: '京东保',
+      channel: '广点通',
+      pointName: '600万',
+    })).toBe('京东保-广点通-600万')
+  })
+
+  it('模板里没有 {direction} 时渠道也不会乱入', () => {
+    expect(buildTaskFolderName('{product}-{size}', {
+      product: '京东保',
+      direction: '扁平插画',
+      channel: '头条',
+      size: '1280x720',
+    })).toBe('京东保-大图')
+  })
+})
