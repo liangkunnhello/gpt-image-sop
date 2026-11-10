@@ -469,14 +469,70 @@ function layoutOptimizeRules(): string[] {
   ]
 }
 
+/**
+ * 提示词里的「画风词」。出现任意一个就算这条写了画风，不再兜底。
+ *
+ * 注意：写实/照片/实拍也算画风词 —— 它们是「写实画风」，只是和 2D 插画 SOP 冲突，
+ * 冲突由 ensureStyleHint 单独判断。
+ */
+const STYLE_WORD = /(2D|3D|扁平|矢量|插画|赛璐璐|卡通|动漫|日漫|漫画|手绘|线稿|水彩|油画|像素|C4D|写实|摄影|照片|实拍|渲染|建模)/i
+/** 写实系用词 */
+const PHOTO_WORD = /(写实|照片|实拍|摄影)/
+/** 手绘/平面系用词 */
+const DRAW_WORD = /(2D|扁平|插画|矢量|赛璐璐|卡通|手绘|日漫|漫画)/i
+
+/**
+ * 从 SOP 里取出画风短句，用来给漏写画风的提示词兜底。
+ *
+ * 优先取「画面风格…为 XXX」这类明写的句子；没有就退回 2D/3D 开头的短语或单个画风词。
+ * 取不到就返回空串（比如纯排版 SOP 根本没写画风），此时不做任何兜底。
+ */
+export function sopStyleHint(sopText: string): string {
+  const text = sopText || ''
+  const declared = text.match(/画面风格[^：:。\n]{0,12}[：:为]\s*([^\n。；]{2,40})/)?.[1]
+  const fallback = text.match(/(2D|3D)[^\n。；]{0,30}/)?.[0]
+    || text.match(/(扁平插画|矢量插画|赛璐璐|卡通|水彩|油画|像素风|素描)/)?.[0]
+  const raw = (declared || fallback || '').trim()
+  if (!raw) return ''
+  return raw.replace(/^[：:，,、\s]+/, '').replace(/[。；;，,\s]+$/, '').slice(0, 24)
+}
+
+/**
+ * 兜底补画风：提示词里一个画风词都没有时，把 SOP 的画风放到句首。
+ *
+ * 实测事故：扁平插画 SOP 跑 29 条，第 5 条开头只写了「清冷天空蓝色调，纯净通透的自然光照」，
+ * 模型按「自然光照 + 背景虚化」直接渲成照片级真人。写词规则已经要求写画风，
+ * 这里再兜一层：漏了就用 SOP 原话补上，成本为零，也不会改动「」里的卖点。
+ *
+ * 句首是生图模型最敏感的位置，所以补在前面而不是后面。
+ */
+export function ensureStyleHint(prompt: string, hint: string): string {
+  const text = (prompt || '').trim()
+  if (!text || !hint) return prompt
+  const wantsDraw = DRAW_WORD.test(hint)
+  const hasStyle = STYLE_WORD.test(text)
+  // 只写了写实/照片，而 SOP 明确要 2D 插画：以 SOP 的画风为准
+  const photoOnly = PHOTO_WORD.test(text) && !DRAW_WORD.test(text)
+  if (hasStyle && !(wantsDraw && photoOnly)) return prompt
+  return `${hint}，${text.replace(/^[，,、\s]+/, '')}`
+}
+
 function promptSystem(ignoreCompliance: boolean, avoidHint = '', hasCopy = false, avoidCta = false, hasImage = false, hasRequirement = false, layoutOptimize = false, hasPeople = true) {
   return [
     '你是广告生图提示词工程师。用户会给你一份生图 SOP，你要严格按这份 SOP 写出指定数量的具体提示词。',
     hasImage
       ? '这批提示词会带底图出图，所以你写的是「在底图上怎么改、怎么加」，不是从零开始画一张新图；每条仍要能独立送进生图模型，写清改完之后的画面应该是什么样。'
       : hasPeople
-        ? '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。'
-        : '每条提示词必须能独立送进文生图模型，包含完整的画面描述：版式、场景、主体形态、色调、光线、以及图上应有的文字（用「」包裹）。',
+        ? '每条提示词必须能独立送进文生图模型，包含完整的画面描述：画风、版式、场景、人物、色调、光线、以及图上应有的文字（用「」包裹）。'
+        : '每条提示词必须能独立送进文生图模型，包含完整的画面描述：画风、版式、场景、主体形态、色调、光线、以及图上应有的文字（用「」包裹）。',
+    /**
+     * 画风单独钉一条。
+     *
+     * 实测事故：扁平插画 SOP 跑 29 条，第 5 条开头只写了「清冷天空蓝色调，纯净通透的自然光照」
+     * 就没了画风，生图模型按「自然光照 + 背景虚化」直接渲成照片级真人。
+     * 要素清单里原来只有「场景、色调、光线」，模型有概率整段漏掉画风，所以每批都要强制。
+     */
+    '【每条都要点明画风】每条提示词的开头必须写清这条的画风与介质（照抄 SOP「必守规则」里的画风，例如「2D 商业扁平插画」「日漫赛璐璐插画」）。SOP 要求 2D 插画/扁平/矢量时，严禁写成写实照片感：不许出现真实皮肤、毛孔、发丝细节、景深虚化、摄影级光比这些写实词；SOP 要求写实时同理不许串成卡通。同一批的画风基调必须一致。',
     /**
      * 无人的 SOP 必须单独钉一条。
      *
@@ -1323,6 +1379,9 @@ async function runJob(job: SopJobRequest) {
       job.userRequirement,
     )
     if (!prompts.length) throw new Error(`${job.label} 没有得到提示词`)
+    // 画风兜底：某条整段漏写画风时，生图模型会按「自然光照 + 背景虚化」渲成照片真人
+    const styleHint = sopStyleHint(sop)
+    if (styleHint) prompts = prompts.map((prompt) => ensureStyleHint(prompt, styleHint))
     // 模型少写几条时按实际条数截断：多出来的计划条目没有提示词可用
     let assignments = imagePlan.assignments.slice(0, prompts.length)
 
@@ -1535,7 +1594,7 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
     fidelity: imageFidelity,
   })
 
-  const prompts = await generatePrompts(
+  let prompts = await generatePrompts(
     profile,
     sopText,
     count,
@@ -1553,6 +1612,9 @@ export async function supplementCardWithSop(input: SopSupplementInput): Promise<
     input.userRequirement,
   )
   if (!prompts.length) throw new Error('没有得到提示词')
+  // 补充生图走同一份兜底：漏写画风的条目同样会被渲成照片真人
+  const styleHint = sopStyleHint(sopText)
+  if (styleHint) prompts = prompts.map((prompt) => ensureStyleHint(prompt, styleHint))
   const assignments = imagePlan.assignments.slice(0, prompts.length)
 
   return await submitSopTasks({

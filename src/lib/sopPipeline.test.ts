@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiProfile } from '../types'
-import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, generatePrompts, needsLayoutOptimize, resolveSopTextModel, rewriteSopText, sceneSimilarity, SOP_TEXT_MODEL, sopHasPeople, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
+import { appendCopySection, buildPromptMessages, buildSopSystemPrompt, dedupeScenes, ensureStyleHint, generatePrompts, needsLayoutOptimize, resolveSopTextModel, rewriteSopText, sceneSimilarity, SOP_TEXT_MODEL, sopHasPeople, sopStyleHint, sopTitleOf, stripButtonPlaceholders } from './sopPipeline'
 import { MAX_PROMPTS_PER_RUN, PROMPTS_PER_BATCH } from './promptLimits'
 
 const profile = {
@@ -568,5 +568,45 @@ describe('写词规则随 SOP 切换', () => {
     const { system } = buildPromptMessages({ sopText: FIGURE_SOP, count: 1 })
     expect(system).toContain('版式、场景、人物、色调')
     expect(system).not.toContain('这份 SOP 里没有人物')
+  })
+})
+
+/**
+ * 真实事故 mwa55s4y66qt2：扁平插画 SOP 跑 29 条，第 5 条开头只写了
+ * 「清冷天空蓝色调，纯净通透的自然光照」，整段没有画风词，生图模型
+ * 按「自然光照 + 背景虚化」直接渲成照片级真人。写词规则加了画风必写，
+ * 这里再兜一层确定性保护：漏了就用 SOP 的画风补到句首。
+ */
+describe('画风兜底（漏写画风会被渲成照片真人）', () => {
+  const FLAT_SOP = [
+    '## 必守与禁忌',
+    '* **必守规则**：',
+    '  * 画面风格严格限定为 2D 商业扁平/日漫赛璐璐插画。',
+  ].join('\n')
+
+  it('从 SOP 必守规则里取出画风短句', () => {
+    expect(sopStyleHint(FLAT_SOP)).toBe('2D 商业扁平/日漫赛璐璐插画')
+  })
+
+  it('SOP 没写画风时返回空串，不乱补', () => {
+    expect(sopStyleHint('## 版式结构\n左侧文字，右侧人物。')).toBe('')
+  })
+
+  it('提示词整段没有画风词时，把 SOP 画风补到句首', () => {
+    const prompt = '9:16竖版构图，左右非对称版式，清冷天空蓝色调，纯净通透的自然光照。右侧55%为人物主体。'
+    const fixed = ensureStyleHint(prompt, '2D 商业扁平/日漫赛璐璐插画')
+    expect(fixed.startsWith('2D 商业扁平/日漫赛璐璐插画，')).toBe(true)
+    // 原文一个字都不能少，只允许前置
+    expect(fixed).toContain('纯净通透的自然光照')
+  })
+
+  it('已经写了 2D/扁平/赛璐璐的不重复补', () => {
+    const prompt = '2D商用日漫赛璐璐插画，暖阳米橙色调。'
+    expect(ensureStyleHint(prompt, '2D 商业扁平/日漫赛璐璐插画')).toBe(prompt)
+  })
+
+  it('SOP 要 2D 插画、提示词却只写了写实照片的，按 SOP 兜底', () => {
+    const fixed = ensureStyleHint('写实照片风格，中年男性站姿，摄影棚打光。', '2D 扁平插画')
+    expect(fixed.startsWith('2D 扁平插画，')).toBe(true)
   })
 })
