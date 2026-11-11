@@ -1,5 +1,5 @@
 import type { SopPreset } from '../lib/sopStore'
-import { NO_PRESET, useSopStore } from '../lib/sopStore'
+import { NO_PRESET, resolvePick, useSopStore } from '../lib/sopStore'
 import { resolvePickedPreset } from '../lib/sopPresets'
 
 // 解析逻辑搬到了 lib（命名、任务快照也要用），这里保留导出，避免改了所有调用方
@@ -27,7 +27,7 @@ export default function SopPresetPicker({ kind, label, directionId, scopeIds }: 
   const setLibraryTab = useSopStore((s) => s.setLibraryTab)
 
   const current = resolvePickedPreset(presets, directionId, scopeIds, kind, lastPick, defaultPick)
-  const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
+  const pick = resolvePick(lastPick, defaultPick, directionId)
   const currentId = kind === 'point' ? pick.pointId : pick.styleId
   const isNone = currentId === NO_PRESET
 

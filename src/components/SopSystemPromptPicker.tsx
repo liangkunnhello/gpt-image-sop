@@ -1,5 +1,5 @@
 import type { SopPick } from '../lib/sopStore'
-import { NO_PRESET, useSopStore } from '../lib/sopStore'
+import { NO_PRESET, resolvePick, useSopStore } from '../lib/sopStore'
 import type { SopSystemPrompt } from '../types'
 
 /**
@@ -16,7 +16,7 @@ export function resolveSystemPrompt(
   lastPick: Record<string, SopPick>,
   defaultPick: Record<string, SopPick>,
 ) {
-  const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
+  const pick = resolvePick(lastPick, defaultPick, directionId)
   if (pick.promptId === NO_PRESET) return undefined
   if (pick.promptId) {
     for (const scopeId of scopeIds) {
@@ -52,7 +52,7 @@ export default function SopSystemPromptPicker({ scopeIds, directionId }: Props) 
   const setLibraryTab = useSopStore((s) => s.setLibraryTab)
 
   const current = resolveSystemPrompt(systemPrompts, scopeIds, directionId, lastPick, defaultPick)
-  const isNone = (defaultPick[directionId] ?? lastPick[directionId] ?? {}).promptId === NO_PRESET
+  const isNone = resolvePick(lastPick, defaultPick, directionId).promptId === NO_PRESET
 
   return (
     <button

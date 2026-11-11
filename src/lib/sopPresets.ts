@@ -1,5 +1,5 @@
 import type { SopDirectionNode } from '../types'
-import { NO_PRESET, type SopPick, type SopPreset } from './sopStore'
+import { NO_PRESET, resolvePick, type SopPick, type SopPreset } from './sopStore'
 import { scopeChain } from './sopScope'
 
 /**
@@ -21,7 +21,7 @@ export function resolvePickedPreset(
   lastPick: Record<string, SopPick>,
   defaultPick: Record<string, SopPick>,
 ) {
-  const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
+  const pick = resolvePick(lastPick, defaultPick, directionId)
   const id = kind === 'point' ? pick.pointId : pick.styleId
   if (id === NO_PRESET) return undefined
   if (id) {

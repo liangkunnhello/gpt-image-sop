@@ -1,5 +1,5 @@
 import type { SopPick } from '../lib/sopStore'
-import { NO_PRESET, useSopStore } from '../lib/sopStore'
+import { NO_PRESET, resolvePick, useSopStore } from '../lib/sopStore'
 import type { VariablePrompt } from '../types'
 import { BUILTIN_VARIABLE_PROMPT } from '../lib/variablePipeline'
 
@@ -14,7 +14,7 @@ export function resolveVariablePrompt(
   lastPick: Record<string, SopPick>,
   defaultPick: Record<string, SopPick>,
 ): VariablePrompt | undefined {
-  const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
+  const pick = resolvePick(lastPick, defaultPick, directionId)
   if (pick.variablePromptId === NO_PRESET) return undefined
   if (pick.variablePromptId) {
     for (const scopeId of scopeIds) {
@@ -51,7 +51,7 @@ export default function VariablePromptPicker({ scopeIds, directionId }: Props) {
   const setLibraryTab = useSopStore((s) => s.setLibraryTab)
 
   const current = resolveVariablePrompt(variablePrompts, scopeIds, directionId, lastPick, defaultPick)
-  const isNone = (defaultPick[directionId] ?? lastPick[directionId] ?? {}).variablePromptId === NO_PRESET
+  const isNone = resolvePick(lastPick, defaultPick, directionId).variablePromptId === NO_PRESET
   const isBuiltin = current?.id === BUILTIN_VARIABLE_PROMPT.id
 
   return (

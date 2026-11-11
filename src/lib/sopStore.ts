@@ -59,6 +59,25 @@ export const UNASSIGNED_FILTER = '__unassigned__'
 export const NO_PRESET = '__none__'
 
 /**
+ * 某个方向当前生效的选择。
+ *
+ * 优先级：用户这次的显式点选（lastPick）> 方向的默认设置（defaultPick）。
+ *
+ * 反过来（默认优先）会出一个很难查的 bug：方向设过「默认生图 SOP」之后，
+ * 左侧列表点「不使用生图 SOP」或点别的条目，写入的是 lastPick，
+ * 却永远被 defaultPick 盖住 —— 界面上完全没反应，出图也还按默认那条走。
+ *
+ * 用字段合并而不是整对象替换：某个库这次没点过时，仍沿用默认里该库的取值。
+ */
+export function resolvePick(
+  lastPick: Record<string, SopPick>,
+  defaultPick: Record<string, SopPick>,
+  directionId: string,
+): SopPick {
+  return { ...defaultPick[directionId], ...lastPick[directionId] }
+}
+
+/**
  * 编码字母表：去掉 0 / O / 1 / I —— 这几个字符手抄、口述都容易认错，
  * 而这个编码的用途正是「人对着念、对着核对」。
  */

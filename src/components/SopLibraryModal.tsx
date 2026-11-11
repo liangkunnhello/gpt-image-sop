@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { SopLibraryTab } from '../lib/sopStore'
 import { pickExtraRequirements, resolveExtraIds } from '../lib/extraRequirements'
-import { NO_PRESET, SOP_LIBRARY_LABEL, directionPath, useSopStore } from '../lib/sopStore'
+import { NO_PRESET, SOP_LIBRARY_LABEL, directionPath, resolvePick, useSopStore } from '../lib/sopStore'
 import { nearestScopeId, scopeWithItems } from '../lib/sopScope'
 import { useStore } from '../store'
 import { firstTextFile, isFileDrag } from '../lib/fileDrop'
@@ -114,7 +114,7 @@ export default function SopLibraryModal() {
       : tab === 'sop'
         ? 'sopId'
         : tab === 'point' ? 'pointId' : 'styleId'
-  const pick = defaultPick[activeDirectionId] ?? lastPick[activeDirectionId] ?? {}
+  const pick = resolvePick(lastPick, defaultPick, activeDirectionId)
 
   const items: LibraryItem[] = useMemo(() => {
     const list: LibraryItem[] = tab === 'prompt'
@@ -465,6 +465,12 @@ export default function SopLibraryModal() {
                     onContextMenu={(event) => {
                       event.preventDefault()
                       setDefaultPick(activeDirectionId, { ...defaultPick[activeDirectionId], [pickKey]: item.id })
+                      /**
+                       * 同时写 lastPick：现在的优先级是「显式点选 > 默认」，
+                       * 只写 defaultPick 会被之前点过的 lastPick（可能是「不使用」）挡住，
+                       * 右键设完默认看着却没生效。
+                       */
+                      setPick(activeDirectionId, { ...lastPick[activeDirectionId], [pickKey]: item.id })
                       showToast(`已把「${item.name}」设为这个方向的默认${label}`, 'success')
                     }}
                     className={`group relative mb-0.5 rounded-lg transition-colors ${

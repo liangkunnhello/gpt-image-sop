@@ -1,5 +1,5 @@
 import type { SavedSop } from '../types'
-import { NO_PRESET, type SopPick } from './sopStore'
+import { NO_PRESET, resolvePick, type SopPick } from './sopStore'
 
 /**
  * 按「默认项 → 上次使用 → 就近第一条」决定当前用的是哪份 SOP。
@@ -18,7 +18,7 @@ export function resolveSavedSop(
   lastPick: Record<string, SopPick>,
   defaultPick: Record<string, SopPick>,
 ): SavedSop | undefined {
-  const pick = defaultPick[directionId] ?? lastPick[directionId] ?? {}
+  const pick = resolvePick(lastPick, defaultPick, directionId)
   if (pick.sopId === NO_PRESET) return undefined
   if (!pick.sopId) return undefined
   for (const scopeId of scopeIds) {
@@ -34,5 +34,5 @@ export function isSavedSopOff(
   lastPick: Record<string, SopPick>,
   defaultPick: Record<string, SopPick>,
 ): boolean {
-  return (defaultPick[directionId] ?? lastPick[directionId] ?? {}).sopId === NO_PRESET
+  return resolvePick(lastPick, defaultPick, directionId).sopId === NO_PRESET
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { SavedSop } from '../types'
 import { resolveSavedSop, isSavedSopOff } from './savedSop'
-import { NO_PRESET, type SopPick } from './sopStore'
+import { NO_PRESET, resolvePick, type SopPick } from './sopStore'
 
 const SOPS: SavedSop[] = [
   { id: 'sop-prod', productId: 'prod-1', name: '产品级 SOP', content: 'A', updatedAt: 1 },
@@ -23,10 +23,27 @@ describe('resolveSavedSop', () => {
     expect(resolveSavedSop(SOPS, CHAIN, 'dir-1', pick, {})?.id).toBe('sop-prod')
   })
 
-  it('默认项优先于上次使用', () => {
+  /**
+   * 优先级在 2.0.12 反转：以前是「方向默认 > 上次使用」，导致设过默认的方向里，
+   * 左侧列表点「不使用生图 SOP」写进 lastPick 后被 defaultPick 盖住，界面上毫无反应。
+   * 现在以「用户这次的显式点选」为准，默认只在没点过时兜底。
+   */
+  it('显式点选优先于方向默认', () => {
     const last: Record<string, SopPick> = { 'dir-1': { sopId: 'sop-prod' } }
     const preset: Record<string, SopPick> = { 'dir-1': { sopId: 'sop-dir' } }
-    expect(resolveSavedSop(SOPS, CHAIN, 'dir-1', last, preset)?.id).toBe('sop-dir')
+    expect(resolveSavedSop(SOPS, CHAIN, 'dir-1', last, preset)?.id).toBe('sop-prod')
+  })
+
+  it('设过默认之后点「不使用生图 SOP」立刻生效', () => {
+    const last: Record<string, SopPick> = { 'dir-1': { sopId: NO_PRESET } }
+    const preset: Record<string, SopPick> = { 'dir-1': { sopId: 'sop-dir' } }
+    expect(resolveSavedSop(SOPS, CHAIN, 'dir-1', last, preset)).toBeUndefined()
+    expect(isSavedSopOff('dir-1', last, preset)).toBe(true)
+  })
+
+  it('这次没点过时仍按方向默认走', () => {
+    const preset: Record<string, SopPick> = { 'dir-1': { sopId: 'sop-dir' } }
+    expect(resolveSavedSop(SOPS, CHAIN, 'dir-1', {}, preset)?.id).toBe('sop-dir')
   })
 
   it('显式「不用 SOP」时不回退到第一条', () => {
@@ -43,5 +60,23 @@ describe('resolveSavedSop', () => {
   it('id 对其他产品存在也不算命中：作用域链里没有该产品', () => {
     const pick: Record<string, SopPick> = { 'dir-1': { sopId: 'sop-other' } }
     expect(resolveSavedSop(SOPS, CHAIN, 'dir-1', pick, {})).toBeUndefined()
+  })
+})
+
+describe('resolvePick（显式点选 > 方向默认）', () => {
+  it('点了「不使用」就压过方向默认', () => {
+    const last: Record<string, SopPick> = { 'dir-1': { sopId: NO_PRESET } }
+    const preset: Record<string, SopPick> = { 'dir-1': { sopId: 'sop-dir' } }
+    expect(resolvePick(last, preset, 'dir-1').sopId).toBe(NO_PRESET)
+  })
+
+  it('按字段合并：只点了 SOP，卖点仍沿用默认', () => {
+    const last: Record<string, SopPick> = { 'dir-1': { sopId: NO_PRESET } }
+    const preset: Record<string, SopPick> = { 'dir-1': { sopId: 'sop-dir', pointId: 'point-1' } }
+    expect(resolvePick(last, preset, 'dir-1')).toEqual({ sopId: NO_PRESET, pointId: 'point-1' })
+  })
+
+  it('两边都没有时返回空对象，交给调用方退回第一条', () => {
+    expect(resolvePick({}, {}, 'dir-1')).toEqual({})
   })
 })
