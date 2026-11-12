@@ -76,13 +76,33 @@ describe('detectMapping 列识别', () => {
   it('真实表头能识别出全部关键列', () => {
     const mapping = detectMapping(HEADERS)
     expect(mapping.platformId).toBe(0)   // ID
-    expect(mapping.assetKey).toBe(4)     // 图片名称
+    // 「创意库文件名」比「图片名称」更可靠，优先用它；老写法「图片名称」退到备选列
+    expect(mapping.assetKey).toBe(5)     // 创意库文件名
+    expect(mapping.assetKeyAlt).toBe(4)  // 图片名称
     expect(mapping.spend).toBe(9)        // 消耗
     expect(mapping.date).toBe(15)        // 日期
     expect(mapping.media).toBe(16)       // 媒体
     expect(mapping.designer).toBe(7)     // 设计
     expect(mapping.optimizer).toBe(8)    // 优化师
     expect(mapping.abnormal).toBe(18)    // 是否异常
+  })
+
+  /**
+   * 真实报表（腾讯广告升级版）：只有「文件名」和「创意库文件名」两列，
+   * 而且两列会一半一半地缺 —— 前几行文件名空、创意库文件名有值。
+   * 以前这两个表头都识别不出来（「文件名」不包含「文件名称」），整批素材全进未匹配。
+   */
+  it('识别「文件名 + 创意库文件名」这种表头', () => {
+    const headers = ['日期', '预览地址', '产品ID', '产品名称', '媒体', '优化师', '文件名', '创意库文件名', '标签']
+    const mapping = detectMapping(headers)
+    expect(mapping.assetKey).toBe(7)     // 创意库文件名
+    expect(mapping.assetKeyAlt).toBe(6)  // 文件名
+  })
+
+  it('只有「文件名」一列时也能识别成素材名', () => {
+    const mapping = detectMapping(['日期', '平台ID', '文件名', '消耗'])
+    expect(mapping.assetKey).toBe(2)
+    expect(mapping.assetKeyAlt).toBe(-1)
   })
 
   it('ID 必须精确匹配，不能抢到「产品ID」', () => {
@@ -264,5 +284,47 @@ describe('parseCsv', () => {
   it('去掉 BOM，否则首列表头会带不可见字符', () => {
     const table = parseCsv('\uFEFFID,消耗\n1,2')
     expect(table.headers[0]).toBe('ID')
+  })
+})
+
+/**
+ * 真实事故：2026-11-12 导入的腾讯广告升级版报表里，「文件名」和「创意库文件名」
+ * 两列一半一半地缺（前 4 行文件名全空、创意库文件名有值）。旧逻辑两列都识别不到，
+ * 7230 行里 7117 行进了未匹配，用户本地那张「江明芳-115.jpg」明明跑了 4 天却查不到。
+ */
+describe('素材名主列与备选列兜底', () => {
+  const NAME = '20261030-京东保-诱导-AI策略-大图-无logo-江明芳-115.jpg'
+  const nameIndex = buildNameIndex([
+    { deliveredFileNames: { 'hash-115': NAME }, deliverFolder: '' },
+  ])
+  const table: SheetTable = {
+    headers: ['日期', '素材ID', '文件名', '创意库文件名', '消耗'],
+    rows: [
+      // 第一行只有创意库文件名
+      ['2026-11-05', '3001', '', NAME, '12.5'],
+      // 第二行只有文件名
+      ['2026-11-06', '3002', NAME, '', '20'],
+      // 第三行两列都空
+      ['2026-11-07', '3003', '', '', '5'],
+    ],
+  }
+
+  it('表头被识别成主列 + 备选列', () => {
+    const m = detectMapping(table.headers)
+    expect(m.assetKey).toBe(3)
+    expect(m.assetKeyAlt).toBe(2)
+  })
+
+  it('主列为空时用备选列，两条都能匹配上本地素材', () => {
+    const preview = buildSpendRecords(table, detectMapping(table.headers), nameIndex, 'imp-x')
+    expect(preview.records.find((r) => r.platformId === '3001')?.assetId).toBe('hash-115')
+    expect(preview.records.find((r) => r.platformId === '3002')?.assetId).toBe('hash-115')
+    expect(preview.matchedCount).toBe(2)
+  })
+
+  it('两列都空的行仍然进未匹配', () => {
+    const preview = buildSpendRecords(table, detectMapping(table.headers), nameIndex, 'imp-x')
+    expect(preview.records.find((r) => r.platformId === '3003')?.assetId).toBeUndefined()
+    expect(preview.unmatchedCount).toBe(1)
   })
 })

@@ -28,8 +28,18 @@ export interface ColumnMapping {
   spend: number
   /** 平台素材 ID */
   platformId: number
-  /** 素材标识（用于匹配本地素材，通常是「图片名称」） */
+  /** 素材标识（用于匹配本地素材，通常是「创意库文件名」或「图片名称」） */
   assetKey: number
+  /**
+   * 素材标识的备选列。
+   *
+   * 平台报表里经常同时出现「创意库文件名」和「文件名」两列，而且**两列都会缺**：
+   * 有的行只有创意库文件名，有的行只有文件名（实测某份 7230 行的报表里，
+   * 前 4 行文件名全空、创意库文件名有值）。只认一列的话，另一半行会全部进未匹配。
+   * 取值时按「主列非空用主列，否则用备选列」逐行判断，不新增任何界面操作。
+   * 设为可选：老的调用方与配置里没有这一项，取值处按 -1 兜底。
+   */
+  assetKeyAlt?: number
   /** 媒体渠道 */
   media: number
   /** 产品名称 */
@@ -45,13 +55,24 @@ export interface ColumnMapping {
 }
 
 const EMPTY_MAPPING: ColumnMapping = {
-  date: -1, spend: -1, platformId: -1, assetKey: -1,
+  date: -1, spend: -1, platformId: -1, assetKey: -1, assetKeyAlt: -1,
   media: -1, productName: -1, designer: -1, optimizer: -1, abnormal: -1, previewUrl: -1,
 }
 
 /** 表头关键词 → 业务字段。顺序有讲究：先匹配更具体的词，避免「日期」被「上传时间」抢走 */
 const HEADER_HINTS: Array<[keyof ColumnMapping, string[]]> = [
-  ['assetKey', ['图片名称', '素材名称', '创意名称', '文件名称']],
+  /**
+   * 「创意库文件名」放最前面：它是创意库里真正登记的文件名，比「图片名称」更可靠。
+   * 老报表只有「图片名称 / 素材名称 / 创意名称 / 文件名称」这几种写法，都保留兜底。
+   */
+  ['assetKey', ['创意库文件名', '图片名称', '素材名称', '创意名称', '文件名']],
+  /**
+   * 备选列：与主列同时存在时逐行取非空的那个。
+   * 用 `文件名` 而不是 `文件名称` 当关键字，是因为包含匹配下它同时能命中
+   * 「文件名」和「文件名称」两种写法（少一个「称」字的报表以前完全读不到）。
+   * 后面几个是老报表的写法，主列被「创意库文件名」占掉之后它们还有机会进备选。
+   */
+  ['assetKeyAlt', ['文件名', '图片名称', '素材名称', '创意名称', '文件名称']],
   // 「=id」表示精确等于：平台导出的素材 ID 列常常就叫 ID，
   // 用包含匹配会先撞上「产品ID」「数据平台ID」这类列，拿错列整批都入不了库
   ['platformId', ['=id', '素材id', '素材编号', '创意id', '图片id']],
@@ -231,11 +252,12 @@ export function resolveMapping(
   const missing: string[] = []
 
   for (const field of Object.keys(EMPTY_MAPPING) as Array<keyof ColumnMapping>) {
-    const baseIndex = base[field]
+    // assetKeyAlt 是可选字段，老配置里没有它，统一按 -1 处理
+    const baseIndex = base[field] ?? -1
     if (baseIndex < 0) continue
     const name = (baseHeaders[baseIndex] ?? '').replace(/\s+/g, '').toLowerCase()
     const hit = name ? normalized.indexOf(name) : -1
-    const index = hit >= 0 ? hit : guessed[field]
+    const index = hit >= 0 ? hit : (guessed[field] ?? -1)
     if (index >= 0) mapping[field] = index
     else if (field === 'date' || field === 'spend' || field === 'platformId' || field === 'assetKey') {
       missing.push(baseHeaders[baseIndex] ?? String(field))
@@ -358,7 +380,8 @@ export function buildSpendRecords(
     const cell = (index: number) => (index >= 0 ? (row[index] ?? '') : '')
     const date = normalizeDate(cell(mapping.date))
     const platformId = cell(mapping.platformId).trim()
-    const assetName = cell(mapping.assetKey).trim()
+    // 主列非空就用主列，空了再看备选列（同一份报表里两种列可能一半一半地缺）
+    const assetName = (cell(mapping.assetKey) || cell(mapping.assetKeyAlt ?? -1)).trim()
     const spend = toNumber(cell(mapping.spend))
 
     if (!date) {
