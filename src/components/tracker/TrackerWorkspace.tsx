@@ -27,6 +27,7 @@ import {
   type TreeNode,
 } from '../../lib/trackerFilter'
 import { countSimulated, planRestoreMatches, planSimulateMatches } from '../../lib/simulateMatch'
+import { buildAssetFileIndex, matchAssetKeyword, matchReportRowKeyword, normalizeKeyword, type AssetFileInfo } from '../../lib/assetSearch'
 import { matchDirectionByPath, planAutoDirections, planMissingNodes } from '../../lib/assetDirection'
 import SopSupplementModal from '../SopSupplementModal'
 import DateRangePicker from './DateRangePicker'
@@ -104,6 +105,8 @@ const FIELD_LABEL: Array<[keyof ColumnMapping, string, boolean]> = [
  */
 export default function TrackerWorkspace({ hidden = false }: { hidden?: boolean }) {
   const tasks = useStore((state) => state.tasks)
+  /** 交付文件名索引：台账与报表的「按文件名搜索」共用同一份，口径才一致 */
+  const fileIndex = useMemo(() => buildAssetFileIndex(tasks as TaskRecord[]), [tasks])
   const [tab, setTab] = useState<Tab>('assets')
   const [assets, setAssets] = useState<AssetRecord[]>([])
   const [spend, setSpend] = useState<SpendRecord[]>([])
@@ -852,6 +855,7 @@ export default function TrackerWorkspace({ hidden = false }: { hidden?: boolean 
                 assets={scopedAssets}
                 byAsset={byAsset}
                 stageFilter={stageFilter}
+                fileIndex={fileIndex}
                 onSelect={setSelectedAssetId}
                 onView={setViewingImageId}
               />
@@ -860,6 +864,7 @@ export default function TrackerWorkspace({ hidden = false }: { hidden?: boolean 
                 spend={reportSpend}
                 imports={imports}
                 assets={scopedAssets}
+                fileIndex={fileIndex}
                 byAsset={byAsset}
                 stageFilter={stageFilter}
                 onOpenAsset={setSelectedAssetId}
@@ -1595,6 +1600,7 @@ function AssetsTab({
   assets,
   byAsset,
   stageFilter,
+  fileIndex,
   onSelect,
   onView,
 }: {
@@ -1602,9 +1608,13 @@ function AssetsTab({
   byAsset: ReturnType<typeof aggregateByAsset>
   /** 阶段筛选由父组件持有（渲染在固定头部那行） */
   stageFilter: 'all' | 'running' | 'declining' | 'created' | 'stale'
+  /** 任务卡 id → 交付文件名，按文件名搜索用 */
+  fileIndex: Map<string, AssetFileInfo>
   onSelect: (assetId: string) => void
   onView: (imageId: string) => void
 }) {
+  /** 按文件名搜索：交付文件名、文件夹/文件名、报表图片名、平台素材 ID，输入即时过滤 */
+  const [keyword, setKeyword] = useState('')
   /**
    * 单击开详情、双击看大图，两个事件必然一起触发（双击 = 两次 click + 一次 dblclick）。
    * 用一个短延时把单击推后：双击时先取消，就不会出现「详情闪一下再弹大图」。
@@ -1625,16 +1635,31 @@ function AssetsTab({
     return assets
       .map((asset) => ({ asset, stat: byAsset.get(asset.id) }))
       .filter((row) => {
-        if (stageFilter === 'all') return true
-        const stage = row.stat?.stage ?? 'created'
-        return stage === stageFilter
+        if (stageFilter !== 'all') {
+          const stage = row.stat?.stage ?? 'created'
+          if (stage !== stageFilter) return false
+        }
+        return matchAssetKeyword(row.asset, fileIndex.get(row.asset.taskId ?? ''), keyword)
       })
       .sort((a, b) => (b.stat?.totalSpend ?? 0) - (a.stat?.totalSpend ?? 0))
-  }, [assets, byAsset, stageFilter])
+  }, [assets, byAsset, stageFilter, fileIndex, keyword])
 
   return (
     /* 指标、阶段筛选、页签、扫描按钮都在父组件的固定头部，这里只剩卡片区（截图里的「红框」） */
     <div className="flex flex-col gap-3">
+      {assets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+            placeholder="搜索文件名 / 报表图片名 / 平台素材ID"
+            className="w-72 rounded-lg border border-gray-200 bg-transparent px-2 py-1 text-[11px] text-gray-600 outline-none placeholder:text-gray-400 dark:border-white/15 dark:text-gray-300"
+          />
+          <span className="text-[11px] text-gray-400">
+            筛出 {rows.length} / 共 {assets.length} 张
+          </span>
+        </div>
+      )}
       {!assets.length ? (
         <p className="py-16 text-center text-xs text-gray-400">
           还没有素材记录。点右上角「扫描任务卡建台账」，把已生成的图片收进来。
@@ -2320,6 +2345,7 @@ function AssetReportTab({
   spend,
   imports,
   assets,
+  fileIndex,
   byAsset,
   stageFilter,
   onOpenAsset,
@@ -2327,6 +2353,8 @@ function AssetReportTab({
   spend: SpendRecord[]
   imports: ImportRecord[]
   assets: AssetRecord[]
+  /** 任务卡 id → 交付文件名，按文件名搜索用 */
+  fileIndex: Map<string, AssetFileInfo>
   byAsset: ReturnType<typeof aggregateByAsset>
   /** 投放状态筛选：和网格视图共用同一个值，切视图不会丢条件 */
   stageFilter: 'all' | 'running' | 'declining' | 'created' | 'stale'
@@ -2344,6 +2372,8 @@ function AssetReportTab({
   const [designerFilter, setDesignerFilter] = useState('')
   const [optimizerFilter, setOptimizerFilter] = useState('')
   const [keyword, setKeyword] = useState('')
+  /** 只看未挂接本地图的平台素材（对应「待认领」那批） */
+  const [onlyUnmatched, setOnlyUnmatched] = useState(false)
 
   /**
    * 单击开素材详情、双击开任务卡详情。
@@ -2476,12 +2506,18 @@ function AssetReportTab({
   }, [filtered, dimension, assetById, trendDates, byAsset, stageFilter])
 
   const visibleRows = useMemo(() => {
-    const text = keyword.trim().toLowerCase()
-    const matched = text
-      ? rows.filter((row) => row.label.toLowerCase().includes(text) || row.sublabel.toLowerCase().includes(text))
-      : rows
+    const text = normalizeKeyword(keyword)
+    const matched = rows.filter((row) => {
+      // 未匹配行没有本地素材，反过来「仅看未匹配」时把它们留下、其余排掉
+      if (onlyUnmatched && row.assetId) return false
+      if (!text) return true
+      // 先按行本身的标签找（素材名 / 任务卡 / 产品），再按文件名、报表图片名、平台素材 ID
+      if (row.label.toLowerCase().includes(text) || row.sublabel.toLowerCase().includes(text)) return true
+      const asset = row.assetId ? assetById.get(row.assetId) : undefined
+      return matchReportRowKeyword(row, asset, fileIndex.get(asset?.taskId ?? ''), keyword)
+    })
     return matched.slice(0, 100)
-  }, [rows, keyword])
+  }, [rows, keyword, onlyUnmatched, assetById, fileIndex])
 
   const totalSpend = rows.reduce((sum, row) => sum + row.spend, 0)
   /** 素材维度下一共多少行「素材 / 平台素材」（含未挂接本地图的，否则和表格对不上） */
@@ -2550,9 +2586,21 @@ function AssetReportTab({
         <input
           value={keyword}
           onChange={(event) => setKeyword(event.target.value)}
-          placeholder="搜索素材 / 任务卡 / 产品"
-          className="ml-auto w-52 rounded-lg border border-gray-200 bg-transparent px-2 py-1 text-[11px] text-gray-600 outline-none placeholder:text-gray-400 dark:border-white/15 dark:text-gray-300"
+          placeholder="搜索素材 / 任务卡 / 产品 / 文件名"
+          className="ml-auto w-56 rounded-lg border border-gray-200 bg-transparent px-2 py-1 text-[11px] text-gray-600 outline-none placeholder:text-gray-400 dark:border-white/15 dark:text-gray-300"
         />
+        <button
+          type="button"
+          onClick={() => setOnlyUnmatched((value) => !value)}
+          title="只看还没挂接本地图的平台素材（对应「待认领」）"
+          className={`rounded-lg border px-2 py-1 text-[11px] transition-colors ${
+            onlyUnmatched
+              ? 'border-amber-400 bg-amber-50 text-amber-700 dark:border-amber-400/50 dark:bg-amber-500/10 dark:text-amber-300'
+              : 'border-gray-200 text-gray-500 hover:bg-gray-50 dark:border-white/15 dark:text-gray-400 dark:hover:bg-white/[0.06]'
+          }`}
+        >
+          仅未匹配
+        </button>
       </div>
 
       {!rows.length ? (
