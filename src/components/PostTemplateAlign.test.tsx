@@ -160,7 +160,8 @@ describe('后处理模板的对齐与间距', () => {
 
     const wrapper = previewWrapper(container)
     const layers = [...wrapper.children] as HTMLElement[]
-    expect(layers.length).toBe(2)
+    // 前两个是描边层与正文层；选中时末尾还会多一个「拖框边」的把手
+    expect(layers.length).toBeGreaterThanOrEqual(2)
     const [stroke, body] = layers
     // 描边层铺满容器，不再自己从 left:0 开始排
     expect(stroke.style.position).toBe('absolute')

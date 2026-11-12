@@ -510,3 +510,37 @@ export function wrapTextToWidth(
   }
   return lines
 }
+
+/** 文字框的最小宽度（占画布宽比例）：再窄就只剩一两个字，没有排版意义 */
+export const POST_TEXT_BOX_MIN_WIDTH = 0.05
+
+/**
+ * 拖拽框边之后的新框宽（0~1 画布比例）。
+ *
+ * 锚点始终是 x，所以拖动「非锚点那一侧」的边就是在改宽度：
+ * - 左对齐：框左边在锚点，拖右边；
+ * - 右对齐：框右边在锚点，拖左边；
+ * - 居中：锚点在框中心，拖任一边都是对称扩展（所以取距离的绝对值）。
+ *
+ * 上限卡在「另一边不越过画布」，避免拖出一个比画布还宽的框。
+ */
+export function resizeTextBoxWidth(
+  el: Pick<PostElement, 'x' | 'align'>,
+  pointerX: number,
+): number {
+  const clamp01 = (value: number) => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0))
+  const anchor = clamp01(el.x)
+  const pointer = clamp01(pointerX)
+  const width = el.align === 'center'
+    ? 2 * Math.abs(pointer - anchor)
+    : el.align === 'right'
+      ? anchor - pointer
+      : pointer - anchor
+  const maxWidth = el.align === 'center'
+    ? 2 * Math.min(anchor, 1 - anchor)
+    : el.align === 'right'
+      ? anchor
+      : 1 - anchor
+  const ceiling = Math.max(POST_TEXT_BOX_MIN_WIDTH, maxWidth)
+  return Math.min(Math.max(POST_TEXT_BOX_MIN_WIDTH, width), ceiling)
+}

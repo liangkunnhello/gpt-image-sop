@@ -124,3 +124,45 @@ describe('后处理模板拖动（PS 式：整块可拖）', () => {
     expect(container.querySelector('[contenteditable="true"]')).not.toBeNull()
   })
 })
+
+/**
+ * 画布上直接拖框边改宽度。
+ *
+ * 以前画布只能拖位置，改宽度得去右侧面板拉滑块，眼睛要在画布和面板之间来回跳。
+ * 这里锁住：选中后出现把手、拖动改的是 boxWidth、锚点 x 不动。
+ */
+describe('拖框边调整文字框宽度', () => {
+  const HANDLE = '[title="按住左右拖动，调整文字框宽度"]'
+
+  it('选中后出现把手，往右拖会改框宽，锚点不动', () => {
+    const { container, text, stage } = render()
+    // 先选中（不移动的按下 + 抬起）
+    pointer(text, 'pointerdown', 100, 100)
+    pointer(text, 'pointerup', 100, 100)
+
+    const handle = container.querySelector(HANDLE) as HTMLElement
+    expect(handle).not.toBeNull()
+    // 模版只在「保存」时才写 store，所以这里断言画布上的实际框宽
+    const layerOf = () => (container.querySelector(HANDLE) as HTMLElement).parentElement as HTMLElement
+    const before = parseFloat(layerOf().style.width)
+
+    pointer(handle, 'pointerdown', 100, 100)
+    pointer(stage, 'pointermove', 300, 100)
+    pointer(stage, 'pointerup', 300, 100)
+
+    const after = parseFloat(layerOf().style.width)
+    /**
+     * 初始是「自动」：左对齐、x=6%，框一直撑到画布右边 = 0.94 宽。
+     * 拖到画布 60% 处后，框宽应该是 0.6 - 0.06 = 0.54。
+     * 用比例断言，不写死像素（画布宽、预览缩放在测试里都可能变）。
+     */
+    expect(after).toBeCloseTo(before * (0.54 / 0.94), 0)
+    // 拖框边不能带着整块文字平移
+    expect(text.style.left).toBe('6%')
+  })
+
+  it('没选中时不显示把手', () => {
+    const { container } = render()
+    expect(container.querySelector(HANDLE)).toBeNull()
+  })
+})

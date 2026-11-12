@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { textBoxBounds, wrapTextToWidth, type PostElement } from './postTemplate'
+import { POST_TEXT_BOX_MIN_WIDTH, resizeTextBoxWidth, textBoxBounds, wrapTextToWidth, type PostElement } from './postTemplate'
 
 /**
  * 真实问题：后处理模板里的「警示语」是一大段中文（十几行），
@@ -102,5 +102,46 @@ describe('PostElement 的 boxWidth 是可选字段', () => {
     const box = textBoxBounds(legacy, 1080)
     expect(box.maxWidth).toBe(1080)
     expect(box.left).toBe(0)
+  })
+})
+
+/**
+ * 画布上拖框边改宽度：锚点 x 不动，只改 boxWidth。
+ * 三种对齐的「非锚点侧」不同，算出来的宽度必须与拖拽方向一致，
+ * 否则手感是反的（往右拖反而变窄）。
+ */
+describe('resizeTextBoxWidth 拖框边', () => {
+  it('左对齐：框左边在锚点，往右拖变宽', () => {
+    expect(resizeTextBoxWidth({ x: 0.2, align: 'left' }, 0.6)).toBeCloseTo(0.4, 6)
+    expect(resizeTextBoxWidth({ x: 0.2, align: 'left' }, 0.3)).toBeCloseTo(0.1, 6)
+  })
+
+  it('右对齐：框右边在锚点，往左拖变宽', () => {
+    expect(resizeTextBoxWidth({ x: 0.8, align: 'right' }, 0.4)).toBeCloseTo(0.4, 6)
+    expect(resizeTextBoxWidth({ x: 0.8, align: 'right' }, 0.7)).toBeCloseTo(0.1, 6)
+  })
+
+  it('居中：锚点在框中心，拖任一边都对称展开', () => {
+    expect(resizeTextBoxWidth({ x: 0.5, align: 'center' }, 0.7)).toBeCloseTo(0.4, 6)
+    expect(resizeTextBoxWidth({ x: 0.5, align: 'center' }, 0.3)).toBeCloseTo(0.4, 6)
+  })
+
+  it('不超过画布另一边', () => {
+    // 左对齐、锚点 0.2，最多到画布右边 = 0.8
+    expect(resizeTextBoxWidth({ x: 0.2, align: 'left' }, 1)).toBeCloseTo(0.8, 6)
+    // 右对齐、锚点 0.8，最多到画布左边 = 0.8
+    expect(resizeTextBoxWidth({ x: 0.8, align: 'right' }, 0)).toBeCloseTo(0.8, 6)
+    // 居中在 0.5，两侧各 0.5
+    expect(resizeTextBoxWidth({ x: 0.5, align: 'center' }, 1)).toBeCloseTo(1, 6)
+  })
+
+  it('有最小宽度，拖过头不会变成 0', () => {
+    expect(resizeTextBoxWidth({ x: 0.2, align: 'left' }, 0.05)).toBe(POST_TEXT_BOX_MIN_WIDTH)
+    expect(resizeTextBoxWidth({ x: 0.8, align: 'right' }, 0.99)).toBe(POST_TEXT_BOX_MIN_WIDTH)
+  })
+
+  it('指针超出画布时按边界算', () => {
+    expect(resizeTextBoxWidth({ x: 0.2, align: 'left' }, 2)).toBeCloseTo(0.8, 6)
+    expect(resizeTextBoxWidth({ x: 0.8, align: 'right' }, -1)).toBeCloseTo(0.8, 6)
   })
 })

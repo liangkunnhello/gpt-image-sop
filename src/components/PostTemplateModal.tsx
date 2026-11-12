@@ -19,6 +19,7 @@ import {
   elementLineHeight,
   newPostElement,
   postTemplateRatioKey,
+  resizeTextBoxWidth,
   textBoxBounds,
   type PostElement,
   type PostTemplate,
@@ -197,6 +198,13 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
     originY: number
     /** 指针真的挪动过才算拖动，避免点一下也记一步历史 */
     moved: boolean
+    /**
+     * 这次拖的是「位置」还是「文字框宽度」。
+     *
+     * 只改位置的话 x/y 跟着指针走；拖框边时锚点 x 不动、只改 boxWidth，
+     * 否则一拖右边整块文字就跟着平移，看着像在做缩放但位置一直在跑。
+     */
+    mode: 'move' | 'resize'
   } | null>(null)
   /**
    * 正在输入文字的元素。文字默认不可编辑（整块都能拖，跟 PS 一样），
@@ -513,8 +521,33 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
       originX: element.x,
       originY: element.y,
       moved: false,
+      mode: 'move',
     }
     // 捕获到元素自己身上：指针滑出画布也不会掉，事件继续冒泡到 stage 的 onPointerMove
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  /**
+   * 拖文字框的边：只改框宽，不动锚点 x。
+   *
+   * 以前画布上只能拖整块位置，改宽度必须去右侧拉滑块 —— 眼睛要在画布和面板之间来回跳，
+   * 完全不像 PS 里直接拽框边。现在选中文字层时框边会出现一个把手，按住左右拖即可。
+   */
+  const startResize = (event: React.PointerEvent, element: PostElement) => {
+    if (!stageRef.current) return
+    if (event.button !== 0) return
+    // 把手自己吃掉这个按下，否则会冒泡到整块文字上变成「移动」
+    event.stopPropagation()
+    setSelectedId(element.id)
+    dragRef.current = {
+      id: element.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: element.x,
+      originY: element.y,
+      moved: false,
+      mode: 'resize',
+    }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
@@ -530,6 +563,19 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
       drag.moved = true
       // 一次拖动只留一个历史点
       pushHistory(templatesRef.current)
+    }
+    if (drag.mode === 'resize') {
+      /**
+       * 拖框边：把指针横坐标换成画布比例直接算新宽度。
+       * 锚点 x 全程不动 —— 拖右边时如果连 x 一起改，整块文字会跟着平移，
+       * 看起来像在缩放但位置一直在跑，反而更难点准。
+       */
+      const template = templatesRef.current.find((item) => item.id === active?.id)
+      const element = template?.elements.find((item) => item.id === drag.id)
+      if (!element) return
+      const pointerX = (event.clientX - rect.left) / rect.width
+      patchElement(drag.id, { boxWidth: resizeTextBoxWidth(element, pointerX) }, { record: false })
+      return
     }
     // 按指针位移移动，不把锚点吸到指针上：抓哪儿都不会跳一下
     // 允许拖出画布：logo 常常要整块推到框外，锁在 0~1 就推不动
@@ -882,6 +928,21 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                           >
                             {element.text}
                           </div>
+                          {/*
+                            框边把手：按住左右拖就能改文字框宽度。
+                            把手放在「非锚点」那一侧 —— 右对齐时锚点在右边，把手去左边，
+                            否则拖动方向和框的展开方向相反，手感是反的。
+                          */}
+                          {isActive && !isEditing && (
+                            <div
+                              onPointerDown={(e) => startResize(e, element)}
+                              title="按住左右拖动，调整文字框宽度"
+                              className="absolute -top-1 -bottom-1 z-10 w-3 cursor-ew-resize"
+                              style={element.align === 'right' ? { left: -6 } : { right: -6 }}
+                            >
+                              <div className="absolute inset-y-0 left-1/2 w-1.5 -translate-x-1/2 rounded-full bg-blue-500 shadow" />
+                            </div>
+                          )}
                         </div>
                       ) : element.text ? (
                         <img src={element.text} alt="" draggable={false} style={{ width: `${element.width * previewWidth}px` }} />
