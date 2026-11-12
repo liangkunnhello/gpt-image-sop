@@ -87,9 +87,14 @@ function saveThenRead(container: HTMLElement) {
  * 对齐容器：包住描边层 + 正文层的那一层。
  * 对齐位移（translateX）就在它身上 —— 挂在正文层上会让描边层不跟着走。
  */
+/**
+ * 预览里包住文字的中间层：对齐位移挂在这一层。
+ *
+ * 以前靠 `width: max-content` 找它，加了文字框之后宽度是像素值，
+ * 改成从正文层往上取父节点 —— 结构没变，仍是描边层与正文层的共同父级。
+ */
 function previewWrapper(container: HTMLElement) {
-  return [...container.querySelectorAll('div')]
-    .find((el) => (el as HTMLElement).style.width === 'max-content' && el.textContent?.includes('主标题')) as HTMLElement
+  return previewText(container)?.parentElement as HTMLElement
 }
 
 /** 正文层：字号 / 行距 / 字间距都挂在这（描边层没有 contenteditable，用它区分） */
@@ -162,7 +167,12 @@ describe('后处理模板的对齐与间距', () => {
     expect(stroke.style.inset).toBe('0px')
     // 两层都跟随父级的 textAlign，不再各排各的
     expect(wrapper.style.textAlign).toBe('center')
-    expect(body.style.whiteSpace).toBe('pre')
+    // pre-wrap：保留手动换行，同时在框宽内自动折行（以前是 pre，长句会撑出画布）
+    expect(body.style.whiteSpace).toBe('pre-wrap')
+    expect(stroke.style.whiteSpace).toBe('pre-wrap')
+    // 两层都必须吃满框宽，否则描边和正文会按各自宽度折行、折在不同位置
+    expect(body.style.width).toBe('100%')
+    expect(stroke.style.width).toBe('100%')
   })
 
   it('「居中到画布」把 x 拉到 50% 并改成居中对齐', () => {

@@ -19,6 +19,7 @@ import {
   elementLineHeight,
   newPostElement,
   postTemplateRatioKey,
+  textBoxBounds,
   type PostElement,
   type PostTemplate,
 } from '../lib/postTemplate'
@@ -804,7 +805,14 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                            * 描边层才能用 inset:0 严丝合缝铺在文字底下。
                            */
                           style={{
-                            width: 'max-content',
+                            /**
+                             * 宽度取文字框，不再用 max-content。
+                             *
+                             * 以前宽度跟着最长那一行走，长句就把整块撑出画布。
+                             * 现在用 textBoxBounds 算出的框宽（没设 boxWidth 时自动撑到画布边），
+                             * 和 applyPostTemplate 里 canvas 折行用的是同一份边界。
+                             */
+                            width: `${Math.max(1, textBoxBounds(element, active?.width || 1).maxWidth * scale)}px`,
                             textAlign: element.align,
                             transform: element.align === 'center'
                               ? 'translateX(-50%)'
@@ -827,7 +835,10 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                                 WebkitTextStroke: `${Math.max(0.4, element.strokeWidth * 2 * scale)}px ${element.strokeColor}`,
                                 lineHeight: elementLineHeight(element),
                                 letterSpacing: `${(element.letterSpacing ?? 0) * scale}px`,
-                                whiteSpace: 'pre',
+                                whiteSpace: 'pre-wrap',
+                                // 与 canvas 的逐字折行保持同一口径：中文长句宁可断字也不溢出
+                                wordBreak: 'break-all',
+                                width: '100%',
                                 pointerEvents: 'none',
                               }}
                             >
@@ -863,7 +874,9 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                               textAlign: element.align,
                               lineHeight: elementLineHeight(element),
                               letterSpacing: `${(element.letterSpacing ?? 0) * scale}px`,
-                              whiteSpace: 'pre',
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-all',
+                              width: '100%',
                               cursor: isEditing ? 'text' : 'inherit',
                             }}
                           >
@@ -1399,6 +1412,29 @@ export default function PostTemplateModal({ ownerId, ownerName, scope = 'product
                             居中到画布
                           </button>
                         </div>
+                        {/* 文字框宽度：0 表示自动撑到画布边，填了就按框内折行 */}
+                        <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                          框宽
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={Math.round((selected.boxWidth ?? 0) * 100)}
+                            onChange={(e) => {
+                              const pct = Number(e.target.value)
+                              patchElement(
+                                selected.id,
+                                { boxWidth: pct > 0 ? pct / 100 : undefined },
+                                { coalesceKey: `boxWidth:${selected.id}` },
+                              )
+                            }}
+                            className="flex-1 accent-blue-500"
+                          />
+                          <span className="w-10 text-right tabular-nums">
+                            {selected.boxWidth ? `${Math.round(selected.boxWidth * 100)}%` : '自动'}
+                          </span>
+                        </label>
                         <label className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
                           行距
                           <input

@@ -21,6 +21,15 @@ export interface PostElement {
   lineHeight?: number
   /** 字间距（px），默认 0；想让字排得松一点就调大 */
   letterSpacing?: number
+  /**
+   * 文本框宽度，相对画布宽度的比例（0~1）。
+   *
+   * 不填 = 自动：按对齐方式从锚点撑到画布边缘，长文本到这里就折行，
+   * 不会像以前那样一路往右排、冲出画布外。
+   * 填了就按这个宽度折行（PS 的文字框），锚点仍是 x：
+   * 左对齐时是框左边、居中时是框中心、右对齐时是框右边。
+   */
+  boxWidth?: number
   /** 文字内容 */
   text: string
   /** logo：相对画布宽度的宽度；文字不用 */
@@ -430,4 +439,74 @@ export function commitNumberInput(
   next = Math.max(options.min, next)
   if (options.max != null) next = Math.min(options.max, next)
   return next
+}
+
+/**
+ * 文字框的左右边界（成品图上的像素）。
+ *
+ * 以前文字没有框，靠 `\n` 硬断行：一段十几行的警示语只要有一行写长了，
+ * 就一路往右排、直接冲出画布（用户截图里整块文字溢出 1080×1920 的边框）。
+ * 这里把「框」这个概念补上，绘制和预览都按同一份边界走，两边才不会对不上。
+ *
+ * - 填了 `boxWidth`：宽度固定，锚点按对齐方式落在框的左 / 中 / 右边；
+ * - 没填：宽度自动撑到画布边（左对齐到右边、右对齐到左边、居中取两侧较小的一倍）。
+ */
+export function textBoxBounds(
+  el: Pick<PostElement, 'x' | 'align' | 'boxWidth'>,
+  canvasWidth: number,
+): { left: number; maxWidth: number } {
+  const width = Math.max(1, canvasWidth)
+  const anchor = Math.max(0, Math.min(1, el.x)) * width
+  const fixed = el.boxWidth != null && el.boxWidth > 0 ? Math.min(1, el.boxWidth) * width : 0
+  if (fixed > 0) {
+    if (el.align === 'center') return { left: anchor - fixed / 2, maxWidth: fixed }
+    if (el.align === 'right') return { left: anchor - fixed, maxWidth: fixed }
+    return { left: anchor, maxWidth: fixed }
+  }
+  if (el.align === 'center') {
+    // 居中没有框宽时以锚点为中心，两侧各撑到最近的画布边
+    const half = Math.min(anchor, width - anchor)
+    return { left: anchor - half, maxWidth: Math.max(1, half * 2) }
+  }
+  if (el.align === 'right') return { left: 0, maxWidth: Math.max(1, anchor) }
+  return { left: anchor, maxWidth: Math.max(1, width - anchor) }
+}
+
+/**
+ * 按最大宽度折行，逐字符累加测量结果。
+ *
+ * 为什么按字符而不是按词：这批素材以中文长句为主（警示语、卖点），
+ * 中文本来就没有词间空格，按词切反而会把整句当成一个"词"直接溢出。
+ * 原文里的 `\n` 优先保留 —— 用户手动分好的行不该被重新打散。
+ *
+ * `measure` 由调用方给：canvas 用 `ctx.measureText`，预览用离屏 canvas，
+ * 保证同一个函数在两边折出完全一样的行。
+ */
+export function wrapTextToWidth(
+  text: string,
+  maxWidth: number,
+  measure: (chunk: string) => number,
+): string[] {
+  const paragraphs = (text ?? '').split('\n')
+  if (!(maxWidth > 0)) return paragraphs
+  const lines: string[] = []
+  for (const paragraph of paragraphs) {
+    if (!paragraph) {
+      lines.push('')
+      continue
+    }
+    let line = ''
+    for (const char of paragraph) {
+      const next = line + char
+      // line 为空时即便单字超宽也放进去，否则会死循环
+      if (line && measure(next) > maxWidth) {
+        lines.push(line)
+        line = char
+      } else {
+        line = next
+      }
+    }
+    lines.push(line)
+  }
+  return lines
 }

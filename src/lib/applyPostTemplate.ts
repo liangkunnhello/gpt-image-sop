@@ -1,5 +1,5 @@
 import type { SopDirectionNode } from '../types'
-import { POST_FONT_STACK, coverRect, elementLineHeight, type PostElement, type PostTemplate } from './postTemplate'
+import { POST_FONT_STACK, coverRect, elementLineHeight, textBoxBounds, wrapTextToWidth, type PostElement, type PostTemplate } from './postTemplate'
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -97,7 +97,23 @@ function drawElement(
       const ctxWithSpacing = ctx as CanvasRenderingContext2D & { letterSpacing?: string }
       if ('letterSpacing' in ctxWithSpacing) ctxWithSpacing.letterSpacing = `${spacing}px`
     }
-    const lines = el.text.split('\n')
+    /**
+     * 按文本框宽度折行，不再只认 `\n`。
+     *
+     * 长句以前会一直往右排、冲出画布（1080×1920 的警示语能溢到边框外）。
+     * 折行宽度取 textBoxBounds：没设 boxWidth 就自动撑到画布边，
+     * 设了就按框宽断，保证文字永远落在画布内。
+     *
+     * 绘制原点也换成框的左侧/中心/右侧，与预览的 transform 口径一致；
+     * 没有 boxWidth 时算出来的 drawX 正好等于原来的 x，老模板位置不变。
+     */
+    const box = textBoxBounds(el, width)
+    const lines = wrapTextToWidth(el.text, box.maxWidth, (chunk) => ctx.measureText(chunk).width)
+    const drawX = el.align === 'center'
+      ? box.left + box.maxWidth / 2
+      : el.align === 'right'
+        ? box.left + box.maxWidth
+        : box.left
     const lineStep = size * elementLineHeight(el)
     lines.forEach((line, index) => {
       const lineY = y + index * lineStep
@@ -105,9 +121,9 @@ function drawElement(
         // canvas 的描边是居中的：线宽加倍后填充盖掉内侧一半，留在外面的正好是 strokeWidth
         ctx.lineWidth = el.strokeWidth * 2 * scale
         ctx.strokeStyle = el.strokeColor
-        ctx.strokeText(line, x, lineY)
+        ctx.strokeText(line, drawX, lineY)
       }
-      ctx.fillText(line, x, lineY)
+      ctx.fillText(line, drawX, lineY)
     })
   } else if (logo) {
     const w = Math.max(8, el.width * width)
