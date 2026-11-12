@@ -11,6 +11,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
 import { ensureImageCached, ensureImageThumbnailCached } from '../../lib/imageCache'
 import { recordLineage, trackSpendLatest, trackSpendRange } from '../../lib/trackDb'
+import { groupAssetsByContent, planDuplicateHashes, remapSpendAssetIds } from '../../lib/assetDedupe'
+import { getImageFile, getImageStats } from '../../lib/dbTauri'
+import { isTauri } from '../../lib/platform'
 // 消耗展示：整元 + 千分位，不足 1 元才带两位（见 lib/formatMoney.ts）
 import { formatSpend as fmtMoney } from '../../lib/formatMoney'
 import { buildDemoBundle, isDemoId, type DemoImageRef } from '../../lib/demoData'
@@ -251,7 +254,52 @@ export default function TrackerWorkspace({ hidden = false }: { hidden?: boolean 
     [rangedSpend, scopedAssets, selectedNodeId],
   )
 
-  const byAsset = useMemo(() => aggregateByAsset(scopedSpend), [scopedSpend])
+  /**
+   * 同图多份的合并：素材 id → 内容哈希。
+   *
+   * 生成图入库后文件被后处理重写过、id 不变，NAS 再导入同一张成品图就会多一条素材，
+   * 消耗也被拆开。这里按文件内容算 sha256，把同一张图归到同一个 key 上。
+   * 只处理「字节数相同」的候选，1 万多条素材不至于全读一遍；网页版读不到字节，直接跳过。
+   */
+  const [hashById, setHashById] = useState<Map<string, string>>(() => new Map())
+  const dedupeSignature = useRef('')
+  useEffect(() => {
+    if (!isTauri || !assets.length) return
+    const signature = `${assets.length}:${assets.reduce((sum, asset) => sum + asset.platformIds.length, 0)}`
+    if (dedupeSignature.current === signature) return
+    dedupeSignature.current = signature
+    let cancelled = false
+    void (async () => {
+      try {
+        const stats = await getImageStats()
+        const bytesById = new Map(stats.map((item) => [item.id, item.bytes]))
+        const plan = await planDuplicateHashes(assets, bytesById, async (imageId) => {
+          const file = await getImageFile(imageId)
+          if (!file) return undefined
+          // 先取出独立的 ArrayBuffer：bytes 是共享底层缓冲的视图，直接传给 digest 类型不兼容
+          const buffer = file.bytes.buffer.slice(file.bytes.byteOffset, file.bytes.byteOffset + file.bytes.byteLength) as ArrayBuffer
+          const digest = await crypto.subtle.digest('SHA-256', buffer)
+          return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+        })
+        if (cancelled) return
+        setHashById(plan.hashById)
+        if (!plan.updates.length) return
+        const patch = new Map(plan.updates.map((item) => [item.assetId, item.contentHash]))
+        const patched = assets.filter((asset) => patch.has(asset.id)).map((asset) => ({ ...asset, contentHash: patch.get(asset.id)! }))
+        await trackPutMany('assets', patched.map((item) => ({ id: item.id, data: item })))
+        if (!cancelled) setAssets((prev) => prev.map((asset) => (patch.has(asset.id) ? { ...asset, contentHash: patch.get(asset.id)! } : asset)))
+      } catch (err) {
+        // 去重失败不能拖垮台账：照旧按素材 id 展示
+        console.warn('按内容去重失败（不影响其它功能）：', err)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [assets, setAssets])
+
+  const contentScopedSpend = useMemo(() => remapSpendAssetIds(scopedSpend, hashById), [scopedSpend, hashById])
+  const contentReportSpend = useMemo(() => remapSpendAssetIds(reportSpend, hashById), [reportSpend, hashById])
+
+  const byAsset = useMemo(() => aggregateByAsset(contentScopedSpend), [contentScopedSpend])
   const byCard = useMemo(() => aggregateByCard(scopedAssets, byAsset), [scopedAssets, byAsset])
   const lineageMap = useMemo(() => buildLineageMap(lineage), [lineage])
   const selectedAsset = selectedAssetId ? scopedAssets.find((item) => item.id === selectedAssetId) ?? null : null
@@ -854,6 +902,7 @@ export default function TrackerWorkspace({ hidden = false }: { hidden?: boolean 
               <AssetsTab
                 assets={scopedAssets}
                 byAsset={byAsset}
+                hashById={hashById}
                 stageFilter={stageFilter}
                 fileIndex={fileIndex}
                 onSelect={setSelectedAssetId}
@@ -861,9 +910,10 @@ export default function TrackerWorkspace({ hidden = false }: { hidden?: boolean 
               />
             ) : (
               <AssetReportTab
-                spend={reportSpend}
+                spend={contentReportSpend}
                 imports={imports}
                 assets={scopedAssets}
+                hashById={hashById}
                 fileIndex={fileIndex}
                 byAsset={byAsset}
                 stageFilter={stageFilter}
@@ -1599,6 +1649,7 @@ function AssetDetail({
 function AssetsTab({
   assets,
   byAsset,
+  hashById,
   stageFilter,
   fileIndex,
   onSelect,
@@ -1606,6 +1657,8 @@ function AssetsTab({
 }: {
   assets: AssetRecord[]
   byAsset: ReturnType<typeof aggregateByAsset>
+  /** 素材 id → 内容哈希，同一张图的多条素材合并成一张卡片 */
+  hashById: Map<string, string>
   /** 阶段筛选由父组件持有（渲染在固定头部那行） */
   stageFilter: 'all' | 'running' | 'declining' | 'created' | 'stale'
   /** 任务卡 id → 交付文件名，按文件名搜索用 */
@@ -1632,8 +1685,9 @@ function AssetsTab({
   }
 
   const rows = useMemo(() => {
-    return assets
-      .map((asset) => ({ asset, stat: byAsset.get(asset.id) }))
+    // 先按内容合并：同一张图存了多份时只出一张卡，消耗用合并后的统计
+    return groupAssetsByContent(assets, hashById)
+      .map((group) => ({ asset: group.asset, members: group.members, stat: byAsset.get(group.key) }))
       .filter((row) => {
         if (stageFilter !== 'all') {
           const stage = row.stat?.stage ?? 'created'
@@ -1642,7 +1696,7 @@ function AssetsTab({
         return matchAssetKeyword(row.asset, fileIndex.get(row.asset.taskId ?? ''), keyword)
       })
       .sort((a, b) => (b.stat?.totalSpend ?? 0) - (a.stat?.totalSpend ?? 0))
-  }, [assets, byAsset, stageFilter, fileIndex, keyword])
+  }, [assets, byAsset, hashById, stageFilter, fileIndex, keyword])
 
   return (
     /* 指标、阶段筛选、页签、扫描按钮都在父组件的固定头部，这里只剩卡片区（截图里的「红框」） */
@@ -1674,7 +1728,7 @@ function AssetsTab({
          * 固定列数会把卡片硬挤扁，auto-fill 会自动少一列、卡片等比缩小。
          */
         <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(170px,1fr))]">
-          {rows.slice(0, 300).map(({ asset, stat }) => {
+          {rows.slice(0, 300).map(({ asset, members, stat }) => {
             const stage = stat?.stage ?? 'created'
             return (
               <button
@@ -1701,7 +1755,10 @@ function AssetsTab({
                 <div className="flex flex-col gap-1 p-2">
                   <div className="flex items-center justify-between gap-1 text-[10px] text-gray-400">
                     <span className="truncate font-mono">{asset.id.slice(0, 8)}</span>
-                    {asset.platformIds.length > 0 && <span className="shrink-0">{asset.platformIds.length} 个ID</span>}
+                    <span className="shrink-0">
+                      {members.length > 1 && <span className="mr-1 text-amber-600 dark:text-amber-400">同图{members.length}份</span>}
+                      {asset.platformIds.length > 0 && `${asset.platformIds.length} 个ID`}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-gray-600 dark:text-gray-300">
                     <span>{stat ? `${stat.activeDays} 天` : '—'}</span>
@@ -2346,6 +2403,7 @@ function AssetReportTab({
   imports,
   assets,
   fileIndex,
+  hashById,
   byAsset,
   stageFilter,
   onOpenAsset,
@@ -2355,6 +2413,8 @@ function AssetReportTab({
   assets: AssetRecord[]
   /** 任务卡 id → 交付文件名，按文件名搜索用 */
   fileIndex: Map<string, AssetFileInfo>
+  /** 素材 id → 内容哈希：素材维度按它分组，同一张图的多条素材合成一行 */
+  hashById: Map<string, string>
   byAsset: ReturnType<typeof aggregateByAsset>
   /** 投放状态筛选：和网格视图共用同一个值，切视图不会丢条件 */
   stageFilter: 'all' | 'running' | 'declining' | 'created' | 'stale'
@@ -2430,7 +2490,7 @@ function AssetReportTab({
       const asset = record.assetId ? assetById.get(record.assetId) : undefined
       const key = dimension === 'asset'
         // 未匹配的按平台素材 ID 成行：没有本地图，但钱确实是花在这个素材上的
-        ? (record.assetId ?? `pid:${record.platformId}`)
+        ? (record.assetId ? (hashById.get(record.assetId) ?? record.assetId) : `pid:${record.platformId}`)
         : dimension === 'card'
           ? (asset?.rootCardId ?? asset?.taskId ?? '未归属任务卡')
           : (record.productName || '未标注产品')

@@ -30,7 +30,7 @@
     python cli/tools/link_nas_assets.py "\\\\192.168.202.11\\...\\分类结果"        # 空跑看统计
     python cli/tools/link_nas_assets.py "\\\\192.168...\\分类结果" --write        # 真写入
 
-幂等：同一张图重复跑不会建两条（按 sha256 去重），只会补齐 platformIds / reportNames。
+幂等：同一张图重复跑不会建两条（按 sha256 去重；同内容但 id 不同的旧图也会被认出来复用），只会补齐 platformIds / reportNames。
 """
 from __future__ import annotations
 
@@ -240,8 +240,12 @@ def main() -> int:
         digest = hashlib.sha256(raw).hexdigest()
         ext = STORE_EXT.get(path.suffix.lower(), "jpg")
         has_row = conn.execute("select 1 from images where id=?", (digest,)).fetchone()
-        if has_row:
+        # 同内容但 id 不是内容哈希的旧图（生成图被后处理重写过），也要认出来复用
+        same_content_id = None if has_row else find_same_content(conn, data_dir, digest, len(raw))
+        if has_row or same_content_id:
             stats["reused_image"] += 1
+            if same_content_id:
+                stats["reused_same_content"] = stats.get("reused_same_content", 0) + 1
         else:
             stats["new_image"] += 1
             if args.write:
@@ -259,7 +263,7 @@ def main() -> int:
                 )
 
         # 台账：已经有素材认这个名字就合并过去，否则用图片哈希新建（和本地素材同一套主键）
-        asset_id = existing["id"] if existing else digest
+        asset_id = existing["id"] if existing else (same_content_id or digest)
         report_name = normalize_report_name(path.name)
         # 已有的台账记录（按报表名或按图片哈希）都复用，避免把本地素材的 taskId 覆盖掉
         base_asset = existing or asset_by_id.get(asset_id)
@@ -334,7 +338,8 @@ def main() -> int:
         conn.commit()
 
     print()
-    print(f"图片：新增 {stats['new_image']}，已存在 {stats['reused_image']}")
+    print(f"图片：新增 {stats['new_image']}，已存在 {stats['reused_image']}"
+          + (f"（其中同内容不同 id 复用 {stats['reused_same_content']}）" if stats.get("reused_same_content") else ""))
     print(f"台账：新建 {stats['new_asset']}，合并到已有素材 {stats['merged_asset']}")
     print(f"流水：绑定 {stats['linked_spend']} 条，合计 ¥{stats['linked_amount']:,.2f}")
     print(f"名称对不上：{stats['unmatched']}，空文件跳过：{stats['empty']}，读取失败：{stats['failed']}")
@@ -351,6 +356,23 @@ def main() -> int:
     print("已写入，回软件点右上角「刷新」。" if args.write else "这是空跑，没有写库。确认数字对得上再加 --write。")
     conn.close()
     return 0
+
+
+def find_same_content(conn, data_dir: Path, digest: str, size: int) -> str | None:
+    """找「内容一样、但 id 不是内容哈希」的已有图片，返回它的 id。
+
+    生成图入库后，后处理会按模板尺寸重写文件而 id 不变，于是 id 与文件内容不再对应。
+    直接按 id=digest 查会漏掉这类图，导致同一张成品图被建成两条素材、消耗被拆开。
+    候选只取同样字节数的行（内容相同必然同长度），再逐条算 sha256 比对。
+    """
+    for image_id, rel in conn.execute("select id, file from images where bytes=?", (size,)).fetchall():
+        try:
+            raw = (data_dir / rel).read_bytes()
+        except OSError:
+            continue
+        if hashlib.sha256(raw).hexdigest() == digest:
+            return image_id
+    return None
 
 
 def normalize_report_name(file_name: str) -> str:

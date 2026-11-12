@@ -55,6 +55,14 @@ export interface AssetRecord {
   platformIds: string[]
   /** 报表里出现过的图片名称，用于反查和展示 */
   reportNames: string[]
+  /**
+   * 图片文件内容哈希（sha256），识别「同一张图存了多份」用。
+   *
+   * 素材 id 不总是内容哈希：生成图入库后，后处理会按模板尺寸重写文件而 id 不变，
+   * 之后 NAS 导入同一张成品图又会按真实内容哈希建一条，于是同图被拆成两条。
+   * 只有确实重复的素材才写这个字段（见 assetDedupe.ts）。
+   */
+  contentHash?: string
   createdAt: number
   /** 第一次在报表里出现的时间 */
   firstSeenAt?: number
